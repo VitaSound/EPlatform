@@ -4,8 +4,8 @@
 > Дата: 2026-11-25.
 > Область: `server/priv/lua_modules`, `server/lib/e_platform/lua`,
 > `server/lib/e_platform/dialog_session.ex`, `server/lib/e_platform_web`.
-> Этот документ не меняет код. Он фиксирует, что берём из `tcs_back@ref_qt`,
-> что улучшаем и что сознательно не переносим.
+> Документ фиксирует, что берём из `tcs_back@ref_qt`, что улучшаем и что
+> сознательно не переносим. Изменения кода идут отдельными коммитами.
 
 ## 0. Короткий вывод
 
@@ -751,3 +751,24 @@ local rows = data.list_measurements({limit = 100})
 Главная мысль: **не тащить в Lua-модули OTP-механику и не тащить в
 Elixir-слой прикладную иерархию форм**. Композиция в Lua, изоляция в
 GenServer, сырые сообщения только там, где иначе будет дедлок.
+
+## 12. Статус реализации
+
+Этап 1 закрыт:
+
+- добавлены `form_common_lib.lua`, `icons.lua`, `test_common.lua`;
+- добавлены `abstract_table_form.ui` и `abstract_tree_table_form.ui`;
+- `form.lua` получил совместимый sugar: `set`/`get`, `setWindowTitle`,
+  `setGeometry`, `setText`, `setVisible`, `setEnabled`, `setChecked`,
+  `setToolTip`, `setIcon`, `setToolButton`, `setCurrentRow`,
+  `setCurrentIndex`, `set_table*`, `setTableHeaders`, `setTableData`;
+- `handleEvent` снова понимает `Clicked` и `MouseButtonRelease`;
+- добавлены e2e-тесты `server/test/e_platform/lua_modules_test.exs`.
+
+Ещё не реализовано:
+
+- `create_empty_form`, `open_lua`, `open_opts` в host API;
+- `Form:center` и клиентское центрирование;
+- `tableLayout`/`groupedHeader` в клиенте;
+- `App` sugar сверх `close/1`;
+- `invoke_qt`/`mfa` и слой данных.
