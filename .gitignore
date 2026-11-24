@@ -1,0 +1,9 @@
+# Rust/Trunk build artifacts
+/client/target/
+
+# Editor/OS noise
+.DS_Store
+*.swp
+
+# Trunk output
+/client/crates/app/dist/

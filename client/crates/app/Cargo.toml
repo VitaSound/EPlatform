@@ -1,0 +1,38 @@
+[package]
+name = "app"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+winit = "0.30"
+# "webgl" adds a transparent GL backend fallback for browsers without
+# WebGPU (e.g. the Electron view embedded in Cursor). wgpu picks WebGPU
+# when available, so nothing else in the code changes.
+wgpu = { version = "30", features = ["webgl"] }
+bytemuck = { version = "1", features = ["derive"] }
+glyphon = "0.12"
+serde_json = "1"
+form-xml = { path = "../form-xml" }
+qt = { path = "../qt" }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+console_error_panic_hook = "0.1"
+gloo-timers = { version = "0.3", features = ["futures"] }
+web-sys = { version = "0.3", features = [
+    "WebSocket",
+    "MessageEvent",
+    "Event",
+    "Location",
+    "Window",
+    "Performance",
+    "Crypto",
+] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+pollster = "0.4"

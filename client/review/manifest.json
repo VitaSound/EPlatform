@@ -1,0 +1,401 @@
+[
+  {
+    "id": "basic/00_label_button_0",
+    "category": "basic",
+    "title": "Label 0",
+    "description": "label + line edit + button row",
+    "path": "review/forms/basic/00_label_button_0.ui"
+  },
+  {
+    "id": "basic/01_label_button_1",
+    "category": "basic",
+    "title": "Label 1",
+    "description": "label + line edit + button row",
+    "path": "review/forms/basic/01_label_button_1.ui"
+  },
+  {
+    "id": "basic/02_label_button_2",
+    "category": "basic",
+    "title": "Label 2",
+    "description": "label + line edit + button row",
+    "path": "review/forms/basic/02_label_button_2.ui"
+  },
+  {
+    "id": "basic/03_label_button_3",
+    "category": "basic",
+    "title": "Label 3",
+    "description": "label + line edit + button row",
+    "path": "review/forms/basic/03_label_button_3.ui"
+  },
+  {
+    "id": "basic/04_label_button_4",
+    "category": "basic",
+    "title": "Label 4",
+    "description": "label + line edit + button row",
+    "path": "review/forms/basic/04_label_button_4.ui"
+  },
+  {
+    "id": "basic/05_form_rows_0",
+    "category": "basic",
+    "title": "Rows 0",
+    "description": "vertical form rows with disabled result",
+    "path": "review/forms/basic/05_form_rows_0.ui"
+  },
+  {
+    "id": "basic/06_form_rows_1",
+    "category": "basic",
+    "title": "Rows 1",
+    "description": "vertical form rows with disabled result",
+    "path": "review/forms/basic/06_form_rows_1.ui"
+  },
+  {
+    "id": "basic/07_form_rows_2",
+    "category": "basic",
+    "title": "Rows 2",
+    "description": "vertical form rows with disabled result",
+    "path": "review/forms/basic/07_form_rows_2.ui"
+  },
+  {
+    "id": "basic/08_form_rows_3",
+    "category": "basic",
+    "title": "Rows 3",
+    "description": "vertical form rows with disabled result",
+    "path": "review/forms/basic/08_form_rows_3.ui"
+  },
+  {
+    "id": "basic/09_form_rows_4",
+    "category": "basic",
+    "title": "Rows 4",
+    "description": "vertical form rows with disabled result",
+    "path": "review/forms/basic/09_form_rows_4.ui"
+  },
+  {
+    "id": "spacing/10_margins_4",
+    "category": "spacing",
+    "title": "Margins 4",
+    "description": "root margins vary",
+    "path": "review/forms/spacing/10_margins_4.ui"
+  },
+  {
+    "id": "spacing/11_margins_8",
+    "category": "spacing",
+    "title": "Margins 8",
+    "description": "root margins vary",
+    "path": "review/forms/spacing/11_margins_8.ui"
+  },
+  {
+    "id": "spacing/12_margins_12",
+    "category": "spacing",
+    "title": "Margins 12",
+    "description": "root margins vary",
+    "path": "review/forms/spacing/12_margins_12.ui"
+  },
+  {
+    "id": "spacing/13_margins_16",
+    "category": "spacing",
+    "title": "Margins 16",
+    "description": "root margins vary",
+    "path": "review/forms/spacing/13_margins_16.ui"
+  },
+  {
+    "id": "spacing/14_margins_20",
+    "category": "spacing",
+    "title": "Margins 20",
+    "description": "root margins vary",
+    "path": "review/forms/spacing/14_margins_20.ui"
+  },
+  {
+    "id": "spacing/15_spacing_0",
+    "category": "spacing",
+    "title": "Spacing 0",
+    "description": "box spacing varies",
+    "path": "review/forms/spacing/15_spacing_0.ui"
+  },
+  {
+    "id": "spacing/16_spacing_1",
+    "category": "spacing",
+    "title": "Spacing 1",
+    "description": "box spacing varies",
+    "path": "review/forms/spacing/16_spacing_1.ui"
+  },
+  {
+    "id": "spacing/17_spacing_2",
+    "category": "spacing",
+    "title": "Spacing 2",
+    "description": "box spacing varies",
+    "path": "review/forms/spacing/17_spacing_2.ui"
+  },
+  {
+    "id": "spacing/18_spacing_3",
+    "category": "spacing",
+    "title": "Spacing 3",
+    "description": "box spacing varies",
+    "path": "review/forms/spacing/18_spacing_3.ui"
+  },
+  {
+    "id": "spacing/19_spacing_4",
+    "category": "spacing",
+    "title": "Spacing 4",
+    "description": "box spacing varies",
+    "path": "review/forms/spacing/19_spacing_4.ui"
+  },
+  {
+    "id": "controls/20_checks_0",
+    "category": "controls",
+    "title": "Checks 0",
+    "description": "checkbox/radio checked states and combo",
+    "path": "review/forms/controls/20_checks_0.ui"
+  },
+  {
+    "id": "controls/21_checks_1",
+    "category": "controls",
+    "title": "Checks 1",
+    "description": "checkbox/radio checked states and combo",
+    "path": "review/forms/controls/21_checks_1.ui"
+  },
+  {
+    "id": "controls/22_checks_2",
+    "category": "controls",
+    "title": "Checks 2",
+    "description": "checkbox/radio checked states and combo",
+    "path": "review/forms/controls/22_checks_2.ui"
+  },
+  {
+    "id": "controls/23_checks_3",
+    "category": "controls",
+    "title": "Checks 3",
+    "description": "checkbox/radio checked states and combo",
+    "path": "review/forms/controls/23_checks_3.ui"
+  },
+  {
+    "id": "controls/24_checks_4",
+    "category": "controls",
+    "title": "Checks 4",
+    "description": "checkbox/radio checked states and combo",
+    "path": "review/forms/controls/24_checks_4.ui"
+  },
+  {
+    "id": "controls/25_checks_5",
+    "category": "controls",
+    "title": "Checks 5",
+    "description": "checkbox/radio checked states and combo",
+    "path": "review/forms/controls/25_checks_5.ui"
+  },
+  {
+    "id": "controls/26_lists_0",
+    "category": "controls",
+    "title": "Lists 0",
+    "description": "combo/list/tree placeholders",
+    "path": "review/forms/controls/26_lists_0.ui"
+  },
+  {
+    "id": "controls/27_lists_1",
+    "category": "controls",
+    "title": "Lists 1",
+    "description": "combo/list/tree placeholders",
+    "path": "review/forms/controls/27_lists_1.ui"
+  },
+  {
+    "id": "controls/28_lists_2",
+    "category": "controls",
+    "title": "Lists 2",
+    "description": "combo/list/tree placeholders",
+    "path": "review/forms/controls/28_lists_2.ui"
+  },
+  {
+    "id": "controls/29_lists_3",
+    "category": "controls",
+    "title": "Lists 3",
+    "description": "combo/list/tree placeholders",
+    "path": "review/forms/controls/29_lists_3.ui"
+  },
+  {
+    "id": "tables/30_table_1x1",
+    "category": "tables",
+    "title": "Table 1x1",
+    "description": "QTableWidget 1 rows x 1 columns",
+    "path": "review/forms/tables/30_table_1x1.ui"
+  },
+  {
+    "id": "tables/31_table_2x2",
+    "category": "tables",
+    "title": "Table 2x2",
+    "description": "QTableWidget 2 rows x 2 columns",
+    "path": "review/forms/tables/31_table_2x2.ui"
+  },
+  {
+    "id": "tables/32_table_3x2",
+    "category": "tables",
+    "title": "Table 3x2",
+    "description": "QTableWidget 3 rows x 2 columns",
+    "path": "review/forms/tables/32_table_3x2.ui"
+  },
+  {
+    "id": "tables/33_table_4x3",
+    "category": "tables",
+    "title": "Table 4x3",
+    "description": "QTableWidget 4 rows x 3 columns",
+    "path": "review/forms/tables/33_table_4x3.ui"
+  },
+  {
+    "id": "tables/34_table_3x4",
+    "category": "tables",
+    "title": "Table 3x4",
+    "description": "QTableWidget 3 rows x 4 columns",
+    "path": "review/forms/tables/34_table_3x4.ui"
+  },
+  {
+    "id": "tables/35_table_2x5",
+    "category": "tables",
+    "title": "Table 2x5",
+    "description": "QTableWidget 2 rows x 5 columns",
+    "path": "review/forms/tables/35_table_2x5.ui"
+  },
+  {
+    "id": "tables/36_table_5x2",
+    "category": "tables",
+    "title": "Table 5x2",
+    "description": "QTableWidget 5 rows x 2 columns",
+    "path": "review/forms/tables/36_table_5x2.ui"
+  },
+  {
+    "id": "tables/37_table_10x4",
+    "category": "tables",
+    "title": "Table 10x4",
+    "description": "QTableWidget 10 rows x 4 columns",
+    "path": "review/forms/tables/37_table_10x4.ui"
+  },
+  {
+    "id": "tables/38_table_20x3",
+    "category": "tables",
+    "title": "Table 20x3",
+    "description": "QTableWidget 20 rows x 3 columns",
+    "path": "review/forms/tables/38_table_20x3.ui"
+  },
+  {
+    "id": "tables/39_table_2x3",
+    "category": "tables",
+    "title": "Table 2x3",
+    "description": "QTableWidget 2 rows x 3 columns",
+    "path": "review/forms/tables/39_table_2x3.ui"
+  },
+  {
+    "id": "tables/40_table_6x2",
+    "category": "tables",
+    "title": "Table 6x2",
+    "description": "QTableWidget 6 rows x 2 columns",
+    "path": "review/forms/tables/40_table_6x2.ui"
+  },
+  {
+    "id": "tables/41_table_8x5",
+    "category": "tables",
+    "title": "Table 8x5",
+    "description": "QTableWidget 8 rows x 5 columns",
+    "path": "review/forms/tables/41_table_8x5.ui"
+  },
+  {
+    "id": "groups/42_group_0",
+    "category": "groups",
+    "title": "Group 0",
+    "description": "QGroupBox and nested controls",
+    "path": "review/forms/groups/42_group_0.ui"
+  },
+  {
+    "id": "groups/43_group_1",
+    "category": "groups",
+    "title": "Group 1",
+    "description": "QGroupBox and nested controls",
+    "path": "review/forms/groups/43_group_1.ui"
+  },
+  {
+    "id": "groups/44_group_2",
+    "category": "groups",
+    "title": "Group 2",
+    "description": "QGroupBox and nested controls",
+    "path": "review/forms/groups/44_group_2.ui"
+  },
+  {
+    "id": "groups/45_group_3",
+    "category": "groups",
+    "title": "Group 3",
+    "description": "QGroupBox and nested controls",
+    "path": "review/forms/groups/45_group_3.ui"
+  },
+  {
+    "id": "tables/46_table_with_form_0",
+    "category": "tables",
+    "title": "Table form 0",
+    "description": "table plus form controls",
+    "path": "review/forms/tables/46_table_with_form_0.ui"
+  },
+  {
+    "id": "tables/47_table_with_form_1",
+    "category": "tables",
+    "title": "Table form 1",
+    "description": "table plus form controls",
+    "path": "review/forms/tables/47_table_with_form_1.ui"
+  },
+  {
+    "id": "tables/48_table_with_form_2",
+    "category": "tables",
+    "title": "Table form 2",
+    "description": "table plus form controls",
+    "path": "review/forms/tables/48_table_with_form_2.ui"
+  },
+  {
+    "id": "tables/49_table_with_form_3",
+    "category": "tables",
+    "title": "Table form 3",
+    "description": "table plus form controls",
+    "path": "review/forms/tables/49_table_with_form_3.ui"
+  },
+  {
+    "id": "qss/50_buttons",
+    "category": "qss",
+    "title": "QSS buttons",
+    "description": "background/color/border/radius/padding",
+    "path": "review/forms/qss/50_buttons.ui"
+  },
+  {
+    "id": "qss/51_form",
+    "category": "qss",
+    "title": "QSS form",
+    "description": "QSS applied to a simple form",
+    "path": "review/forms/qss/51_form.ui"
+  },
+  {
+    "id": "qss/52_checks",
+    "category": "qss",
+    "title": "QSS checks",
+    "description": "QSS on checkbox/radio/groupbox",
+    "path": "review/forms/qss/52_checks.ui"
+  },
+  {
+    "id": "qss/53_table",
+    "category": "qss",
+    "title": "QSS table",
+    "description": "QSS border/background on table",
+    "path": "review/forms/qss/53_table.ui"
+  },
+  {
+    "id": "qss/54_nested",
+    "category": "qss",
+    "title": "QSS nested",
+    "description": "QSS with nested group",
+    "path": "review/forms/qss/54_nested.ui"
+  },
+  {
+    "id": "qss/55_disabled",
+    "category": "qss",
+    "title": "QSS disabled",
+    "description": "disabled style hook",
+    "path": "review/forms/qss/55_disabled.ui"
+  },
+  {
+    "id": "basic/56_button_states",
+    "category": "basic",
+    "title": "Button states",
+    "description": "Fusion gradients, checked, disabled and icon buttons",
+    "path": "review/forms/basic/56_button_states.ui"
+  }
+]

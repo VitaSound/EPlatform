@@ -1,0 +1,500 @@
+//! Qt Designer `.ui` XML → widget specification tree.
+//!
+//! Only the subset used by the platform's forms is parsed: widgets,
+//! box layouts (`QVBoxLayout`/`QHBoxLayout`), spacers and the common
+//! property value tags (`string`, `number`, `bool`, `enum`, `rect`,
+//! `size`). Unknown constructs are tolerated rather than fatal.
+
+use roxmltree::Node;
+
+/// Single property value, typed by the Qt XML tag that carried it.
+///
+/// `Map`/`List` are wire-only variants: they carry the JSON
+/// objects/arrays the server pushes (e.g. `tableHeaders`/`tableData`
+/// configs) and are never produced by XML parsing.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PropValue {
+    Str(String),
+    Int(i64),
+    Bool(bool),
+    Rect { x: i64, y: i64, w: i64, h: i64 },
+    Size { w: i64, h: i64 },
+    Enum(String),
+    Map(Vec<(String, PropValue)>),
+    List(Vec<PropValue>),
+}
+
+impl PropValue {
+    /// Value for `key` when this is a [`PropValue::Map`].
+    pub fn get(&self, key: &str) -> Option<&PropValue> {
+        match self {
+            PropValue::Map(entries) => entries
+                .iter()
+                .find(|(k, _)| k == key)
+                .map(|(_, value)| value),
+            _ => None,
+        }
+    }
+
+    /// Items when this is a [`PropValue::List`].
+    pub fn as_list(&self) -> Option<&[PropValue]> {
+        match self {
+            PropValue::List(items) => Some(items),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(&self) -> Option<&str> {
+        match self {
+            PropValue::Str(s) | PropValue::Enum(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    pub fn as_i64(&self) -> Option<i64> {
+        match self {
+            PropValue::Int(i) => Some(*i),
+            _ => None,
+        }
+    }
+
+    pub fn as_bool(&self) -> Option<bool> {
+        match self {
+            PropValue::Bool(b) => Some(*b),
+            _ => None,
+        }
+    }
+
+    /// Scalars rendered as text (table cell values follow Qt's
+    /// `QVariant::toString`); `None` for composite values.
+    pub fn as_cell_text(&self) -> Option<String> {
+        match self {
+            PropValue::Str(s) | PropValue::Enum(s) => Some(s.clone()),
+            PropValue::Int(i) => Some(i.to_string()),
+            PropValue::Bool(b) => Some(b.to_string()),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Widget {
+    pub class: String,
+    pub name: String,
+    pub properties: Vec<(String, PropValue)>,
+    /// Direct child widgets placed by explicit geometry (no layout).
+    pub children: Vec<Widget>,
+    /// The widget's single layout, if it has one (Qt allows at most one).
+    pub layout: Option<Layout>,
+}
+
+impl Widget {
+    pub fn property(&self, name: &str) -> Option<&PropValue> {
+        self.properties
+            .iter()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Layout {
+    /// `QVBoxLayout` / `QHBoxLayout` / ...
+    pub class: String,
+    pub name: String,
+    /// `spacing` property if set explicitly; `None` → Qt default (6).
+    pub spacing: Option<i64>,
+    /// `(left, top, right, bottom)` if set explicitly.
+    pub margins: Option<(i64, i64, i64, i64)>,
+    pub items: Vec<LayoutItem>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum LayoutItem {
+    Widget(Widget),
+    Layout(Layout),
+    Spacer(Spacer),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Spacer {
+    pub name: String,
+    /// `true` for `Qt::Orientation::Horizontal`.
+    pub horizontal: bool,
+    /// `(width, height)` from the `sizeHint` property.
+    pub hint: (i64, i64),
+}
+
+/// A parsed `.ui` document: form class + root widget.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UiForm {
+    pub class: String,
+    pub root: Widget,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParseError(pub String);
+
+impl std::fmt::Display for ParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ui parse error: {}", self.0)
+    }
+}
+
+impl std::error::Error for ParseError {}
+
+/// Parse a Qt Designer `.ui` document into a [`UiForm`].
+pub fn parse(xml: &str) -> Result<UiForm, ParseError> {
+    let doc = roxmltree::Document::parse(xml).map_err(|e| ParseError(e.to_string()))?;
+    let ui = doc.root_element();
+    if ui.tag_name().name() != "ui" {
+        return Err(ParseError("root element is not <ui>".into()));
+    }
+
+    let class = ui
+        .children()
+        .find(|n| n.has_tag_name("class"))
+        .and_then(|n| n.text())
+        .unwrap_or("")
+        .to_string();
+
+    let root = ui
+        .children()
+        .find(|n| n.has_tag_name("widget"))
+        .ok_or_else(|| ParseError("no root <widget> element".into()))?;
+
+    Ok(UiForm {
+        class,
+        root: parse_widget(root)?,
+    })
+}
+
+fn parse_widget(node: Node<'_, '_>) -> Result<Widget, ParseError> {
+    let class = node
+        .attribute("class")
+        .ok_or_else(|| ParseError("<widget> without class attribute".into()))?
+        .to_string();
+    let name = node.attribute("name").unwrap_or("").to_string();
+
+    let mut properties = Vec::new();
+    let mut children = Vec::new();
+    let mut layout = None;
+    for child in node.children().filter(|n| n.is_element()) {
+        match child.tag_name().name() {
+            "property" => {
+                if let Some(prop) = parse_property(child) {
+                    properties.push(prop);
+                }
+            }
+            "widget" => {
+                children.push(parse_widget(child)?);
+            }
+            "layout" => {
+                layout = Some(parse_layout(child)?);
+            }
+            _ => {}
+        }
+    }
+
+    Ok(Widget {
+        class,
+        name,
+        properties,
+        children,
+        layout,
+    })
+}
+
+fn parse_layout(node: Node<'_, '_>) -> Result<Layout, ParseError> {
+    let class = node
+        .attribute("class")
+        .ok_or_else(|| ParseError("<layout> without class attribute".into()))?
+        .to_string();
+    let name = node.attribute("name").unwrap_or("").to_string();
+
+    let mut spacing = None;
+    let mut margins = None;
+    let mut items = Vec::new();
+
+    for child in node.children().filter(|n| n.is_element()) {
+        match child.tag_name().name() {
+            "property" => {
+                let Some((key, value)) = parse_property(child) else {
+                    continue;
+                };
+                match (key.as_str(), &value) {
+                    ("spacing", PropValue::Int(n)) => spacing = Some(*n),
+                    ("leftMargin", PropValue::Int(v)) => set_margin(&mut margins, 0, *v),
+                    ("topMargin", PropValue::Int(v)) => set_margin(&mut margins, 1, *v),
+                    ("rightMargin", PropValue::Int(v)) => set_margin(&mut margins, 2, *v),
+                    ("bottomMargin", PropValue::Int(v)) => set_margin(&mut margins, 3, *v),
+                    _ => {}
+                }
+            }
+            "item" => {
+                let inner = child
+                    .children()
+                    .find(|n| n.is_element())
+                    .ok_or_else(|| ParseError("<item> without content".into()))?;
+                match inner.tag_name().name() {
+                    "widget" => items.push(LayoutItem::Widget(parse_widget(inner)?)),
+                    "layout" => items.push(LayoutItem::Layout(parse_layout(inner)?)),
+                    "spacer" => items.push(LayoutItem::Spacer(parse_spacer(inner)?)),
+                    other => return Err(ParseError(format!("unsupported item type <{other}>"))),
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Ok(Layout {
+        class,
+        name,
+        spacing,
+        margins,
+        items,
+    })
+}
+
+fn set_margin(margins: &mut Option<(i64, i64, i64, i64)>, index: usize, value: i64) {
+    let entry = margins.get_or_insert((0, 0, 0, 0));
+    match index {
+        0 => entry.0 = value,
+        1 => entry.1 = value,
+        2 => entry.2 = value,
+        _ => entry.3 = value,
+    }
+}
+
+fn parse_spacer(node: Node<'_, '_>) -> Result<Spacer, ParseError> {
+    let name = node.attribute("name").unwrap_or("").to_string();
+    let mut horizontal = true;
+    let mut hint = (40i64, 20i64);
+
+    for child in node.children().filter(|n| n.has_tag_name("property")) {
+        let Some((key, value)) = parse_property(child) else {
+            continue;
+        };
+        match (key.as_str(), &value) {
+            ("orientation", PropValue::Enum(e)) => {
+                horizontal = e.ends_with("Horizontal");
+            }
+            ("sizeHint", PropValue::Size { w, h }) => hint = (*w, *h),
+            _ => {}
+        }
+    }
+
+    Ok(Spacer {
+        name,
+        horizontal,
+        hint,
+    })
+}
+
+/// `<property name="...">value</property>` → `(name, value)`.
+/// Returns `None` for properties without a recognizable value element.
+fn parse_property(node: Node<'_, '_>) -> Option<(String, PropValue)> {
+    let key = node.attribute("name")?.to_string();
+    let value_node = node.children().find(|n| n.is_element())?;
+    let value = parse_value(value_node)?;
+    Some((key, value))
+}
+
+fn parse_value(node: Node<'_, '_>) -> Option<PropValue> {
+    match node.tag_name().name() {
+        "string" | "cstring" => Some(PropValue::Str(node.text().unwrap_or("").to_string())),
+        "number" => {
+            let text = node.text().unwrap_or("").trim();
+            Some(
+                text.parse::<i64>()
+                    .map(PropValue::Int)
+                    .unwrap_or_else(|_| PropValue::Str(text.to_string())),
+            )
+        }
+        "bool" => Some(PropValue::Bool(node.text().unwrap_or("").trim() == "true")),
+        "enum" => Some(PropValue::Enum(node.text().unwrap_or("").to_string())),
+        "rect" => {
+            let mut rect = [0i64; 4];
+            for child in node.children().filter(|n| n.is_element()) {
+                let n = child
+                    .text()
+                    .unwrap_or("")
+                    .trim()
+                    .parse::<i64>()
+                    .unwrap_or(0);
+                match child.tag_name().name() {
+                    "x" => rect[0] = n,
+                    "y" => rect[1] = n,
+                    "width" => rect[2] = n,
+                    "height" => rect[3] = n,
+                    _ => {}
+                }
+            }
+            Some(PropValue::Rect {
+                x: rect[0],
+                y: rect[1],
+                w: rect[2],
+                h: rect[3],
+            })
+        }
+        "size" => {
+            let mut size = [0i64; 2];
+            for child in node.children().filter(|n| n.is_element()) {
+                let n = child
+                    .text()
+                    .unwrap_or("")
+                    .trim()
+                    .parse::<i64>()
+                    .unwrap_or(0);
+                match child.tag_name().name() {
+                    "width" => size[0] = n,
+                    "height" => size[1] = n,
+                    _ => {}
+                }
+            }
+            Some(PropValue::Size {
+                w: size[0],
+                h: size[1],
+            })
+        }
+        "iconset" => {
+            let entries = node
+                .children()
+                .filter(|child| child.is_element())
+                .map(|child| {
+                    (
+                        child.tag_name().name().to_string(),
+                        PropValue::Str(child.text().unwrap_or("").to_string()),
+                    )
+                })
+                .collect();
+            Some(PropValue::Map(entries))
+        }
+        // Unknown value tags (sizepolicy, ...) degrade to their text.
+        _ => Some(PropValue::Str(node.text().unwrap_or("").to_string())),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const FIXTURE: &str = include_str!("../tests/fixtures/test_dialog01.ui");
+
+    #[test]
+    fn parses_dialog_fixture() {
+        let form = parse(FIXTURE).expect("fixture parses");
+        assert_eq!(form.class, "Dialog");
+        assert_eq!(form.root.class, "QDialog");
+        assert_eq!(form.root.name, "Dialog");
+        assert_eq!(
+            form.root.property("geometry"),
+            Some(&PropValue::Rect {
+                x: 0,
+                y: 0,
+                w: 388,
+                h: 190
+            })
+        );
+        assert_eq!(
+            form.root.property("windowTitle"),
+            Some(&PropValue::Str("Dialog".into()))
+        );
+    }
+
+    #[test]
+    fn parses_root_layout_structure() {
+        let form = parse(FIXTURE).expect("fixture parses");
+        let layout = form.root.layout.as_ref().expect("root has layout");
+        assert_eq!(layout.class, "QVBoxLayout");
+        assert_eq!(layout.name, "verticalLayout");
+        // 3 rows + vertical spacer + button row
+        assert_eq!(layout.items.len(), 5);
+
+        match &layout.items[0] {
+            LayoutItem::Layout(row) => {
+                assert_eq!(row.class, "QHBoxLayout");
+                assert_eq!(row.items.len(), 3);
+                match &row.items[0] {
+                    LayoutItem::Widget(w) => {
+                        assert_eq!(w.class, "QLabel");
+                        assert_eq!(w.name, "label_1");
+                        assert_eq!(
+                            w.property("text"),
+                            Some(&PropValue::Str("TextLabel".into()))
+                        );
+                    }
+                    other => panic!("expected label, got {other:?}"),
+                }
+                match &row.items[1] {
+                    LayoutItem::Spacer(s) => {
+                        assert!(s.horizontal);
+                        assert_eq!(s.hint, (40, 20));
+                    }
+                    other => panic!("expected spacer, got {other:?}"),
+                }
+                match &row.items[2] {
+                    LayoutItem::Widget(w) => {
+                        assert_eq!(w.class, "QLineEdit");
+                        assert_eq!(w.name, "lineEdit_1");
+                        assert!(w.properties.is_empty());
+                    }
+                    other => panic!("expected line edit, got {other:?}"),
+                }
+            }
+            other => panic!("expected row layout, got {other:?}"),
+        }
+
+        match &layout.items[3] {
+            LayoutItem::Spacer(s) => {
+                assert!(!s.horizontal);
+                assert_eq!(s.hint, (20, 71));
+            }
+            other => panic!("expected vertical spacer, got {other:?}"),
+        }
+
+        match &layout.items[4] {
+            LayoutItem::Layout(row) => {
+                assert_eq!(row.items.len(), 3);
+                let button_texts: Vec<_> = row
+                    .items
+                    .iter()
+                    .filter_map(|item| match item {
+                        LayoutItem::Widget(w) => w.property("text").cloned(),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(
+                    button_texts,
+                    vec![
+                        PropValue::Str("PushButton".into()),
+                        PropValue::Str("PushButton".into())
+                    ]
+                );
+            }
+            other => panic!("expected button row, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_non_ui_documents() {
+        assert!(parse("<html><body/></html>").is_err());
+        assert!(parse("not xml at all").is_err());
+        assert!(parse("<ui><class>X</class></ui>").is_err()); // no root widget
+    }
+
+    #[test]
+    fn tolerates_unknown_property_value_tags() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0"><class>X</class>
+ <widget class="QWidget" name="w">
+  <property name="weird"><something>text</something></property>
+ </widget>
+</ui>"#;
+        let form = parse(xml).expect("parses");
+        assert_eq!(
+            form.root.property("weird"),
+            Some(&PropValue::Str("text".into()))
+        );
+    }
+}

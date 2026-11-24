@@ -1,0 +1,17 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/form-xml",
+    "crates/ui-core",
+    "crates/ui-render",
+    "crates/qt",
+    "crates/app",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+
+[profile.release]
+opt-level = "s"
+lto = true

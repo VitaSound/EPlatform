@@ -1,0 +1,8 @@
+[package]
+name = "form-xml"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+roxmltree = "0.21"
+serde = { version = "1", features = ["derive"] }

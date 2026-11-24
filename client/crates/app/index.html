@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <title>EPlatform</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        overflow: hidden;
+        background: #1c1e22;
+      }
+      canvas {
+        display: block;
+        outline: none;
+      }
+    </style>
+  </head>
+  <body>
+    <script>
+      // Capture wasm panics/errors for automated inspection.
+      window.__epErrors = [];
+      window.addEventListener("error", (e) =>
+        window.__epErrors.push(String(e.message) + " @ " + (e.filename || "") + ":" + (e.lineno || "")),
+      );
+      window.addEventListener("unhandledrejection", (e) =>
+        window.__epErrors.push("rejection: " + String(e.reason)),
+      );
+    </script>
+    <link data-trunk rel="rust" href="Cargo.toml" />
+  </body>
+</html>
