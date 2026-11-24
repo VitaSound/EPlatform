@@ -7,7 +7,7 @@ mod gfx;
 mod socket;
 
 use rqt::item_model::{QTABLE_HEADER_H, QTABLE_ROW_H};
-use rqt::mdi::{QMdiArea, QMdiSubWindow, QMdiSubWindowHit, QMDI_BUTTON, QMDI_TITLE_H};
+use rqt::mdi::{QMdiArea, QMdiSubWindow, QMdiSubWindowButton, QMdiSubWindowHit, QMDI_TITLE_H};
 use rqt::widgets::{QWidgetId, QWidgetTree};
 use socket::{PhoenixSocket, SocketEvent};
 use std::cell::RefCell;
@@ -29,9 +29,6 @@ struct CellEdit {
     form_id: String,
     table: String,
 }
-
-const CARD_IDLE: [f32; 4] = [0.76, 0.78, 0.82, 1.0];
-const CARD_BORDER: [f32; 4] = [0.58, 0.61, 0.66, 1.0];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MdiDragMode {
@@ -206,6 +203,7 @@ struct App {
     caret_epoch: f64,
     table_press: Option<TablePress>,
     scroll_click: bool,
+    mdi_hover: Option<(usize, QMdiSubWindowHit)>,
 }
 
 impl App {
@@ -236,6 +234,7 @@ impl App {
             caret_epoch: now_ms(),
             table_press: None,
             scroll_click: false,
+            mdi_hover: None,
         }
     }
 
@@ -497,6 +496,7 @@ impl App {
     }
 
     fn remove_form(&mut self, form_id: &str) {
+        self.mdi_hover = None;
         self.forms.remove(form_id);
         let was_modal = self.modal_stack.iter().any(|id| id == form_id);
         self.modal_stack.retain(|id| id != form_id);
@@ -534,6 +534,7 @@ impl App {
     }
 
     fn remove_all_forms(&mut self) {
+        self.mdi_hover = None;
         self.forms.clear();
         self.modal_stack.clear();
         self.mdi.clear();
@@ -629,10 +630,21 @@ impl App {
             let Some(form) = self.forms.get(&subwindow.payload) else {
                 continue;
             };
-            let mut painter = rqt::gui::QPainter::new();
-            rqt::paint::paint_widget_tree(&form.tree, form.root, &style, &mut painter);
-            append_paint_commands(painter.commands(), &mut rects, &mut texts);
-            self.push_subwindow_chrome(subwindow, active == Some(index), &mut rects, &mut texts);
+            if !subwindow.minimized {
+                let mut painter = rqt::gui::QPainter::new();
+                rqt::paint::paint_widget_tree(&form.tree, form.root, &style, &mut painter);
+                append_paint_commands(painter.commands(), &mut rects, &mut texts);
+            }
+            let hover = self
+                .mdi_hover
+                .and_then(|(hover_index, hit)| (hover_index == index).then_some(hit));
+            self.push_subwindow_chrome(
+                subwindow,
+                active == Some(index),
+                hover,
+                &mut rects,
+                &mut texts,
+            );
         }
         (rects, texts)
     }
@@ -649,118 +661,198 @@ impl App {
         &self,
         subwindow: &QMdiSubWindow<String>,
         active: bool,
+        hover: Option<QMdiSubWindowHit>,
         rects: &mut Vec<gfx::ColoredRect>,
         texts: &mut Vec<gfx::ColoredText>,
     ) {
+        use rqt::gui::QPainter;
+
+        let mut painter = QPainter::new();
+        self.paint_subwindow_chrome(&mut painter, subwindow, active, hover);
+        append_paint_commands(painter.commands(), rects, texts);
+    }
+
+    fn paint_subwindow_chrome(
+        &self,
+        painter: &mut rqt::gui::QPainter,
+        subwindow: &QMdiSubWindow<String>,
+        active: bool,
+        hover: Option<QMdiSubWindowHit>,
+    ) {
+        use rqt::gui::{QColor, QPointF, QRectF};
+
         let frame = subwindow.frame;
-        let title = if active {
-            [0.188, 0.549, 0.776, 1.0]
+        let (title_start, title_end) = if active {
+            (
+                QColor::rgba8(74, 159, 220, 255),
+                QColor::rgba8(39, 121, 180, 255),
+            )
         } else {
-            CARD_IDLE
+            (
+                QColor::rgba8(235, 237, 241, 255),
+                QColor::rgba8(202, 206, 214, 255),
+            )
         };
+        let border = QColor::rgba8(148, 156, 168, 255);
         let text_color = if active {
-            [1.0, 1.0, 1.0, 1.0]
+            QColor::rgba8(255, 255, 255, 255)
         } else {
-            [0.08, 0.08, 0.10, 1.0]
+            QColor::rgba8(24, 24, 30, 255)
         };
-        rects.push(gfx::ColoredRect {
-            x: frame.x,
-            y: frame.y,
-            w: frame.width,
-            h: QMDI_TITLE_H,
-            color: title,
-        });
-        for border in [
-            gfx::ColoredRect {
-                x: frame.x,
-                y: frame.y,
-                w: 1.0,
-                h: frame.height,
-                color: CARD_BORDER,
-            },
-            gfx::ColoredRect {
-                x: frame.right() - 1.0,
-                y: frame.y,
-                w: 1.0,
-                h: frame.height,
-                color: CARD_BORDER,
-            },
-            gfx::ColoredRect {
-                x: frame.x,
-                y: frame.bottom() - 1.0,
-                w: frame.width,
-                h: 1.0,
-                color: CARD_BORDER,
-            },
+        let icon_color = if active {
+            QColor::rgba8(255, 255, 255, 255)
+        } else {
+            QColor::rgba8(38, 38, 44, 255)
+        };
+        let hover_fill = if active {
+            QColor::rgba8(126, 190, 238, 255)
+        } else {
+            QColor::rgba8(214, 218, 226, 255)
+        };
+
+        painter.fill_linear_gradient_rect(
+            QRectF::new(frame.x, frame.y, frame.width, QMDI_TITLE_H),
+            0.0,
+            title_start,
+            title_end,
+        );
+        for border_rect in [
+            QRectF::new(frame.x, frame.y, 1.0, frame.height),
+            QRectF::new(frame.right() - 1.0, frame.y, 1.0, frame.height),
+            QRectF::new(frame.x, frame.bottom() - 1.0, frame.width, 1.0),
         ] {
-            rects.push(border);
+            painter.fill_rect(border_rect, border);
         }
-        let close = subwindow.close_rect();
-        let maximize = subwindow.maximize_rect();
-        rects.push(gfx::ColoredRect {
-            x: close.x,
-            y: close.y,
-            w: close.width,
-            h: close.height,
-            color: [0.58, 0.26, 0.29, 1.0],
-        });
-        rects.push(gfx::ColoredRect {
-            x: maximize.x,
-            y: maximize.y,
-            w: maximize.width,
-            h: maximize.height,
-            color: if active {
-                [0.36, 0.55, 0.72, 1.0]
-            } else {
-                [0.66, 0.68, 0.72, 1.0]
-            },
-        });
-        let resize = subwindow.resize_rect();
-        for step in 0..3 {
-            let offset = step as f32 * 4.0;
-            rects.push(gfx::ColoredRect {
-                x: resize.right() - 3.0 - offset,
-                y: resize.bottom() - 1.0,
-                w: 2.0,
-                h: 1.0,
-                color: CARD_BORDER,
-            });
-            rects.push(gfx::ColoredRect {
-                x: resize.right() - 1.0,
-                y: resize.bottom() - 3.0 - offset,
-                w: 1.0,
-                h: 2.0,
-                color: CARD_BORDER,
-            });
+
+        let buttons = subwindow.title_buttons();
+        let mut title_right = frame.right() - 8.0;
+        for (button, rect) in &buttons {
+            if *button != QMdiSubWindowButton::SystemMenu {
+                title_right = title_right.min(rect.x - 4.0);
+            }
+            let button_hit = match button {
+                QMdiSubWindowButton::SystemMenu => QMdiSubWindowHit::SystemMenu,
+                QMdiSubWindowButton::Minimize => QMdiSubWindowHit::Minimize,
+                QMdiSubWindowButton::Maximize => QMdiSubWindowHit::Maximize,
+                QMdiSubWindowButton::Restore => {
+                    if subwindow.minimized {
+                        QMdiSubWindowHit::Minimize
+                    } else {
+                        QMdiSubWindowHit::Maximize
+                    }
+                }
+                QMdiSubWindowButton::Close => QMdiSubWindowHit::Close,
+            };
+            if hover == Some(button_hit) {
+                painter.fill_rounded_rect(
+                    QRectF::new(
+                        rect.x + 1.0,
+                        rect.y + 1.0,
+                        rect.width - 2.0,
+                        rect.height - 2.0,
+                    ),
+                    4.0,
+                    hover_fill,
+                );
+            }
+            let cx = rect.x + rect.width / 2.0;
+            let cy = rect.y + rect.height / 2.0;
+            match button {
+                QMdiSubWindowButton::Close => {
+                    let d = 4.0;
+                    painter.draw_line(
+                        QPointF::new(cx - d, cy - d),
+                        QPointF::new(cx + d, cy + d),
+                        1.0,
+                        icon_color,
+                    );
+                    painter.draw_line(
+                        QPointF::new(cx + d, cy - d),
+                        QPointF::new(cx - d, cy + d),
+                        1.0,
+                        icon_color,
+                    );
+                }
+                QMdiSubWindowButton::Minimize => {
+                    painter.draw_line(
+                        QPointF::new(rect.x + 5.0, rect.y + 12.5),
+                        QPointF::new(rect.x + 13.0, rect.y + 12.5),
+                        1.0,
+                        icon_color,
+                    );
+                }
+                QMdiSubWindowButton::Maximize => {
+                    painter.stroke_rect(
+                        QRectF::new(rect.x + 5.0, rect.y + 6.0, 8.0, 6.0),
+                        1.0,
+                        icon_color,
+                    );
+                    painter.fill_rect(
+                        QRectF::new(rect.x + 5.0, rect.y + 6.0, 8.0, 2.0),
+                        icon_color,
+                    );
+                }
+                QMdiSubWindowButton::Restore => {
+                    painter.stroke_rect(
+                        QRectF::new(rect.x + 6.0, rect.y + 4.0, 7.0, 5.0),
+                        1.0,
+                        icon_color,
+                    );
+                    painter.fill_rect(
+                        QRectF::new(rect.x + 6.0, rect.y + 4.0, 7.0, 1.0),
+                        icon_color,
+                    );
+                    painter.stroke_rect(
+                        QRectF::new(rect.x + 4.0, rect.y + 7.0, 7.0, 5.0),
+                        1.0,
+                        icon_color,
+                    );
+                    painter.fill_rect(
+                        QRectF::new(rect.x + 4.0, rect.y + 7.0, 7.0, 1.0),
+                        icon_color,
+                    );
+                }
+                QMdiSubWindowButton::SystemMenu => {
+                    painter.stroke_rect(
+                        QRectF::new(rect.x + 4.0, rect.y + 4.0, 10.0, 10.0),
+                        1.0,
+                        icon_color,
+                    );
+                    painter.fill_rect(
+                        QRectF::new(rect.x + 4.0, rect.y + 4.0, 10.0, 2.0),
+                        icon_color,
+                    );
+                }
+            }
         }
-        let title_right = (maximize.x - 6.0).max(frame.x + 8.0);
-        texts.push(gfx::ColoredText {
-            x: frame.x + 8.0,
-            y: frame.y + 4.0,
-            clip: [
-                frame.x as i32,
-                frame.y as i32,
-                title_right as i32,
-                (frame.y + QMDI_TITLE_H) as i32,
-            ],
-            wrap_w: (title_right - frame.x - 8.0).max(1.0),
-            text: subwindow.title.clone(),
-            color: text_color,
-        });
-        for (rect, glyph) in [(close, "×"), (maximize, "□")] {
-            texts.push(gfx::ColoredText {
-                x: rect.x + (QMDI_BUTTON - 7.0) / 2.0,
-                y: rect.y,
-                clip: [
-                    rect.x as i32,
-                    rect.y as i32,
-                    rect.right() as i32,
-                    rect.bottom() as i32,
-                ],
-                wrap_w: QMDI_BUTTON,
-                text: glyph.into(),
-                color: text_color,
-            });
+
+        let label_left = frame.x + 8.0;
+        let label_width = (title_right - label_left).max(1.0);
+        painter.save();
+        painter.set_clip_rect(Some(QRectF::new(
+            label_left,
+            frame.y,
+            label_width,
+            QMDI_TITLE_H,
+        )));
+        painter.draw_text(
+            QRectF::new(label_left, frame.y + 4.0, label_width, QMDI_TITLE_H),
+            subwindow.title.clone(),
+            text_color,
+        );
+        painter.restore();
+
+        if !subwindow.minimized {
+            let resize = subwindow.resize_rect();
+            for step in 0..3 {
+                let offset = step as f32 * 4.0;
+                painter.draw_line(
+                    QPointF::new(resize.right() - 3.0 - offset, resize.bottom() - 1.0),
+                    QPointF::new(resize.right() - 1.0, resize.bottom() - 3.0 - offset),
+                    1.0,
+                    border,
+                );
+            }
         }
     }
 
@@ -786,6 +878,7 @@ impl App {
     }
 
     fn activate_form(&mut self, form_id: &str) -> Option<usize> {
+        self.mdi_hover = None;
         let index = self.mdi.index_of(|payload| payload == form_id)?;
         let activated = self.mdi.activate(index)?;
         self.focus_initial_form(form_id);
@@ -808,7 +901,14 @@ impl App {
         }
     }
 
+    fn cancel_mouse_grabs(&mut self) {
+        for form in self.forms.values_mut() {
+            form.tree.cancel_mouse_grab();
+        }
+    }
+
     fn dispatch_mouse_press(&mut self) {
+        self.cancel_mouse_grabs();
         self.left_down = true;
         self.line_select = None;
         self.caret_epoch = now_ms();
@@ -837,7 +937,10 @@ impl App {
                     });
                 }
             }
-            QMdiSubWindowHit::Close | QMdiSubWindowHit::Maximize => {}
+            QMdiSubWindowHit::Close
+            | QMdiSubWindowHit::Maximize
+            | QMdiSubWindowHit::Minimize
+            | QMdiSubWindowHit::SystemMenu => {}
             QMdiSubWindowHit::Body => {
                 let Some(index) = self.mdi.activate(index) else {
                     return;
@@ -950,10 +1053,6 @@ impl App {
         let index = drag.index;
         let mode = drag.mode;
         drag.last = self.cursor;
-        Self::log(format!(
-            "drag {mode:?} dx={dx:.1} dy={dy:.1} cursor=({:.1},{:.1})",
-            self.cursor.0, self.cursor.1
-        ));
         match mode {
             MdiDragMode::Move => {
                 let Some(form_id) = self
@@ -963,9 +1062,19 @@ impl App {
                 else {
                     return;
                 };
+                let before = self
+                    .mdi
+                    .subwindow(index)
+                    .map(|subwindow| (subwindow.frame.x, subwindow.frame.y));
                 self.mdi.translate(index, dx, dy);
-                if let Some(form) = self.forms.get_mut(&form_id) {
-                    form.tree.translate(form.root, dx, dy);
+                let after = self
+                    .mdi
+                    .subwindow(index)
+                    .map(|subwindow| (subwindow.frame.x, subwindow.frame.y));
+                if before != after {
+                    if let Some(form) = self.forms.get_mut(&form_id) {
+                        form.tree.translate(form.root, dx, dy);
+                    }
                 }
             }
             MdiDragMode::Resize => {
@@ -1075,6 +1184,27 @@ impl App {
                 }
                 return;
             }
+            Some((index, QMdiSubWindowHit::Minimize)) => {
+                let Some(form_id) = self
+                    .mdi
+                    .subwindow(index)
+                    .map(|subwindow| subwindow.payload.clone())
+                else {
+                    return;
+                };
+                self.commit_edit();
+                let Some(minimized) = self.mdi.toggle_minimized(index) else {
+                    return;
+                };
+                if minimized {
+                    self.clear_form_focus(&form_id);
+                } else {
+                    self.sync_form_geometry(&form_id);
+                    self.focus_initial_form(&form_id);
+                }
+                return;
+            }
+            Some((_, QMdiSubWindowHit::SystemMenu)) => return,
             Some((index, QMdiSubWindowHit::Title)) => {
                 if let Some(form_id) = self
                     .mdi
@@ -1093,6 +1223,12 @@ impl App {
                 if self.modal_form().is_some() {
                     return;
                 }
+                self.cancel_mouse_grabs();
+                if let Some(form_id) = self.mdi.active_payload().cloned() {
+                    if let Some(form) = self.forms.get_mut(&form_id) {
+                        form.tree.clear_focus();
+                    }
+                }
                 self.focused = None;
                 self.table_focus = None;
                 return;
@@ -1102,6 +1238,7 @@ impl App {
         let hit = self.hit_test(self.cursor);
 
         let Some((form_id, widget_name, class)) = hit else {
+            self.cancel_mouse_grabs();
             self.table_focus = None;
             self.table_press = None;
             return;
@@ -1582,6 +1719,11 @@ impl App {
                     Self::log("focus cleared");
                 }
                 self.table_focus = None;
+                if let Some(form_id) = self.mdi.active_payload().cloned() {
+                    if let Some(form) = self.forms.get_mut(&form_id) {
+                        form.tree.clear_focus();
+                    }
+                }
             }
             KeyEdit::Up
             | KeyEdit::Down
@@ -1719,6 +1861,26 @@ impl App {
                 true
             }
             _ => false,
+        }
+    }
+
+    fn clear_form_focus(&mut self, form_id: &str) {
+        if let Some(form) = self.forms.get_mut(form_id) {
+            form.tree.clear_focus();
+        }
+        if self
+            .focused
+            .as_ref()
+            .is_some_and(|(focused_form, _)| focused_form == form_id)
+        {
+            self.focused = None;
+        }
+        if self
+            .table_focus
+            .as_ref()
+            .is_some_and(|(focused_form, _)| focused_form == form_id)
+        {
+            self.table_focus = None;
         }
     }
 
@@ -2156,10 +2318,12 @@ fn append_paint_commands(
             QPaintCommand::Restore => clip = stack.pop().unwrap_or(None),
             QPaintCommand::SetClip { rect } => clip = *rect,
             QPaintCommand::Translate { .. } => {}
-            QPaintCommand::FillRect { rect, color }
-            | QPaintCommand::FillRoundedRect { rect, color, .. } => {
-                push_rect(rects, clip, *rect, *color)
-            }
+            QPaintCommand::FillRect { rect, color } => push_rect(rects, clip, *rect, *color),
+            QPaintCommand::FillRoundedRect {
+                rect,
+                radius,
+                color,
+            } => push_rounded_rect(rects, clip, *rect, *radius, *color),
             QPaintCommand::FillLinearGradientRect {
                 rect, start, end, ..
             } => {
@@ -2378,6 +2542,69 @@ fn append_paint_commands(
     }
 }
 
+fn push_rounded_rect(
+    rects: &mut Vec<gfx::ColoredRect>,
+    clip: Option<rqt::gui::QRectF>,
+    rect: rqt::gui::QRectF,
+    radius: f32,
+    color: rqt::gui::QColor,
+) {
+    use rqt::gui::QRectF;
+    let left = rect.left().floor();
+    let top = rect.top().floor();
+    let right = rect.right().ceil();
+    let bottom = rect.bottom().ceil();
+    let width = right - left;
+    let height = bottom - top;
+    if width <= 0.0 || height <= 0.0 {
+        return;
+    }
+    let radius = radius.max(0.0).min(width / 2.0).min(height / 2.0);
+    if radius <= 0.0 {
+        if let Some(rect) = intersect_rect(QRectF::new(left, top, width, height), clip) {
+            rects.push(gfx::ColoredRect {
+                x: rect.x,
+                y: rect.y,
+                w: rect.width,
+                h: rect.height,
+                color: [color.red, color.green, color.blue, color.alpha],
+            });
+        }
+        return;
+    }
+    let mut push = |rect: QRectF| {
+        if let Some(rect) = intersect_rect(rect, clip) {
+            rects.push(gfx::ColoredRect {
+                x: rect.x,
+                y: rect.y,
+                w: rect.width,
+                h: rect.height,
+                color: [color.red, color.green, color.blue, color.alpha],
+            });
+        }
+    };
+    for y in top as i32..bottom as i32 {
+        let py = y as f32 + 0.5;
+        let dy = if py < top + radius {
+            top + radius - py
+        } else if py > bottom - radius {
+            py - (bottom - radius)
+        } else {
+            0.0
+        };
+        let inset = if dy > 0.0 {
+            radius - (radius * radius - dy * dy).max(0.0).sqrt()
+        } else {
+            0.0
+        };
+        let x0 = left + inset;
+        let x1 = right - inset;
+        if x1 > x0 {
+            push(QRectF::new(x0, y as f32, x1 - x0, 1.0));
+        }
+    }
+}
+
 fn push_stroke_rect(
     rects: &mut Vec<gfx::ColoredRect>,
     clip: Option<rqt::gui::QRectF>,
@@ -2590,6 +2817,15 @@ impl ApplicationHandler for App {
                 let scale = self.ui_scale();
                 let previous = self.dragging.as_ref().map(|drag| drag.last);
                 self.cursor = (position.x as f32 / scale, position.y as f32 / scale);
+                self.mdi_hover = self.mdi_hit_modal().filter(|(_, hit)| {
+                    matches!(
+                        hit,
+                        QMdiSubWindowHit::Close
+                            | QMdiSubWindowHit::Maximize
+                            | QMdiSubWindowHit::Minimize
+                            | QMdiSubWindowHit::SystemMenu
+                    )
+                });
                 if self.left_down {
                     let point = rqt::gui::QPointF::new(self.cursor.0, self.cursor.1);
                     let mut moved = false;
@@ -2842,6 +3078,34 @@ mod tests {
         app.dispatch_mouse_release();
         assert_eq!(app.focused, Some(("f".into(), "lineEdit_1".into())));
         assert_eq!(focus_name(&app, "f").as_deref(), Some("lineEdit_1"));
+    }
+
+    #[test]
+    fn minimize_button_collapses_and_restores_form() {
+        use rqt::mdi::QMdiSubWindowButton;
+
+        let mut app = App::new(Params::default());
+        add_form(&mut app, "f", TAB_UI);
+        let index = app.mdi.index_of(|payload| payload == "f").unwrap();
+        let minimize = app.mdi.subwindow(index).unwrap().minimize_rect();
+        app.cursor = (minimize.x + 2.0, minimize.y + 2.0);
+        app.dispatch_mouse_press();
+        app.dispatch_mouse_release();
+        assert!(app.mdi.subwindow(index).unwrap().minimized);
+
+        let restore = app
+            .mdi
+            .subwindow(index)
+            .unwrap()
+            .title_buttons()
+            .into_iter()
+            .find(|(button, _)| *button == QMdiSubWindowButton::Restore)
+            .map(|(_, rect)| rect)
+            .unwrap();
+        app.cursor = (restore.x + 2.0, restore.y + 2.0);
+        app.dispatch_mouse_press();
+        app.dispatch_mouse_release();
+        assert!(!app.mdi.subwindow(index).unwrap().minimized);
     }
 
     #[test]

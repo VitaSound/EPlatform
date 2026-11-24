@@ -1,16 +1,50 @@
 use crate::gui::{QPointF, QRectF, QSizeF};
 
-pub const QMDI_TITLE_H: f32 = 26.0;
+pub const QMDI_TITLE_H: f32 = 24.0;
 pub const QMDI_BUTTON: f32 = 18.0;
+pub const QMDI_BUTTON_TOP: f32 = 3.0;
+pub const QMDI_BUTTON_RIGHT: f32 = 6.0;
+pub const QMDI_BUTTON_GAP: f32 = 2.0;
+pub const QMDI_SYSMENU_LEFT: f32 = 5.0;
 pub const QMDI_RESIZE: f32 = 12.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum QMdiSubWindowHit {
     Title,
-    Close,
+    SystemMenu,
+    Minimize,
     Maximize,
+    Close,
     Body,
     ResizeBottomRight,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QMdiSubWindowButton {
+    SystemMenu,
+    Minimize,
+    Maximize,
+    Restore,
+    Close,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct QMdiWindowFlags {
+    pub system_menu: bool,
+    pub minimize: bool,
+    pub maximize: bool,
+    pub close: bool,
+}
+
+impl Default for QMdiWindowFlags {
+    fn default() -> Self {
+        Self {
+            system_menu: false,
+            minimize: true,
+            maximize: true,
+            close: true,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -19,37 +53,87 @@ pub struct QMdiSubWindow<T> {
     pub title: String,
     pub frame: QRectF,
     pub maximized: bool,
+    pub minimized: bool,
     pub visible: bool,
+    pub window_flags: QMdiWindowFlags,
     restore_frame: Option<QRectF>,
 }
 
 impl<T> QMdiSubWindow<T> {
     pub fn content_rect(&self) -> QRectF {
+        let height = if self.minimized {
+            0.0
+        } else {
+            (self.frame.height - QMDI_TITLE_H).max(0.0)
+        };
         QRectF::new(
             self.frame.x,
             self.frame.y + QMDI_TITLE_H,
             self.frame.width,
-            (self.frame.height - QMDI_TITLE_H).max(0.0),
+            height,
+        )
+    }
+
+    fn title_button_rect(&self, offset: f32) -> QRectF {
+        QRectF::new(
+            self.frame.right() - QMDI_BUTTON_RIGHT - QMDI_BUTTON - offset,
+            self.frame.y + QMDI_BUTTON_TOP,
+            QMDI_BUTTON,
+            QMDI_BUTTON,
+        )
+    }
+
+    pub fn system_menu_rect(&self) -> QRectF {
+        QRectF::new(
+            self.frame.x + QMDI_SYSMENU_LEFT,
+            self.frame.y + QMDI_BUTTON_TOP,
+            QMDI_BUTTON,
+            QMDI_BUTTON,
         )
     }
 
     pub fn close_rect(&self) -> QRectF {
-        QRectF::new(
-            self.frame.right() - QMDI_BUTTON - 4.0,
-            self.frame.y + 4.0,
-            QMDI_BUTTON,
-            QMDI_BUTTON,
-        )
+        self.title_button_rect(0.0)
     }
 
     pub fn maximize_rect(&self) -> QRectF {
-        let close = self.close_rect();
-        QRectF::new(
-            close.x - QMDI_BUTTON - 4.0,
-            close.y,
-            QMDI_BUTTON,
-            QMDI_BUTTON,
-        )
+        self.title_button_rect(QMDI_BUTTON + QMDI_BUTTON_GAP)
+    }
+
+    pub fn minimize_rect(&self) -> QRectF {
+        self.title_button_rect((QMDI_BUTTON + QMDI_BUTTON_GAP) * 2.0)
+    }
+
+    pub fn title_buttons(&self) -> Vec<(QMdiSubWindowButton, QRectF)> {
+        let mut buttons = Vec::new();
+        let mut offset = 0.0;
+        if self.window_flags.close {
+            buttons.push((QMdiSubWindowButton::Close, self.title_button_rect(offset)));
+            offset += QMDI_BUTTON + QMDI_BUTTON_GAP;
+        }
+        if !self.minimized {
+            if self.window_flags.maximize {
+                let button = if self.maximized {
+                    QMdiSubWindowButton::Restore
+                } else {
+                    QMdiSubWindowButton::Maximize
+                };
+                buttons.push((button, self.title_button_rect(offset)));
+                offset += QMDI_BUTTON + QMDI_BUTTON_GAP;
+            }
+            if self.window_flags.minimize {
+                buttons.push((
+                    QMdiSubWindowButton::Minimize,
+                    self.title_button_rect(offset),
+                ));
+            }
+        } else if self.window_flags.minimize {
+            buttons.push((QMdiSubWindowButton::Restore, self.title_button_rect(offset)));
+        }
+        if self.window_flags.system_menu {
+            buttons.push((QMdiSubWindowButton::SystemMenu, self.system_menu_rect()));
+        }
+        buttons
     }
 
     pub fn resize_rect(&self) -> QRectF {
@@ -65,15 +149,27 @@ impl<T> QMdiSubWindow<T> {
         if !self.visible || !self.frame.contains(point) {
             return None;
         }
-        if self.resize_rect().contains(point) {
+        if !self.minimized && self.resize_rect().contains(point) {
             return Some(QMdiSubWindowHit::ResizeBottomRight);
         }
         if point.y < self.frame.y + QMDI_TITLE_H {
-            if self.close_rect().contains(point) {
-                return Some(QMdiSubWindowHit::Close);
-            }
-            if self.maximize_rect().contains(point) {
-                return Some(QMdiSubWindowHit::Maximize);
+            for (button, rect) in self.title_buttons() {
+                if !rect.contains(point) {
+                    continue;
+                }
+                return Some(match button {
+                    QMdiSubWindowButton::SystemMenu => QMdiSubWindowHit::SystemMenu,
+                    QMdiSubWindowButton::Minimize => QMdiSubWindowHit::Minimize,
+                    QMdiSubWindowButton::Maximize => QMdiSubWindowHit::Maximize,
+                    QMdiSubWindowButton::Restore => {
+                        if self.minimized {
+                            QMdiSubWindowHit::Minimize
+                        } else {
+                            QMdiSubWindowHit::Maximize
+                        }
+                    }
+                    QMdiSubWindowButton::Close => QMdiSubWindowHit::Close,
+                });
             }
             return Some(QMdiSubWindowHit::Title);
         }
@@ -170,7 +266,9 @@ impl<T> QMdiArea<T> {
             title: title.into(),
             frame,
             maximized: false,
+            minimized: false,
             visible: true,
+            window_flags: QMdiWindowFlags::default(),
             restore_frame: None,
         });
         let index = self.subwindows.len() - 1;
@@ -232,7 +330,7 @@ impl<T> QMdiArea<T> {
 
     pub fn translate(&mut self, index: usize, dx: f32, dy: f32) {
         if let Some(subwindow) = self.subwindows.get_mut(index) {
-            if !subwindow.maximized {
+            if !subwindow.maximized && !subwindow.minimized {
                 subwindow.frame = subwindow.frame.translated(dx, dy);
             }
         }
@@ -247,13 +345,14 @@ impl<T> QMdiArea<T> {
                 (rect.height + QMDI_TITLE_H).max(64.0),
             );
             subwindow.maximized = false;
+            subwindow.minimized = false;
             subwindow.restore_frame = None;
         }
     }
 
     pub fn resize_content(&mut self, index: usize, size: QSizeF) {
         if let Some(subwindow) = self.subwindows.get_mut(index) {
-            if !subwindow.maximized {
+            if !subwindow.maximized && !subwindow.minimized {
                 subwindow.frame.width = size.width.max(80.0);
                 subwindow.frame.height = (size.height + QMDI_TITLE_H).max(64.0);
             }
@@ -262,6 +361,9 @@ impl<T> QMdiArea<T> {
 
     pub fn toggle_maximized(&mut self, index: usize) -> Option<bool> {
         let subwindow = self.subwindows.get_mut(index)?;
+        if subwindow.minimized {
+            return None;
+        }
         if subwindow.maximized {
             if let Some(frame) = subwindow.restore_frame.take() {
                 subwindow.frame = frame;
@@ -274,6 +376,38 @@ impl<T> QMdiArea<T> {
             subwindow.maximized = true;
             Some(true)
         }
+    }
+
+    pub fn toggle_minimized(&mut self, index: usize) -> Option<bool> {
+        let viewport = self.viewport;
+        let slot = self
+            .subwindows
+            .iter()
+            .enumerate()
+            .filter(|(i, subwindow)| *i != index && subwindow.minimized)
+            .count();
+        let subwindow = self.subwindows.get_mut(index)?;
+        if subwindow.minimized {
+            subwindow.minimized = false;
+            if let Some(frame) = subwindow.restore_frame.take() {
+                subwindow.frame = frame;
+            }
+            return Some(false);
+        }
+        if subwindow.maximized {
+            if let Some(frame) = subwindow.restore_frame.take() {
+                subwindow.frame = frame;
+            }
+            subwindow.maximized = false;
+        }
+        subwindow.restore_frame = Some(subwindow.frame);
+        subwindow.minimized = true;
+        let icon_w = 180.0_f32.min((viewport.width - 16.0).max(80.0));
+        let x = (viewport.x + 8.0 + slot as f32 * (icon_w + 4.0))
+            .min((viewport.right() - icon_w - 8.0).max(viewport.x + 8.0));
+        let y = (viewport.bottom() - QMDI_TITLE_H - 8.0).max(viewport.y + 8.0);
+        subwindow.frame = QRectF::new(x, y, icon_w, QMDI_TITLE_H);
+        Some(true)
     }
 
     pub fn set_title(&mut self, index: usize, title: impl Into<String>) {
@@ -315,6 +449,53 @@ mod tests {
             area.hit_test(QPointF::new(close.x + 2.0, close.y + 2.0)),
             Some((index, QMdiSubWindowHit::Close))
         );
+    }
+
+    #[test]
+    fn title_buttons_minimize_and_restore_like_qt() {
+        let mut area = area();
+        let index = area.add_subwindow("One", "a".into(), QSizeF::new(300.0, 200.0));
+        let frame = area.subwindow(index).unwrap().frame;
+        let buttons = area.subwindow(index).unwrap().title_buttons();
+        assert!(buttons
+            .iter()
+            .any(|(button, _)| *button == QMdiSubWindowButton::Close));
+        assert!(buttons
+            .iter()
+            .any(|(button, _)| *button == QMdiSubWindowButton::Maximize));
+        assert!(buttons
+            .iter()
+            .any(|(button, _)| *button == QMdiSubWindowButton::Minimize));
+
+        let minimize = area.subwindow(index).unwrap().minimize_rect();
+        assert_eq!(
+            area.hit_test(QPointF::new(minimize.x + 2.0, minimize.y + 2.0)),
+            Some((index, QMdiSubWindowHit::Minimize))
+        );
+        assert_eq!(area.toggle_minimized(index), Some(true));
+        assert!(area.subwindow(index).unwrap().minimized);
+        assert_eq!(area.subwindow(index).unwrap().content_rect().height, 0.0);
+        assert!(area
+            .subwindow(index)
+            .unwrap()
+            .title_buttons()
+            .iter()
+            .any(|(button, _)| *button == QMdiSubWindowButton::Restore));
+
+        let restore = area
+            .subwindow(index)
+            .unwrap()
+            .title_buttons()
+            .into_iter()
+            .find(|(button, _)| *button == QMdiSubWindowButton::Restore)
+            .map(|(_, rect)| rect)
+            .unwrap();
+        assert_eq!(
+            area.hit_test(QPointF::new(restore.x + 2.0, restore.y + 2.0)),
+            Some((index, QMdiSubWindowHit::Minimize))
+        );
+        assert_eq!(area.toggle_minimized(index), Some(false));
+        assert_eq!(area.subwindow(index).unwrap().frame, frame);
     }
 
     #[test]

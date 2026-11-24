@@ -343,6 +343,12 @@ impl QWidgetTree {
             .get(id)
             .map(|widget| widget.font.clone())
             .unwrap_or_default();
+        if name == "checked"
+            && matches!(class.as_str(), "QRadioButton" | "QCheckBox")
+            && value.as_bool().is_some()
+        {
+            return self.set_checked(id, value.as_bool().unwrap_or(false));
+        }
         let handled = match class.as_str() {
             "QTableWidget" => self
                 .widgets
@@ -372,6 +378,9 @@ impl QWidgetTree {
             if let Some(enabled) = value.as_bool() {
                 widget.enabled = enabled;
                 if !enabled {
+                    if widget.class_name == "QLineEdit" {
+                        widget.selection_anchor = None;
+                    }
                     widget.has_focus = false;
                 }
             }
@@ -586,17 +595,27 @@ impl QWidgetTree {
         matches!(self.property(widget, "checked"), Some(QVariant::Bool(true)))
     }
 
+    fn radio_auto_exclusive(&self, widget: QWidgetId) -> bool {
+        let Some(node) = self.widgets.get(widget) else {
+            return false;
+        };
+        node.class_name == "QRadioButton"
+            && !matches!(node.property("autoExclusive"), Some(QVariant::Bool(false)))
+    }
+
     pub fn set_checked(&mut self, widget: QWidgetId, checked: bool) -> bool {
         let Some(node) = self.widgets.get(widget) else {
             return false;
         };
-        let class = node.class_name.clone();
         let parent = node.parent;
-        if checked && class == "QRadioButton" {
+        if checked && self.radio_auto_exclusive(widget) {
             if let Some(parent) = parent {
                 let siblings = self.widgets[parent].children.clone();
                 for sibling in siblings {
-                    if sibling != widget && self.widgets[sibling].class_name == "QRadioButton" {
+                    if sibling != widget
+                        && self.radio_auto_exclusive(sibling)
+                        && self.checked(sibling)
+                    {
                         self.widgets[sibling].set_property("checked", QVariant::Bool(false));
                     }
                 }
@@ -608,6 +627,9 @@ impl QWidgetTree {
 
     pub fn toggle_checked(&mut self, widget: QWidgetId) -> bool {
         let checked = self.checked(widget);
+        if checked && self.radio_auto_exclusive(widget) {
+            return true;
+        }
         self.set_checked(widget, !checked);
         !checked
     }
@@ -773,6 +795,9 @@ impl QWidgetTree {
         };
         widget.enabled = enabled;
         if !enabled && widget.has_focus {
+            if widget.class_name == "QLineEdit" {
+                widget.selection_anchor = None;
+            }
             widget.has_focus = false;
         }
         true
@@ -811,6 +836,9 @@ impl QWidgetTree {
 
     pub fn clear_focus(&mut self) {
         for widget in &mut self.widgets {
+            if widget.has_focus && widget.class_name == "QLineEdit" {
+                widget.selection_anchor = None;
+            }
             widget.has_focus = false;
         }
     }
@@ -1015,6 +1043,15 @@ impl QWidgetTree {
     }
 
     pub fn mouse_move(&mut self, point: QPointF) -> bool {
+        if let Some(grab) = self.mouse_grab {
+            if self.is_abstract_button(grab) {
+                let inside = self.widgets.get(grab).is_some_and(|widget| {
+                    widget.visible && widget.enabled && widget.geometry.contains(point)
+                });
+                self.widgets[grab].pressed = inside;
+                return true;
+            }
+        }
         let Some(drag) = self.scroll_drag else {
             return false;
         };
@@ -1208,6 +1245,26 @@ impl QWidgetTree {
             } else {
                 tree.horizontal = value;
                 tree.hbar.set_value(value);
+            }
+        }
+    }
+
+    pub fn cancel_mouse_grab(&mut self) {
+        self.mouse_grab = None;
+        self.scroll_drag = None;
+        for widget in &mut self.widgets {
+            widget.pressed = false;
+            if let Some(table) = widget.table.as_mut() {
+                table.vbar.pressed = None;
+                table.hbar.pressed = None;
+            }
+            if let Some(list) = widget.list.as_mut() {
+                list.vbar.pressed = None;
+                list.hbar.pressed = None;
+            }
+            if let Some(tree) = widget.tree.as_mut() {
+                tree.vbar.pressed = None;
+                tree.hbar.pressed = None;
             }
         }
     }
@@ -2112,6 +2169,25 @@ mod tests {
     }
 
     #[test]
+    fn line_edit_selection_clears_on_focus_out() {
+        let (mut tree, _) = load_ui(FIXTURE).expect("loads ui");
+        let line = tree.find_widget("lineEdit_1").expect("line edit");
+        let button = tree.find_widget("pushButton_1").expect("button");
+        tree.set_text(line, "abcdef".into());
+        tree.set_focus(line);
+        tree.select_all(line);
+        assert_eq!(tree.line_edit_selection(line), Some((0, 6)));
+
+        tree.set_focus(button);
+        assert!(!tree.widget(line).unwrap().has_focus);
+        assert_eq!(tree.line_edit_selection(line), None);
+        assert_eq!(tree.cursor_position(line), 6);
+
+        tree.set_focus(line);
+        assert_eq!(tree.line_edit_selection(line), None);
+    }
+
+    #[test]
     fn mouse_events_match_qt_button_semantics() {
         let (mut tree, root) = load_ui(FIXTURE).expect("loads ui");
         let label = tree.find_widget("label_1").unwrap();
@@ -2131,6 +2207,42 @@ mod tests {
         assert_eq!(event.protocol_event(), "Clicked");
         assert!(event.clicked);
         assert_eq!(tree.focus_widget(), Some(button));
+    }
+
+    #[test]
+    fn button_pressed_visual_follows_pointer_while_held() {
+        let (mut tree, root) = load_ui(FIXTURE).expect("loads ui");
+        let button = tree.find_widget("pushButton_1").unwrap();
+        let rect = tree.widget(button).unwrap().geometry;
+        let center = QPointF::new(rect.x + rect.width / 2.0, rect.y + rect.height / 2.0);
+        let outside = QPointF::new(rect.x - 10.0, center.y);
+
+        tree.mouse_press(root, center);
+        assert!(tree.widget(button).unwrap().pressed);
+        assert!(tree.mouse_move(outside));
+        assert!(!tree.widget(button).unwrap().pressed);
+        assert!(tree.mouse_move(center));
+        assert!(tree.widget(button).unwrap().pressed);
+        let event = tree.mouse_release(root, center).unwrap();
+        assert!(event.clicked);
+        assert_eq!(event.protocol_event(), "Clicked");
+        assert!(!tree.widget(button).unwrap().pressed);
+    }
+
+    #[test]
+    fn button_release_outside_is_not_a_click() {
+        let (mut tree, root) = load_ui(FIXTURE).expect("loads ui");
+        let button = tree.find_widget("pushButton_1").unwrap();
+        let rect = tree.widget(button).unwrap().geometry;
+        let center = QPointF::new(rect.x + rect.width / 2.0, rect.y + rect.height / 2.0);
+        let outside = QPointF::new(rect.x - 10.0, center.y);
+
+        tree.mouse_press(root, center);
+        tree.mouse_move(outside);
+        let event = tree.mouse_release(root, outside).unwrap();
+        assert_eq!(event.widget, button);
+        assert!(!event.clicked);
+        assert!(!tree.widget(button).unwrap().pressed);
     }
 
     #[test]
@@ -2177,6 +2289,39 @@ mod tests {
         tree.set_checked(radio_2, true);
         assert!(tree.checked(radio_2));
         tree.set_checked(radio_1, true);
+        assert!(tree.checked(radio_1));
+        assert!(!tree.checked(radio_2));
+
+        let radio_2_point = center(&tree, radio_2);
+        tree.mouse_press(root, radio_2_point);
+        tree.mouse_release(root, radio_2_point);
+        assert!(tree.checked(radio_2));
+        assert!(!tree.checked(radio_1));
+        tree.mouse_press(root, radio_2_point);
+        tree.mouse_release(root, radio_2_point);
+        assert!(tree.checked(radio_2));
+
+        tree.set_property(radio_1, "autoExclusive", QVariant::Bool(false));
+        tree.set_checked(radio_1, true);
+        assert!(tree.checked(radio_1));
+        assert!(tree.checked(radio_2));
+        let radio_1_point = center(&tree, radio_1);
+        tree.mouse_press(root, radio_1_point);
+        tree.mouse_release(root, radio_1_point);
+        assert!(!tree.checked(radio_1));
+        assert!(tree.checked(radio_2));
+    }
+
+    #[test]
+    fn checked_property_routes_through_radio_group() {
+        let (mut tree, _) = load_ui(DIALOG02).expect("loads ui");
+        let radio_1 = tree.find_widget("radioButton_1").unwrap();
+        let radio_2 = tree.find_widget("radioButton_2").unwrap();
+
+        tree.set_property(radio_2, "checked", QVariant::Bool(true));
+        assert!(tree.checked(radio_2));
+        assert!(!tree.checked(radio_1));
+        tree.set_property(radio_1, "checked", QVariant::Bool(true));
         assert!(tree.checked(radio_1));
         assert!(!tree.checked(radio_2));
     }

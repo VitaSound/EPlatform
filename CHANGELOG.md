@@ -18,11 +18,51 @@
 - После mouse release `focused`/`table_focus` синхронизируются с фактическим
   фокусом `QWidgetTree`: отпускание мыши вне поля ввода или клик по
   неfocusable-области больше не сбрасывают фокус и выделение текста.
+- `QLineEdit` сбрасывает выделение при потере фокуса/disable, как Qt6
+  (`hasSelectedText=false`, курсор остаётся на месте); повторный focus-in
+  выделение не восстанавливает. Escape и клик вне форм тоже снимают фокус.
+- `QAbstractButton`: пока кнопка мыши удерживается, `pressed` следует за
+  курсором — увёл мышь с кнопки, она отжимается, вернул — снова нажимается.
+  `Clicked` приходит только при отпускании на кнопке; release вне формы
+  очищает grab и не оставляет залипшую нажатую кнопку.
+- `QRadioButton` теперь auto-exclusive как в Qt: `set_checked(true)` снимает
+  другие radio-кнопки с тем же parent, повторный клик по выбранной не снимает
+  её, а `autoExclusive=false` разрешает независимое поведение.
+- `setProperty("checked", true)` для radio/check теперь идёт через
+  `set_checked`, поэтому Lua-инициализация `radioButton_2` снимает
+  `radioButton_1` (раньше обе оставались включёнными).
+- Исправлено залипание `left_down` после перетаскивания формы/колонки: раньше
+  release с активным `dragging`/`column_drag` выходил до сброса состояния.
+- Drag формы не двигает содержимое maximized-окна; координаты и смещения
+  проверены при `devicePixelRatio > 1` (курсор переводится в logical px).
+- `dist` снова собирается в release-режиме (`trunk build --release`,
+  `data-wasm-opt="0"` — без скачивания wasm-opt); debug-wasm 35 MB заменён на
+  release ~9.9 MB, из-за которого мышь/перерисовка ощущались как зависание.
+- Добавлен `client/scripts/serve_dist.py`: отдаёт `index.html` с `no-store`,
+  hashed JS/wasm — с `immutable`; в `index.html` добавлены no-cache meta.
+  Chrome больше не залипает на старом index/wasm после пересборки.
 - Тесты: `create_form_focuses_first_focusable_widget`,
   `mouse_release_keeps_tree_focus`,
   `tab_cycles_focusable_widgets_in_active_form`, переходы внутри table/list/tree
   и на краях, пропуск disabled, изоляция фокуса по активной форме,
   `focusing_list_and_tree_selects_first_current`.
+
+### MDI title bar: кнопки как в Qt и качество отрисовки
+
+- `QMdiSubWindow` получил Qt-геометрию заголовка Fusion: высота 24 px, кнопки
+  18×18, top 3 px, правый отступ 6 px, промежуток 2 px.
+- Кнопки теперь описываются флагами (`QMdiWindowFlags`): close, minimize,
+  maximize; при maximized рисуется restore, при minimized — restore + close.
+  System menu/context help зарезервированы флагами, но по умолчанию выключены.
+- Minimize сворачивает окно в иконку-заголовок внизу MDI-области; restore
+  возвращает прежнюю геометрию и пересчитывает layout формы.
+- Заголовок и кнопки перерисованы через `QPainter`: градиент title bar,
+  hover-подсветка, иконки `—`, `□`, `❐`, `×` линиями вместо кривых глифов.
+- `append_paint_commands` теперь корректно растеризует `FillRoundedRect`
+  (раньше скругление терялось и hover рисовался белым квадратом); hover
+  задан светло-голубым/серым, maximize/restore получили верхнюю планку.
+- Тесты: `title_buttons_minimize_and_restore_like_qt`,
+  `minimize_button_collapses_and_restores_form`.
 
 ### Qt-layout: QGroupBox, вложенные layout-ы и позиции детей
 

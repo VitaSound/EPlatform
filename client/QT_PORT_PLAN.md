@@ -220,6 +220,25 @@
 - `QWidgetTree::set_focus` инициализирует `current` у list/tree, как у table.
 - Mouse release синхронизирует `focused`/`table_focus` с `QWidgetTree`, поэтому
   выделение и фокус сохраняются при отпускании мыши вне поля/на неfocusable-зоне.
+- `QLineEdit` теряет выделение при focus-out/disable (сверено с Qt6); Escape и
+  клик вне форм снимают фокус через `clear_focus`.
+- `QAbstractButton`: `pressed` следует за курсором при удержании мыши,
+  `Clicked` — только при отпускании на кнопке; release вне формы очищает grab.
+- `QRadioButton`: auto-exclusive по parent, выбранная кнопка не снимается
+  повторным кликом, `autoExclusive=false` отключает группу.
+- `setProperty("checked")` для radio/check маршрутизируется через
+  `set_checked`, чтобы Lua-инициализация не оставляла две выбранные radio.
+- Сброс `left_down` после drag/resize/column-drag; maximized-форма не двигает
+  содержимое при drag; координаты проверены при `devicePixelRatio > 1`.
+- Клиентский `dist` собирается в release (`trunk build --release`,
+  `data-wasm-opt="0"`), чтобы убрать лаги debug-wasm.
+- `client/scripts/serve_dist.py` + no-cache meta: Chrome не переиспользует
+  старый `index.html`/wasm после пересборки (в Firefox проблемы не было).
+- MDI title bar: Qt Fusion-геометрия (24 px, кнопки 18×18, отступы 6/2/3),
+  minimize/restore/maximize/close, градиент и hover, иконки линиями через
+  `QPainter`; minimize сворачивает в иконку внизу MDI-области.
+- Rounded fill растеризуется со скруглением, hover — светлая скруглённая
+  подложка вместо белого квадрата.
 - Layout: прямые дети без layout позиционируются через `explicit_position`;
   `QGroupBox`-layout получил Qt-отступы (9 px + frame/contents inset + title);
   учитываются `minimumSize`/`maximumSize`, спейсеры сжимаются первыми, нулевые
