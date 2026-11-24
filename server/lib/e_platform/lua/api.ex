@@ -124,6 +124,23 @@ defmodule EPlatform.Lua.Api do
     end
   end
 
+  deflua open_lua(application_id, lua_file, opts), state do
+    opts = normalize_opts(decode_value(state, opts))
+    ui_file = Map.get(opts, "ui_file", "")
+
+    start_opts = %{
+      mdi: Map.get(opts, "mdi", true),
+      open_opts: opts
+    }
+
+    start_opts = Map.put(start_opts, :owner, self())
+
+    case EPlatform.DialogManager.start_dialog(application_id, lua_file, ui_file, start_opts) do
+      {:ok, form_id} -> form_id
+      {:error, _reason} -> "error"
+    end
+  end
+
   deflua close_application(application_id) do
     DialogSession.broadcast(application_id, %{
       "command" => "closeApplication",

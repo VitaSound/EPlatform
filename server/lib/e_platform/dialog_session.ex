@@ -42,6 +42,19 @@ defmodule EPlatform.DialogSession do
     %{state | modal_monitor: monitor}
   end
 
+  # An open_lua child is owned by the DialogSession that opened it: when that
+  # session dies (channel gone), the child must die too. Monitors, not a stop
+  # loop in `terminate/2`, because the DynamicSupervisor cannot process a
+  # terminate_child call while it is waiting for us to finish terminating.
+  defp expose_owner_monitor(state) do
+    monitor =
+      if is_pid(state.owner) do
+        Process.monitor(state.owner)
+      end
+
+    %{state | owner_monitor: monitor}
+  end
+
   @impl true
   def init(opts) do
     state = %{
@@ -58,10 +71,13 @@ defmodule EPlatform.DialogSession do
       modal_ref: Map.get(opts, :modal_ref),
       modal_parent_form_id: Map.get(opts, :modal_parent_form_id),
       open_opts: Map.get(opts, :open_opts, %{}),
-      modal_monitor: nil
+      owner: Map.get(opts, :owner),
+      modal_monitor: nil,
+      owner_monitor: nil
     }
 
     state = expose_modal_context(state)
+    state = expose_owner_monitor(state)
     {:ok, state, {:continue, :boot}}
   end
 
@@ -69,11 +85,17 @@ defmodule EPlatform.DialogSession do
   def handle_continue(:boot, state) do
     try do
       {:ok, lua_state} = LuaLogic.compile_file(state.lua_file)
+      {encoded_open_opts, lua_state} = Lua.encode!(lua_state, state.open_opts)
 
       lua_state =
         if state.ui_file in [nil, ""] do
           {:ok, _res, lua_state} =
-            Lua.call_function(lua_state, :init, [state.application_id, state.form_id])
+            Lua.call_function(lua_state, :init, [
+              state.application_id,
+              state.form_id,
+              nil,
+              encoded_open_opts
+            ])
 
           lua_state
         else
@@ -81,7 +103,8 @@ defmodule EPlatform.DialogSession do
             Lua.call_function(lua_state, :init, [
               state.application_id,
               state.form_id,
-              state.ui_file
+              state.ui_file,
+              encoded_open_opts
             ])
 
           lua_state
@@ -169,6 +192,13 @@ defmodule EPlatform.DialogSession do
       "form_id" => state.form_id
     })
 
+    {:stop, :normal, state}
+  end
+
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, state)
+      when ref == state.owner_monitor do
+    # The session that opened us via open_lua is gone (its channel closed):
+    # shut this child down as well, cascading to any grandchildren.
     {:stop, :normal, state}
   end
 

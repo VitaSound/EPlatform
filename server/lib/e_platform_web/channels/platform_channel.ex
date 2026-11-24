@@ -27,7 +27,12 @@ defmodule EPlatformWeb.PlatformChannel do
     application_id = socket.assigns.application_id
     lua_file = params["lua_file"] || ""
     ui_file = params["ui_file"] || ""
-    opts = %{modal: params["modal"] == true, mdi: params["mdi"] != false}
+
+    opts = %{
+      modal: params["modal"] == true,
+      mdi: params["mdi"] != false,
+      open_opts: params["open_opts"] || %{}
+    }
 
     case DialogManager.start_dialog(application_id, lua_file, ui_file, opts) do
       {:ok, form_id} ->
