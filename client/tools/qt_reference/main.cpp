@@ -1,6 +1,8 @@
 #include <QImage>
 #include <QLayout>
 #include <QPainter>
+#include <QScrollBar>
+#include <QAbstractScrollArea>
 #include <QApplication>
 #include <QFile>
 #include <QFont>
@@ -9,6 +11,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QStyleFactory>
+#include <QStyleOptionSlider>
 #include <QUiLoader>
 #include <QWidget>
 
@@ -53,6 +56,62 @@ static void dumpLayout(QLayout *layout, QJsonArray &array)
             object["layout"] = QString::fromLatin1(child->metaObject()->className());
         }
         array.append(object);
+    }
+}
+
+static QJsonObject rectObject(const QRect &rect)
+{
+    return QJsonObject{{"x", rect.x()}, {"y", rect.y()},
+                       {"w", rect.width()}, {"h", rect.height()}};
+}
+
+static QJsonObject dumpScrollBar(QScrollBar *bar, QWidget *root)
+{
+    const QPoint pos = bar->mapTo(root, QPoint(0, 0));
+    QStyleOptionSlider option;
+    option.initFrom(bar);
+    option.orientation = bar->orientation();
+    option.minimum = bar->minimum();
+    option.maximum = bar->maximum();
+    option.sliderPosition = bar->sliderPosition();
+    option.sliderValue = bar->value();
+    option.pageStep = bar->pageStep();
+    option.singleStep = bar->singleStep();
+    option.upsideDown = false;
+    auto sub = [&](QStyle::SubControl control) {
+        const QRect rect = bar->style()->subControlRect(
+            QStyle::CC_ScrollBar, &option, control, bar);
+        return rectObject(rect);
+    };
+    return QJsonObject{
+        {"rect", rectObject(QRect(pos, bar->size()))},
+        {"visible", bar->isVisible()},
+        {"min", bar->minimum()},
+        {"max", bar->maximum()},
+        {"value", bar->value()},
+        {"page", bar->pageStep()},
+        {"single", bar->singleStep()},
+        {"slider", sub(QStyle::SC_ScrollBarSlider)},
+        {"sub_line", sub(QStyle::SC_ScrollBarSubLine)},
+        {"add_line", sub(QStyle::SC_ScrollBarAddLine)},
+    };
+}
+
+static void collectScrollAreas(QWidget *widget, QWidget *root, QJsonArray &array)
+{
+    if (auto *area = qobject_cast<QAbstractScrollArea *>(widget)) {
+        const QPoint viewportPos = area->viewport()->mapTo(root, QPoint(0, 0));
+        QJsonObject object;
+        object["name"] = area->objectName();
+        object["class"] = QString::fromLatin1(area->metaObject()->className());
+        object["viewport"] = rectObject(QRect(viewportPos, area->viewport()->size()));
+        object["vbar"] = dumpScrollBar(area->verticalScrollBar(), root);
+        object["hbar"] = dumpScrollBar(area->horizontalScrollBar(), root);
+        array.append(object);
+    }
+    const auto children = widget->findChildren<QWidget *>(QString(), Qt::FindDirectChildrenOnly);
+    for (QWidget *child : children) {
+        collectScrollAreas(child, root, array);
     }
 }
 
@@ -124,6 +183,9 @@ int main(int argc, char **argv)
     QJsonArray widgets;
     collect(root, root, widgets);
     output["widgets"] = widgets;
+    QJsonArray scrollAreas;
+    collectScrollAreas(root, root, scrollAreas);
+    output["scroll_areas"] = scrollAreas;
     if (QLayout *layout = root->layout()) {
         QJsonArray items;
         dumpLayout(layout, items);

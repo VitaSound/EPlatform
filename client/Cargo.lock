@@ -88,7 +88,7 @@ dependencies = [
  "glyphon",
  "js-sys",
  "pollster",
- "qt",
+ "rqt",
  "serde_json",
  "wasm-bindgen",
  "wasm-bindgen-futures",
@@ -588,7 +588,6 @@ name = "form-xml"
 version = "0.1.0"
 dependencies = [
  "roxmltree 0.21.2",
- "serde",
 ]
 
 [[package]]
@@ -1568,16 +1567,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d595e54a326bc53c1c197b32d295e14b169e3cfeaa8dc82b529f947fba6bcf5"
 
 [[package]]
-name = "qt"
-version = "0.1.0"
-dependencies = [
- "cosmic-text",
- "form-xml",
- "png",
- "serde_json",
-]
-
-[[package]]
 name = "quick-xml"
 version = "0.41.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1705,6 +1694,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9da7f59328b09405b181fee1018925fad50f157afb43c0c0f5c522c256dd5907"
 dependencies = [
  "memchr",
+]
+
+[[package]]
+name = "rqt"
+version = "0.1.0"
+dependencies = [
+ "cosmic-text",
+ "form-xml",
+ "png",
+ "serde_json",
 ]
 
 [[package]]
@@ -2163,25 +2162,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2df906b07856748fa3f6e0ad0cbaa047052d4a7dd609e231c4f72cee8c36f31"
 dependencies = [
  "core_maths",
-]
-
-[[package]]
-name = "ui-core"
-version = "0.1.0"
-dependencies = [
- "form-xml",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "ui-render"
-version = "0.1.0"
-dependencies = [
- "bytemuck",
- "glyphon",
- "ui-core",
- "wgpu",
 ]
 
 [[package]]

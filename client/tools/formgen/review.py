@@ -2,6 +2,7 @@
 import html
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -15,7 +16,7 @@ COMMENTS = REVIEW / "comments.md"
 MANIFEST = REVIEW / "manifest.json"
 QT_TOOL = ROOT / "tools" / "qt_reference"
 QT_BIN = QT_TOOL / "qt_reference"
-QT_RENDER = ROOT / "target" / "debug" / "qt_render"
+RQT_RENDER = ROOT / "target" / "debug" / "rqt_render"
 ICONS = REVIEW / "icons"
 
 
@@ -33,6 +34,10 @@ def prop_bool(name, value):
 
 def prop_int(name, value):
     return f'<property name="{name}"><number>{value}</number></property>'
+
+
+def prop_enum(name, value):
+    return f'<property name="{name}"><enum>{value}</enum></property>'
 
 
 def widget(cls, name, props="", layout=""):
@@ -114,6 +119,15 @@ def tree_widget(name):
 
 def table(name, rows, cols):
     return widget("QTableWidget", name, prop_int("rowCount", rows) + prop_int("columnCount", cols))
+
+
+def table_with_policy(name, rows, cols, vertical=None, horizontal=None):
+    props = prop_int("rowCount", rows) + prop_int("columnCount", cols)
+    if vertical:
+        props += prop_enum("verticalScrollBarPolicy", vertical)
+    if horizontal:
+        props += prop_enum("horizontalScrollBarPolicy", horizontal)
+    return widget("QTableWidget", name, props)
 
 
 def layout(cls, name, items, spacing=6, margins=11):
@@ -573,7 +587,75 @@ QTableWidget { background-color: #ffffff; border: 2px solid #3f51b5; }
         description="Fusion gradients, checked, disabled and icon buttons",
     )
 
-    assert len(cases) >= 50, len(cases)
+    scroll_cases = [
+        ("vertical_50x3", 50, 3, 420, 240, "vertical scrollbar, 50 rows"),
+        ("vertical_100x2", 100, 2, 420, 300, "long vertical scrollbar"),
+        ("horizontal_3x10", 3, 10, 420, 240, "horizontal scrollbar, 10 columns"),
+        ("both_30x8", 30, 8, 500, 320, "vertical and horizontal scrollbars"),
+        ("no_scroll_3x2", 3, 2, 500, 300, "content fits, no scrollbars"),
+        ("narrow_5x12", 5, 12, 300, 220, "narrow viewport, horizontal overflow"),
+        ("tall_60x1", 60, 1, 300, 200, "tall table, one column"),
+        ("wide_2x20", 2, 20, 300, 200, "wide table, two rows"),
+        ("both_8x6_small", 8, 6, 320, 200, "both scrollbars in a small table"),
+        ("form_overflow", 40, 5, 460, 300, "table with overflow plus controls"),
+    ]
+    for name, rows, cols, width, height, description in scroll_cases:
+        body = [table("table", rows, cols)]
+        if name == "form_overflow":
+            body = [
+                row("Filter:", "value"),
+                table("table", rows, cols),
+                layout("QHBoxLayout", "buttons", [button("ok", "OK")], 6, 0),
+            ]
+        add(
+            cases,
+            "scroll",
+            name,
+            f"Scroll {name}",
+            body,
+            width=width,
+            height=height,
+            description=description,
+        )
+
+    selection_cases = [
+        ("rows_20", 20, 3, "table with many rows and focus"),
+        ("columns_12", 4, 12, "table with many columns"),
+        ("both_25x9", 25, 9, "large table with both scrollbars"),
+        ("empty_0x3", 0, 3, "empty table baseline"),
+    ]
+    for name, rows, cols, description in selection_cases:
+        add(
+            cases,
+            "selection",
+            name,
+            f"Selection {name}",
+            [table("table", rows, cols)],
+            width=460,
+            height=280,
+            description=description,
+        )
+
+    policy_cases = [
+        ("policy_off_both", 50, 8, "Qt::ScrollBarAlwaysOff", "Qt::ScrollBarAlwaysOff"),
+        ("policy_off_vertical", 50, 3, "Qt::ScrollBarAlwaysOff", "Qt::ScrollBarAlwaysOn"),
+        ("policy_off_horizontal", 30, 10, "Qt::ScrollBarAlwaysOn", "Qt::ScrollBarAlwaysOff"),
+        ("policy_on_small", 2, 2, "Qt::ScrollBarAlwaysOn", "Qt::ScrollBarAlwaysOn"),
+        ("policy_as_needed", 30, 8, "Qt::ScrollBarAsNeeded", "Qt::ScrollBarAsNeeded"),
+    ]
+    for name, rows, cols, vertical, horizontal in policy_cases:
+        add(
+            cases,
+            "scroll",
+            name,
+            f"Scroll {name}",
+            [table_with_policy("table", rows, cols, vertical, horizontal)],
+            width=460,
+            height=260,
+            description=f"scrollbar policy {vertical} / {horizontal}",
+        )
+
+    assert len(cases) >= 70, len(cases)
     return cases
 
 
@@ -607,7 +689,7 @@ def run(cmd, cwd=None, env=None):
 
 
 def build_tools():
-    run(["cargo", "build", "-p", "qt", "--bin", "qt_render"], cwd=ROOT)
+    run(["cargo", "build", "-p", "rqt", "--bin", "rqt_render"], cwd=ROOT)
     if not QT_BIN.exists():
         run(["qmake6", "qt_reference.pro"], cwd=QT_TOOL)
         run(["make", "-j4"], cwd=QT_TOOL)
@@ -624,7 +706,7 @@ def render(cases):
     for case in cases:
         path = ROOT / case["path"]
         slug = case["id"].replace("/", "__")
-        run([str(QT_RENDER), str(path), str(RUST_PNG / f"{slug}.png")], cwd=ROOT)
+        run([str(RQT_RENDER), str(path), str(RUST_PNG / f"{slug}.png")], cwd=ROOT)
         run(
             [str(QT_BIN), str(path), str(QT_PNG / f"{slug}.png")],
             cwd=ROOT,
@@ -708,13 +790,19 @@ def write_index(cases, metrics):
                 f"<td><a href=\"forms/{esc(case['path'].split('forms/',1)[-1])}\">.ui</a></td>"
                 "</tr>"
             )
+        anchor = esc(category)
         sections.append(
-            f"<h2>{esc(category)} ({len(items)})</h2>"
+            f"<h2 id=\"{anchor}\">{esc(category)} ({len(items)})</h2>"
             "<table><thead><tr><th>Form</th><th>Qt6</th><th>Rust</th><th>diff</th><th></th></tr></thead>"
             f"<tbody>{''.join(rows)}</tbody></table>"
         )
+    nav = " · ".join(
+        f'<a href="#{esc(category)}">{esc(category)} ({len(items)})</a>'
+        for category, items in by_category.items()
+    )
     document = f"""<!doctype html>
 <html lang="ru"><head><meta charset="utf-8"><title>EPlatform Qt review</title>
+<meta http-equiv="cache-control" content="no-cache">
 <style>
 body{{font-family:system-ui,sans-serif;margin:24px;background:#f4f5f7;color:#1d2129}}
 h1{{margin-top:0}} h2{{margin-top:36px}}
@@ -723,10 +811,13 @@ th,td{{border:1px solid #d8dde6;padding:8px;vertical-align:top}}
 td img{{max-width:360px;display:block;border:1px solid #d8dde6}}
 small{{color:#5b6573}} code{{font-size:12px}}
 .note{{background:#fff8d8;border:1px solid #e4d38a;padding:12px;border-radius:6px}}
+nav{{background:white;border:1px solid #d8dde6;padding:10px 12px;border-radius:6px;margin:16px 0}}
 </style></head><body>
 <h1>EPlatform Qt review</h1>
-<p class="note">Комментарии: <a href="comments.md">review/comments.md</a>. ID формы стабилен между прогонами.</p>
+<p class="note">Комментарии: <a href="comments.md">review/comments.md</a>. ID формы стабилен между прогонами.
+Категории <code>scroll</code> и <code>selection</code> — в конце страницы (быстрый переход в навигации ниже).</p>
 <p>Форм: {len(cases)}. Diff: mean по каналам 0–255.</p>
+<nav>{nav}</nav>
 {''.join(sections)}
 </body></html>
 """
@@ -739,6 +830,8 @@ def main():
         case["name"] = f"{index:02d}_{case['name']}"
         case["id"] = f"{case['category']}/{case['name']}"
         case["path"] = f"review/forms/{case['category']}/{case['name']}.ui"
+    if FORMS.exists():
+        shutil.rmtree(FORMS)
     FORMS.mkdir(parents=True, exist_ok=True)
     for case in cases:
         path = ROOT / case["path"]

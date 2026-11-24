@@ -397,5 +397,138 @@
     "title": "Button states",
     "description": "Fusion gradients, checked, disabled and icon buttons",
     "path": "review/forms/basic/56_button_states.ui"
+  },
+  {
+    "id": "scroll/57_vertical_50x3",
+    "category": "scroll",
+    "title": "Scroll vertical_50x3",
+    "description": "vertical scrollbar, 50 rows",
+    "path": "review/forms/scroll/57_vertical_50x3.ui"
+  },
+  {
+    "id": "scroll/58_vertical_100x2",
+    "category": "scroll",
+    "title": "Scroll vertical_100x2",
+    "description": "long vertical scrollbar",
+    "path": "review/forms/scroll/58_vertical_100x2.ui"
+  },
+  {
+    "id": "scroll/59_horizontal_3x10",
+    "category": "scroll",
+    "title": "Scroll horizontal_3x10",
+    "description": "horizontal scrollbar, 10 columns",
+    "path": "review/forms/scroll/59_horizontal_3x10.ui"
+  },
+  {
+    "id": "scroll/60_both_30x8",
+    "category": "scroll",
+    "title": "Scroll both_30x8",
+    "description": "vertical and horizontal scrollbars",
+    "path": "review/forms/scroll/60_both_30x8.ui"
+  },
+  {
+    "id": "scroll/61_no_scroll_3x2",
+    "category": "scroll",
+    "title": "Scroll no_scroll_3x2",
+    "description": "content fits, no scrollbars",
+    "path": "review/forms/scroll/61_no_scroll_3x2.ui"
+  },
+  {
+    "id": "scroll/62_narrow_5x12",
+    "category": "scroll",
+    "title": "Scroll narrow_5x12",
+    "description": "narrow viewport, horizontal overflow",
+    "path": "review/forms/scroll/62_narrow_5x12.ui"
+  },
+  {
+    "id": "scroll/63_tall_60x1",
+    "category": "scroll",
+    "title": "Scroll tall_60x1",
+    "description": "tall table, one column",
+    "path": "review/forms/scroll/63_tall_60x1.ui"
+  },
+  {
+    "id": "scroll/64_wide_2x20",
+    "category": "scroll",
+    "title": "Scroll wide_2x20",
+    "description": "wide table, two rows",
+    "path": "review/forms/scroll/64_wide_2x20.ui"
+  },
+  {
+    "id": "scroll/65_both_8x6_small",
+    "category": "scroll",
+    "title": "Scroll both_8x6_small",
+    "description": "both scrollbars in a small table",
+    "path": "review/forms/scroll/65_both_8x6_small.ui"
+  },
+  {
+    "id": "scroll/66_form_overflow",
+    "category": "scroll",
+    "title": "Scroll form_overflow",
+    "description": "table with overflow plus controls",
+    "path": "review/forms/scroll/66_form_overflow.ui"
+  },
+  {
+    "id": "selection/67_rows_20",
+    "category": "selection",
+    "title": "Selection rows_20",
+    "description": "table with many rows and focus",
+    "path": "review/forms/selection/67_rows_20.ui"
+  },
+  {
+    "id": "selection/68_columns_12",
+    "category": "selection",
+    "title": "Selection columns_12",
+    "description": "table with many columns",
+    "path": "review/forms/selection/68_columns_12.ui"
+  },
+  {
+    "id": "selection/69_both_25x9",
+    "category": "selection",
+    "title": "Selection both_25x9",
+    "description": "large table with both scrollbars",
+    "path": "review/forms/selection/69_both_25x9.ui"
+  },
+  {
+    "id": "selection/70_empty_0x3",
+    "category": "selection",
+    "title": "Selection empty_0x3",
+    "description": "empty table baseline",
+    "path": "review/forms/selection/70_empty_0x3.ui"
+  },
+  {
+    "id": "scroll/71_policy_off_both",
+    "category": "scroll",
+    "title": "Scroll policy_off_both",
+    "description": "scrollbar policy Qt::ScrollBarAlwaysOff / Qt::ScrollBarAlwaysOff",
+    "path": "review/forms/scroll/71_policy_off_both.ui"
+  },
+  {
+    "id": "scroll/72_policy_off_vertical",
+    "category": "scroll",
+    "title": "Scroll policy_off_vertical",
+    "description": "scrollbar policy Qt::ScrollBarAlwaysOff / Qt::ScrollBarAlwaysOn",
+    "path": "review/forms/scroll/72_policy_off_vertical.ui"
+  },
+  {
+    "id": "scroll/73_policy_off_horizontal",
+    "category": "scroll",
+    "title": "Scroll policy_off_horizontal",
+    "description": "scrollbar policy Qt::ScrollBarAlwaysOn / Qt::ScrollBarAlwaysOff",
+    "path": "review/forms/scroll/73_policy_off_horizontal.ui"
+  },
+  {
+    "id": "scroll/74_policy_on_small",
+    "category": "scroll",
+    "title": "Scroll policy_on_small",
+    "description": "scrollbar policy Qt::ScrollBarAlwaysOn / Qt::ScrollBarAlwaysOn",
+    "path": "review/forms/scroll/74_policy_on_small.ui"
+  },
+  {
+    "id": "scroll/75_policy_as_needed",
+    "category": "scroll",
+    "title": "Scroll policy_as_needed",
+    "description": "scrollbar policy Qt::ScrollBarAsNeeded / Qt::ScrollBarAsNeeded",
+    "path": "review/forms/scroll/75_policy_as_needed.ui"
   }
 ]

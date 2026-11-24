@@ -2,6 +2,41 @@
 
 ## 2026-11-24
 
+### Переименование крейта qt → rqt
+
+- Каталог `client/crates/qt` переименован в `client/crates/rqt` (`git mv`),
+  пакет `qt` — в `rqt`, workspace member и зависимость `app` обновлены.
+- Импорты `qt::...` заменены на `rqt::...`; binary
+  `qt_render` переименован в `rqt_render`.
+- `tools/formgen/review.py` и `QT_PORT_PLAN.md` обновлены под `rqt`;
+  `Cargo.lock` пересобран Cargo. Настоящий Qt6 (`tools/qt_reference`,
+  `review/qt`, `qt6_*`) не затронут.
+
+### Прокрутка, item-view и события (итерация 6)
+
+- Добавлен `qt::scroll`: `QScrollBar` (range/value/page/single, policy, arrows,
+  track, slider), `QScrollBarSubControl`, `scroll_area_layout` и Fusion-отрисовка
+  `paint_scroll_bar`. Extent 14 px и минимальный ползунок 26 px сверены с Qt 6.2.4.
+- `QTableWidget` получил горизонтальную прокрутку, `vbar`/`hbar`, закреплённый
+  row-header, Qt-семантику range/page в строках и колонках, `reveal_current_column`.
+- Добавлены `verticalScrollBarPolicy`/`horizontalScrollBarPolicy`
+  (`AsNeeded`/`AlwaysOff`/`AlwaysOn`) для table/list/tree: загрузка из `.ui`,
+  `setProperty`/`getProperty`, учёт в layout, отрисовке и hit-test.
+- Добавлен `qt::item_view`: модели `QListWidget`/`QTreeWidget` с current/selection,
+  вертикальной/горизонтальной прокруткой и Qt-единицами scrollbar-ов.
+- `QWidgetTree`: scrollbar hit-test, drag ползунка, клики по track/стрелкам,
+  колесо и Shift+wheel, клавиатура (стрелки/PageUp/PageDown/Home/End),
+  scrollbar-клик не порождает item-event.
+- app шлёт `CurrentCellChanged`/`CurrentRowChanged`/`CurrentItemChanged` и
+  читает `currentRow`/`currentIndex`/`currentText` через `getProperty`.
+- Golden-стенд: `scroll_table.ui`, Qt6 JSON/PNG; viewport/vbar/hbar и
+  range/page/value совпадают в пределах 1 px, PNG mean diff ≈4.9.
+- Ревью-пак расширен до 76 форм (категории `scroll` с policy-кейсами и `selection`).
+- Удалены неиспользуемые crate-ы `ui-core` и `ui-render`; убрана лишняя
+  зависимость `serde` из `form-xml`.
+- Проверки: `cargo test --workspace` — 73 passed, `mix test` — 7 passed,
+  wasm-check `app`/`qt` проходит.
+
 ### Qt-порт: план и фундамент
 
 - Добавлен `client/QT_PORT_PLAN.md` с этапами перехода на Qt-совместимый Rust-рантайм.

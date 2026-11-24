@@ -6,9 +6,9 @@
 mod gfx;
 mod socket;
 
-use qt::item_model::{QTABLE_HEADER_H, QTABLE_ROW_H};
-use qt::mdi::{QMdiArea, QMdiSubWindow, QMdiSubWindowHit, QMDI_BUTTON, QMDI_TITLE_H};
-use qt::widgets::{QWidgetId, QWidgetTree};
+use rqt::item_model::{QTABLE_HEADER_H, QTABLE_ROW_H};
+use rqt::mdi::{QMdiArea, QMdiSubWindow, QMdiSubWindowHit, QMDI_BUTTON, QMDI_TITLE_H};
+use rqt::widgets::{QWidgetId, QWidgetTree};
 use socket::{PhoenixSocket, SocketEvent};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -202,6 +202,7 @@ struct App {
     ctrl: bool,
     caret_epoch: f64,
     table_press: Option<TablePress>,
+    scroll_click: bool,
 }
 
 impl App {
@@ -221,7 +222,7 @@ impl App {
             table_focus: None,
             editing: None,
             forms: HashMap::new(),
-            mdi: QMdiArea::new(qt::gui::QRectF::new(0.0, 0.0, 1280.0, 800.0)),
+            mdi: QMdiArea::new(rqt::gui::QRectF::new(0.0, 0.0, 1280.0, 800.0)),
             dragging: None,
             column_drag: None,
             line_select: None,
@@ -230,6 +231,7 @@ impl App {
             ctrl: false,
             caret_epoch: now_ms(),
             table_press: None,
+            scroll_click: false,
         }
     }
 
@@ -321,23 +323,27 @@ impl App {
                 };
                 if let Some(form) = self.forms.get_mut(form_id) {
                     if let Some(widget) = form.tree.find_widget(object_name) {
-                        let is_table = form
+                        let class = form
                             .tree
                             .widget(widget)
-                            .is_some_and(|widget| widget.class_name == "QTableWidget");
+                            .map(|widget| widget.class_name.clone())
+                            .unwrap_or_default();
                         form.tree.set_property(
                             widget,
                             property,
-                            qt::core::QVariant::from_prop(&value),
+                            rqt::core::QVariant::from_prop(&value),
                         );
                         form.tree.relayout(form.root);
-                        if is_table {
-                            if let Some(rect) = form.tree.widget(widget).map(|w| w.geometry) {
+                        if class == "QTableWidget" {
+                            if let Some(node) = form.tree.widget(widget) {
+                                let rect = node.geometry;
+                                let font = node.font.clone();
                                 if let Some(table) = form.tree.table_mut(widget) {
-                                    table.clamp_scroll(rect.height);
+                                    let viewport = table.scroll_area(rect, &font).viewport;
                                     if property == "currentRow" {
-                                        table.reveal_current_row(rect.height);
+                                        table.reveal_current_row(viewport.height);
                                     }
+                                    table.sync_scrollbars(rect, &font);
                                 }
                             }
                             Self::log(format!(
@@ -345,6 +351,35 @@ impl App {
                                 prop_brief(&value)
                             ));
                         } else {
+                            if class == "QListWidget" {
+                                if let Some(node) = form.tree.widget(widget) {
+                                    let rect = node.geometry;
+                                    if let Some(list) = form.tree.list_mut(widget) {
+                                        let layout = list.scroll_area(rect);
+                                        if let Some(current) = list.current {
+                                            list.ensure_visible(current, layout.viewport.height);
+                                        }
+                                        list.sync_bars(layout.viewport.size());
+                                    }
+                                }
+                            } else if class == "QTreeWidget" {
+                                if let Some(node) = form.tree.widget(widget) {
+                                    let rect = node.geometry;
+                                    if let Some(tree) = form.tree.tree_mut(widget) {
+                                        let layout = tree.scroll_area(rect);
+                                        let body_height = (layout.viewport.height
+                                            - rqt::item_view::QVIEW_HEADER_H)
+                                            .max(0.0);
+                                        if let Some(current) = tree.current {
+                                            tree.ensure_visible(current, body_height);
+                                        }
+                                        tree.sync_bars(rqt::gui::QSizeF::new(
+                                            layout.viewport.width,
+                                            body_height,
+                                        ));
+                                    }
+                                }
+                            }
                             Self::log(format!(
                                 "apply {object_name}.{property}={}",
                                 prop_brief(&value)
@@ -361,7 +396,7 @@ impl App {
                 let mut title = None;
                 if let Some(form) = self.forms.get_mut(form_id) {
                     if let form_xml::PropValue::Rect { x, y, w, h } = &value {
-                        let rect = qt::gui::QRectF::new(*x as f32, *y as f32, *w as f32, *h as f32);
+                        let rect = rqt::gui::QRectF::new(*x as f32, *y as f32, *w as f32, *h as f32);
                         if let Some(index) = self.mdi.index_of(|payload| payload == form_id) {
                             self.mdi.set_content_geometry(index, rect);
                         }
@@ -370,7 +405,7 @@ impl App {
                         form.tree.set_property(
                             form.root,
                             property,
-                            qt::core::QVariant::from_prop(&value),
+                            rqt::core::QVariant::from_prop(&value),
                         );
                         form.tree.relayout(form.root);
                     }
@@ -506,7 +541,7 @@ impl App {
             .to_string();
         let xml = payload.get("ui_xml").and_then(|v| v.as_str()).unwrap_or("");
 
-        let (mut tree, root) = match qt::widgets::load_ui(xml) {
+        let (mut tree, root) = match rqt::widgets::load_ui(xml) {
             Ok(form) => form,
             Err(err) => {
                 Self::log(format!("createForm parse error: {err}"));
@@ -525,7 +560,7 @@ impl App {
         let index = self.mdi.add_subwindow(
             title,
             form_id.clone(),
-            qt::gui::QSizeF::new(area.width, area.height),
+            rqt::gui::QSizeF::new(area.width, area.height),
         );
         let content = self
             .mdi
@@ -563,14 +598,14 @@ impl App {
     fn collect_paint(&self) -> (Vec<gfx::ColoredRect>, Vec<gfx::ColoredText>) {
         let mut rects = Vec::new();
         let mut texts = Vec::new();
-        let style = qt::style::QFusionStyle::default();
+        let style = rqt::style::QFusionStyle::default();
         let active = self.mdi.active_index();
         for (index, subwindow) in self.mdi.subwindows().iter().enumerate() {
             let Some(form) = self.forms.get(&subwindow.payload) else {
                 continue;
             };
-            let mut painter = qt::gui::QPainter::new();
-            qt::paint::paint_widget_tree(&form.tree, form.root, &style, &mut painter);
+            let mut painter = rqt::gui::QPainter::new();
+            rqt::paint::paint_widget_tree(&form.tree, form.root, &style, &mut painter);
             append_paint_commands(painter.commands(), &mut rects, &mut texts);
             self.push_subwindow_chrome(subwindow, active == Some(index), &mut rects, &mut texts);
         }
@@ -705,7 +740,7 @@ impl App {
     }
 
     fn mdi_hit(&self, point: (f32, f32)) -> Option<(usize, QMdiSubWindowHit)> {
-        self.mdi.hit_test(qt::gui::QPointF::new(point.0, point.1))
+        self.mdi.hit_test(rqt::gui::QPointF::new(point.0, point.1))
     }
 
     fn activate_form(&mut self, form_id: &str) -> Option<usize> {
@@ -774,79 +809,86 @@ impl App {
                     self.line_select = None;
                     return;
                 };
+                let point = rqt::gui::QPointF::new(self.cursor.0, self.cursor.1);
+                self.scroll_click = self
+                    .forms
+                    .get(&form_id)
+                    .and_then(|form| form.tree.scrollbar_at(form.root, point))
+                    .is_some();
                 self.line_select = (class == "QLineEdit").then(|| LineSelect {
                     form_id: form_id.clone(),
                     name: name.clone(),
                 });
                 if class == "QTableWidget" {
-                    let local = self.forms.get(&form_id).and_then(|form| {
+                    let action = self.forms.get(&form_id).and_then(|form| {
                         let widget = form.tree.find_widget(&name)?;
-                        let rect = form.tree.widget(widget)?.geometry;
-                        Some((self.cursor.0 - rect.x, self.cursor.1 - rect.y))
-                    });
-                    if let Some((local_x, local_y)) = local {
-                        if local_y < QTABLE_HEADER_H {
-                            let resize = self.forms.get(&form_id).and_then(|form| {
-                                let widget = form.tree.find_widget(&name)?;
-                                let row_header_w = table_row_header_width(&form.tree, widget);
-                                form.tree
-                                    .table(widget)?
-                                    .column_resize_handle_at(local_x, row_header_w)
-                            });
-                            if let Some(column) = resize {
-                                self.column_drag = Some(ColumnDrag {
-                                    form_id: form_id.clone(),
-                                    name: name.clone(),
-                                    column,
-                                    last_x: self.cursor.0,
-                                });
-                                return;
-                            }
-                            let sort_column = self.forms.get(&form_id).and_then(|form| {
-                                let widget = form.tree.find_widget(&name)?;
-                                let row_header_w = table_row_header_width(&form.tree, widget);
-                                form.tree
-                                    .table(widget)?
-                                    .model
-                                    .column_at(local_x - row_header_w)
-                            });
-                            if let Some(column) = sort_column {
-                                if let Some(table) = self.table_mut_for(&form_id, &name) {
-                                    table.toggle_sort(column);
-                                }
-                                return;
-                            }
+                        let node = form.tree.widget(widget)?;
+                        let table = form.tree.table(widget)?;
+                        let point = rqt::gui::QPointF::new(self.cursor.0, self.cursor.1);
+                        let viewport = table.scroll_area(node.geometry, &node.font).viewport;
+                        if !viewport.contains(point) {
+                            return None;
                         }
+                        let local_x = self.cursor.0 - viewport.x;
+                        let local_y = self.cursor.1 - viewport.y;
+                        if local_y >= QTABLE_HEADER_H {
+                            return None;
+                        }
+                        let row_header_w = table.row_header_width(&node.font);
+                        if let Some(column) =
+                            table.column_resize_handle_at(local_x - table.horizontal, row_header_w)
+                        {
+                            return Some((true, column));
+                        }
+                        table
+                            .column_at(local_x, row_header_w, viewport.width)
+                            .map(|column| (false, column))
+                    });
+                    if let Some((resize, column)) = action {
+                        if resize {
+                            self.column_drag = Some(ColumnDrag {
+                                form_id: form_id.clone(),
+                                name: name.clone(),
+                                column,
+                                last_x: self.cursor.0,
+                            });
+                        } else if let Some(table) = self.table_mut_for(&form_id, &name) {
+                            table.toggle_sort(column);
+                        }
+                        return;
+                    }
+                    let already_selected = self.forms.get(&form_id).and_then(|form| {
+                        let widget = form.tree.find_widget(&name)?;
+                        let node = form.tree.widget(widget)?;
+                        let table = form.tree.table(widget)?;
+                        let point = rqt::gui::QPointF::new(self.cursor.0, self.cursor.1);
+                        let viewport = table.scroll_area(node.geometry, &node.font).viewport;
+                        if !viewport.contains(point) {
+                            return None;
+                        }
+                        let row_header_w = table.row_header_width(&node.font);
+                        let row = table.row_at(self.cursor.1 - viewport.y)?;
+                        let column = table.column_at(
+                            self.cursor.0 - viewport.x,
+                            row_header_w,
+                            viewport.width,
+                        )?;
+                        Some(table.is_selected(row, column))
+                    });
+                    if let Some(already) = already_selected {
+                        self.table_press = Some(TablePress {
+                            form_id: form_id.clone(),
+                            name: name.clone(),
+                            already_selected: already,
+                        });
                     }
                 }
                 let Some(form) = self.forms.get_mut(&form_id) else {
                     return;
                 };
-                let Some(widget) = form.tree.find_widget(&name) else {
-                    return;
-                };
-                if class == "QTableWidget" {
-                    if let Some(rect) = form.tree.widget(widget).map(|widget| widget.geometry) {
-                        let local = (self.cursor.0 - rect.x, self.cursor.1 - rect.y);
-                        if let Some(table) = form.tree.table(widget) {
-                            let row_header_w = table_row_header_width(&form.tree, widget);
-                            if let (Some(row), Some(column)) = (
-                                table.row_at(local.1),
-                                table.model.column_at(local.0 - row_header_w),
-                            ) {
-                                let already_selected = table.is_selected(row, column);
-                                self.table_press = Some(TablePress {
-                                    form_id: form_id.clone(),
-                                    name: name.clone(),
-                                    already_selected,
-                                });
-                            }
-                        }
-                    }
-                }
                 form.tree.mouse_press_with_modifiers(
                     form.root,
-                    qt::gui::QPointF::new(self.cursor.0, self.cursor.1),
+                    rqt::gui::QPointF::new(self.cursor.0, self.cursor.1),
                     self.shift,
                 );
             }
@@ -888,7 +930,7 @@ impl App {
                 let width = (self.cursor.0 - frame.x).max(80.0);
                 let height = (self.cursor.1 - (frame.y + QMDI_TITLE_H)).max(64.0);
                 self.mdi
-                    .resize_content(index, qt::gui::QSizeF::new(width, height));
+                    .resize_content(index, rqt::gui::QSizeF::new(width, height));
                 self.sync_form_geometry(&form_id);
             }
         }
@@ -912,7 +954,7 @@ impl App {
 
     /// Topmost leaf widget under the cursor, using the Qt widget tree.
     fn hit_test(&self, point: (f32, f32)) -> Option<(String, String, String)> {
-        let point = qt::gui::QPointF::new(point.0, point.1);
+        let point = rqt::gui::QPointF::new(point.0, point.1);
         for subwindow in self.mdi.subwindows().iter().rev() {
             if !subwindow.content_rect().contains(point) {
                 continue;
@@ -1030,7 +1072,7 @@ impl App {
             };
             let event = form.tree.mouse_release(
                 form.root,
-                qt::gui::QPointF::new(self.cursor.0, self.cursor.1),
+                rqt::gui::QPointF::new(self.cursor.0, self.cursor.1),
             );
             let protocol_event = event
                 .map(|event| event.protocol_event())
@@ -1054,7 +1096,10 @@ impl App {
             (protocol_event, start_cell_edit)
         };
 
-        self.table_focus = if class == "QTableWidget" {
+        self.table_focus = if matches!(
+            class.as_str(),
+            "QTableWidget" | "QListWidget" | "QTreeWidget"
+        ) {
             Some((form_id.clone(), widget_name.clone()))
         } else {
             None
@@ -1063,6 +1108,46 @@ impl App {
         if let Some((row, column)) = start_cell_edit {
             self.start_edit(&form_id, &widget_name, row, column);
         }
+
+        let selection_event = self.forms.get(&form_id).and_then(|form| {
+            let widget = form.tree.find_widget(&widget_name)?;
+            match class.as_str() {
+                "QTableWidget" => {
+                    let table = form.tree.table(widget)?;
+                    let (row, column) = table.current()?;
+                    Some((
+                        "CurrentCellChanged",
+                        serde_json::json!({
+                            "row": row + 1,
+                            "col": column + 1,
+                        }),
+                    ))
+                }
+                "QListWidget" => {
+                    let list = form.tree.list(widget)?;
+                    let row = list.current?;
+                    Some((
+                        "CurrentRowChanged",
+                        serde_json::json!({
+                            "row": row,
+                            "value": list.items.get(row).cloned().unwrap_or_default(),
+                        }),
+                    ))
+                }
+                "QTreeWidget" => {
+                    let tree = form.tree.tree(widget)?;
+                    let row = tree.current?;
+                    Some((
+                        "CurrentItemChanged",
+                        serde_json::json!({
+                            "row": row,
+                            "value": tree.rows.get(row).map(|row| row.text.clone()).unwrap_or_default(),
+                        }),
+                    ))
+                }
+                _ => None,
+            }
+        });
 
         let Some(socket) = &self.socket else {
             return;
@@ -1076,6 +1161,21 @@ impl App {
                 "event": protocol_event,
             }),
         );
+        if let Some((event, payload)) = selection_event {
+            socket.send(
+                "send_event",
+                serde_json::json!({
+                    "command": "formEvent",
+                    "form_id": form_id,
+                    "widget_name": widget_name,
+                    "event": event,
+                    "row": payload.get("row"),
+                    "col": payload.get("col"),
+                    "value": payload.get("value"),
+                }),
+            );
+            Self::log(format!("event {event} -> {widget_name}"));
+        }
         Self::log(format!("event {protocol_event} -> {widget_name}"));
     }
 
@@ -1083,7 +1183,7 @@ impl App {
         &mut self,
         form_id: &str,
         name: &str,
-    ) -> Option<&mut qt::item_model::QTableWidget> {
+    ) -> Option<&mut rqt::item_model::QTableWidget> {
         let form = self.forms.get_mut(form_id)?;
         let widget = form.tree.find_widget(name)?;
         form.tree.table_mut(widget)
@@ -1171,7 +1271,15 @@ impl App {
                     table.editor_backspace();
                 }
             }
-            KeyEdit::Left | KeyEdit::Right | KeyEdit::Home | KeyEdit::End | KeyEdit::Delete => {}
+            KeyEdit::Left
+            | KeyEdit::Right
+            | KeyEdit::Up
+            | KeyEdit::Down
+            | KeyEdit::PageUp
+            | KeyEdit::PageDown
+            | KeyEdit::Home
+            | KeyEdit::End
+            | KeyEdit::Delete => {}
             KeyEdit::Commit => self.commit_edit(),
             KeyEdit::ClearFocus => {
                 if let Some(edit) = self.editing.take() {
@@ -1220,14 +1328,16 @@ impl App {
         ));
     }
 
-    /// Mouse wheel over a table scrolls its rows (clamped to content).
-    /// winit's web backend negates DOM wheel deltas, so a positive
-    /// winit delta means "scroll up" → content offset decreases.
-    fn scroll_table(&mut self, winit_delta: f32) {
+    /// Mouse wheel over an item view scrolls it. winit's web backend
+    /// negates DOM wheel deltas, so a positive delta means "scroll up".
+    fn scroll_view(&mut self, dx: f32, dy: f32) {
         let Some((form_id, name, class)) = self.hit_test(self.cursor) else {
             return;
         };
-        if class != "QTableWidget" {
+        if !matches!(
+            class.as_str(),
+            "QTableWidget" | "QListWidget" | "QTreeWidget"
+        ) {
             return;
         }
         let Some(form) = self.forms.get_mut(&form_id) else {
@@ -1236,13 +1346,61 @@ impl App {
         let Some(widget) = form.tree.find_widget(&name) else {
             return;
         };
-        let Some(rect) = form.tree.widget(widget).map(|widget| widget.geometry) else {
+        let Some(node) = form.tree.widget(widget) else {
             return;
         };
-        let Some(table) = form.tree.table_mut(widget) else {
+        let rect = node.geometry;
+        let font = node.font.clone();
+        let shift = self.shift;
+        if class == "QTableWidget" {
+            let Some(table) = form.tree.table_mut(widget) else {
+                return;
+            };
+            let viewport = table.scroll_area(rect, &font).viewport;
+            let row_header_w = table.row_header_width(&font);
+            if shift {
+                table.scroll_horizontal_by(-dy, viewport.width, row_header_w);
+            } else {
+                table.scroll_by(-dy, viewport.height);
+                if dx != 0.0 {
+                    table.scroll_horizontal_by(-dx, viewport.width, row_header_w);
+                }
+            }
+            table.sync_scrollbars(rect, &font);
+            return;
+        }
+        if class == "QListWidget" {
+            let Some(list) = form.tree.list_mut(widget) else {
+                return;
+            };
+            let layout = list.scroll_area(rect);
+            let viewport = layout.viewport;
+            if shift {
+                list.scroll_horizontal_by(-dy, viewport.width);
+            } else {
+                list.scroll_by(-dy, viewport.height);
+                if dx != 0.0 {
+                    list.scroll_horizontal_by(-dx, viewport.width);
+                }
+            }
+            list.sync_bars(rqt::gui::QSizeF::new(viewport.width, viewport.height));
+            return;
+        }
+        let Some(tree) = form.tree.tree_mut(widget) else {
             return;
         };
-        table.scroll_by(-winit_delta, rect.height);
+        let layout = tree.scroll_area(rect);
+        let viewport = layout.viewport;
+        let body_height = (viewport.height - rqt::item_view::QVIEW_HEADER_H).max(0.0);
+        if shift {
+            tree.scroll_horizontal_by(-dy, viewport.width);
+        } else {
+            tree.scroll_by(-dy, body_height);
+            if dx != 0.0 {
+                tree.scroll_horizontal_by(-dx, viewport.width);
+            }
+        }
+        tree.sync_bars(rqt::gui::QSizeF::new(viewport.width, body_height));
     }
 
     /// Keyboard half of the event loop: an open cell edit first, then
@@ -1275,6 +1433,21 @@ impl App {
             && self.begin_edit_on_selection()
         {
             self.edit_key(action);
+            return;
+        }
+
+        if matches!(
+            action,
+            KeyEdit::Left
+                | KeyEdit::Right
+                | KeyEdit::Up
+                | KeyEdit::Down
+                | KeyEdit::PageUp
+                | KeyEdit::PageDown
+                | KeyEdit::Home
+                | KeyEdit::End
+        ) && self.navigate_view(&action)
+        {
             return;
         }
 
@@ -1361,8 +1534,154 @@ impl App {
                 }
                 self.table_focus = None;
             }
-            KeyEdit::Commit | KeyEdit::Ignore => {}
+            KeyEdit::Up
+            | KeyEdit::Down
+            | KeyEdit::PageUp
+            | KeyEdit::PageDown
+            | KeyEdit::Commit
+            | KeyEdit::Ignore => {}
         }
+    }
+
+    /// Arrow/Page/Home/End navigation for the focused item view.
+    fn navigate_view(&mut self, action: &KeyEdit) -> bool {
+        let Some((form_id, name)) = self.table_focus.clone() else {
+            return false;
+        };
+        let Some(form) = self.forms.get_mut(&form_id) else {
+            return false;
+        };
+        let Some(widget) = form.tree.find_widget(&name) else {
+            return false;
+        };
+        let Some(node) = form.tree.widget(widget) else {
+            return false;
+        };
+        let class = node.class_name.clone();
+        let rect = node.geometry;
+        let font = node.font.clone();
+        match class.as_str() {
+            "QTableWidget" => {
+                let Some(table) = form.tree.table(widget) else {
+                    return false;
+                };
+                let row_count = table.model.row_count();
+                let column_count = table.model.column_count();
+                if row_count == 0 || column_count == 0 {
+                    return true;
+                }
+                let (row, column) = table.current().unwrap_or((0, 0));
+                let viewport = table.scroll_area(rect, &font).viewport;
+                let page_rows = ((viewport.height - QTABLE_HEADER_H) / QTABLE_ROW_H)
+                    .floor()
+                    .max(1.0) as usize;
+                let (row, column) = match action {
+                    KeyEdit::Up => (row.saturating_sub(1), column),
+                    KeyEdit::Down => ((row + 1).min(row_count - 1), column),
+                    KeyEdit::PageUp => (row.saturating_sub(page_rows), column),
+                    KeyEdit::PageDown => ((row + page_rows).min(row_count - 1), column),
+                    KeyEdit::Home => (row, 0),
+                    KeyEdit::End => (row, column_count - 1),
+                    KeyEdit::Left => (row, column.saturating_sub(1)),
+                    KeyEdit::Right => (row, (column + 1).min(column_count - 1)),
+                    _ => (row, column),
+                };
+                let Some(table) = form.tree.table_mut(widget) else {
+                    return false;
+                };
+                table.set_current_cell(row, column);
+                table.select_current();
+                let viewport = table.scroll_area(rect, &font).viewport;
+                table.reveal_current_row(viewport.height);
+                let row_header_w = table.row_header_width(&font);
+                table.reveal_current_column(viewport.width, row_header_w);
+                table.sync_scrollbars(rect, &font);
+                true
+            }
+            "QListWidget" => {
+                let Some(list) = form.tree.list(widget) else {
+                    return false;
+                };
+                if list.row_count() == 0 {
+                    return true;
+                }
+                let layout = list.scroll_area(rect);
+                let viewport = layout.viewport;
+                let page_rows = (viewport.height / rqt::item_view::QVIEW_ROW_H)
+                    .floor()
+                    .max(1.0) as usize;
+                let current = list.current.unwrap_or(0);
+                let row = nav_row(action, current, list.row_count(), page_rows);
+                let Some(list) = form.tree.list_mut(widget) else {
+                    return false;
+                };
+                match action {
+                    KeyEdit::Left | KeyEdit::Right => {
+                        let delta = if matches!(action, KeyEdit::Left) {
+                            -rqt::item_view::QVIEW_ROW_H
+                        } else {
+                            rqt::item_view::QVIEW_ROW_H
+                        };
+                        list.scroll_horizontal_by(delta, viewport.width);
+                        list.hbar.set_value(list.horizontal);
+                    }
+                    _ => {
+                        list.set_current(Some(row));
+                        list.ensure_visible(row, viewport.height);
+                        list.sync_vertical_bar(viewport.height);
+                    }
+                }
+                true
+            }
+            "QTreeWidget" => {
+                let Some(tree) = form.tree.tree(widget) else {
+                    return false;
+                };
+                if tree.row_count() == 0 {
+                    return true;
+                }
+                let layout = tree.scroll_area(rect);
+                let viewport = layout.viewport;
+                let body_height = (viewport.height - rqt::item_view::QVIEW_HEADER_H).max(0.0);
+                let page_rows =
+                    (body_height / rqt::item_view::QVIEW_ROW_H).floor().max(1.0) as usize;
+                let current = tree.current.unwrap_or(0);
+                let row = nav_row(action, current, tree.row_count(), page_rows);
+                let Some(tree) = form.tree.tree_mut(widget) else {
+                    return false;
+                };
+                match action {
+                    KeyEdit::Left | KeyEdit::Right => {
+                        let delta = if matches!(action, KeyEdit::Left) {
+                            -rqt::item_view::QVIEW_ROW_H
+                        } else {
+                            rqt::item_view::QVIEW_ROW_H
+                        };
+                        tree.scroll_horizontal_by(delta, viewport.width);
+                        tree.hbar.set_value(tree.horizontal);
+                    }
+                    _ => {
+                        tree.set_current(Some(row));
+                        tree.ensure_visible(row, body_height);
+                        tree.sync_vertical_bar(body_height);
+                    }
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+}
+
+fn nav_row(action: &KeyEdit, current: usize, count: usize, page: usize) -> usize {
+    match action {
+        KeyEdit::Up => current.saturating_sub(1),
+        KeyEdit::Down => (current + 1).min(count - 1),
+        KeyEdit::PageUp => current.saturating_sub(page),
+        KeyEdit::PageDown => (current + page).min(count - 1),
+        KeyEdit::Home => 0,
+        KeyEdit::End => count - 1,
+        _ => current,
     }
 }
 
@@ -1373,6 +1692,10 @@ enum KeyEdit {
     Backspace,
     Left,
     Right,
+    Up,
+    Down,
+    PageUp,
+    PageDown,
     Home,
     End,
     Delete,
@@ -1391,6 +1714,10 @@ fn key_edit(text: Option<&str>, key: &winit::keyboard::Key) -> KeyEdit {
         Key::Named(NamedKey::Backspace) => KeyEdit::Backspace,
         Key::Named(NamedKey::ArrowLeft) => KeyEdit::Left,
         Key::Named(NamedKey::ArrowRight) => KeyEdit::Right,
+        Key::Named(NamedKey::ArrowUp) => KeyEdit::Up,
+        Key::Named(NamedKey::ArrowDown) => KeyEdit::Down,
+        Key::Named(NamedKey::PageUp) => KeyEdit::PageUp,
+        Key::Named(NamedKey::PageDown) => KeyEdit::PageDown,
         Key::Named(NamedKey::Home) => KeyEdit::Home,
         Key::Named(NamedKey::End) => KeyEdit::End,
         Key::Named(NamedKey::Delete) => KeyEdit::Delete,
@@ -1505,16 +1832,9 @@ fn prop_brief(value: &form_xml::PropValue) -> String {
     }
 }
 
-fn table_row_header_width(tree: &QWidgetTree, widget: QWidgetId) -> f32 {
-    tree.table(widget)
-        .zip(tree.widget(widget))
-        .map(|(table, widget)| table.row_header_width(&widget.font))
-        .unwrap_or(14.0)
-}
-
 fn form_title(tree: &QWidgetTree, root: QWidgetId, fallback: &str) -> String {
     match tree.property(root, "windowTitle") {
-        Some(qt::core::QVariant::String(title)) | Some(qt::core::QVariant::Enum(title))
+        Some(rqt::core::QVariant::String(title)) | Some(rqt::core::QVariant::Enum(title))
             if !title.is_empty() =>
         {
             title.clone()
@@ -1524,18 +1844,18 @@ fn form_title(tree: &QWidgetTree, root: QWidgetId, fallback: &str) -> String {
 }
 
 fn append_paint_commands(
-    commands: &[qt::gui::QPaintCommand],
+    commands: &[rqt::gui::QPaintCommand],
     rects: &mut Vec<gfx::ColoredRect>,
     texts: &mut Vec<gfx::ColoredText>,
 ) {
-    use qt::gui::{QPaintCommand, QRectF};
+    use rqt::gui::{QPaintCommand, QRectF};
 
     let mut clip: Option<QRectF> = None;
     let mut stack: Vec<Option<QRectF>> = Vec::new();
     let push_rect = |rects: &mut Vec<gfx::ColoredRect>,
                      clip: Option<QRectF>,
                      rect: QRectF,
-                     color: qt::gui::QColor| {
+                     color: rqt::gui::QColor| {
         if let Some(rect) = intersect_rect(rect, clip) {
             rects.push(gfx::ColoredRect {
                 x: rect.x,
@@ -1636,7 +1956,7 @@ fn append_paint_commands(
                 let min_y = a.y.min(b.y).min(c.y).floor() as i32;
                 let max_x = a.x.max(b.x).max(c.x).ceil() as i32;
                 let max_y = a.y.max(b.y).max(c.y).ceil() as i32;
-                let edge = |p: qt::gui::QPointF, q: qt::gui::QPointF, x: f32, y: f32| {
+                let edge = |p: rqt::gui::QPointF, q: rqt::gui::QPointF, x: f32, y: f32| {
                     (q.x - p.x) * (y - p.y) - (q.y - p.y) * (x - p.x)
                 };
                 for y in min_y..max_y {
@@ -1682,7 +2002,7 @@ fn append_paint_commands(
                             as u32;
                         let [red, green, blue, alpha] = pixmap.pixel(source_x, source_y);
                         if alpha > 0 {
-                            let color = qt::gui::QColor::rgba8(red, green, blue, alpha)
+                            let color = rqt::gui::QColor::rgba8(red, green, blue, alpha)
                                 .with_alpha(alpha as f32 / 255.0 * *opacity);
                             push_rect(
                                 rects,
@@ -1776,12 +2096,12 @@ fn append_paint_commands(
 
 fn push_stroke_rect(
     rects: &mut Vec<gfx::ColoredRect>,
-    clip: Option<qt::gui::QRectF>,
-    rect: qt::gui::QRectF,
+    clip: Option<rqt::gui::QRectF>,
+    rect: rqt::gui::QRectF,
     width: f32,
-    color: qt::gui::QColor,
+    color: rqt::gui::QColor,
 ) {
-    use qt::gui::QRectF;
+    use rqt::gui::QRectF;
     let left = rect.left().round();
     let top = rect.top().round();
     let right = rect.right().round();
@@ -1804,7 +2124,7 @@ fn push_stroke_rect(
     push(QRectF::new(right - width, top, width, bottom - top));
 }
 
-fn intersect_rect(rect: qt::gui::QRectF, clip: Option<qt::gui::QRectF>) -> Option<qt::gui::QRectF> {
+fn intersect_rect(rect: rqt::gui::QRectF, clip: Option<rqt::gui::QRectF>) -> Option<rqt::gui::QRectF> {
     let Some(clip) = clip else {
         return (!rect.is_empty()).then_some(rect);
     };
@@ -1812,7 +2132,7 @@ fn intersect_rect(rect: qt::gui::QRectF, clip: Option<qt::gui::QRectF>) -> Optio
     let top = rect.top().max(clip.top());
     let right = rect.right().min(clip.right());
     let bottom = rect.bottom().min(clip.bottom());
-    (right > left && bottom > top).then_some(qt::gui::QRectF::new(
+    (right > left && bottom > top).then_some(rqt::gui::QRectF::new(
         left,
         top,
         right - left,
@@ -1947,7 +2267,7 @@ impl ApplicationHandler for App {
                     gfx.as_ref().map(|gfx| {
                         let scale = gfx.ui_scale();
                         let (width, height) = gfx.size();
-                        qt::gui::QRectF::new(0.0, 0.0, width as f32 / scale, height as f32 / scale)
+                        rqt::gui::QRectF::new(0.0, 0.0, width as f32 / scale, height as f32 / scale)
                     })
                 };
                 if let Some(viewport) = viewport {
@@ -1984,6 +2304,17 @@ impl ApplicationHandler for App {
                 let previous = self.dragging.as_ref().map(|drag| drag.last);
                 self.cursor = (position.x as f32 / scale, position.y as f32 / scale);
                 if self.left_down {
+                    let point = rqt::gui::QPointF::new(self.cursor.0, self.cursor.1);
+                    let mut moved = false;
+                    for form in self.forms.values_mut() {
+                        if form.tree.mouse_move(point) {
+                            moved = true;
+                            break;
+                        }
+                    }
+                    if moved {
+                        return;
+                    }
                     if let Some(select) = self.line_select.clone() {
                         if let Some(form) = self.forms.get_mut(&select.form_id) {
                             if let Some(widget) = form.tree.find_widget(&select.name) {
@@ -2028,6 +2359,16 @@ impl ApplicationHandler for App {
                 button: MouseButton::Left,
                 ..
             } => {
+                if self.scroll_click {
+                    self.scroll_click = false;
+                    self.left_down = false;
+                    self.table_press = None;
+                    let point = rqt::gui::QPointF::new(self.cursor.0, self.cursor.1);
+                    for form in self.forms.values_mut() {
+                        form.tree.mouse_release(form.root, point);
+                    }
+                    return;
+                }
                 if self.dragging.take().is_some() || self.column_drag.take().is_some() {
                     return;
                 }
@@ -2048,12 +2389,16 @@ impl ApplicationHandler for App {
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 let scale = self.ui_scale();
-                let dy = match delta {
-                    MouseScrollDelta::LineDelta(_, y) => y * QTABLE_ROW_H * 3.0,
-                    MouseScrollDelta::PixelDelta(pos) => pos.y as f32 / scale,
+                let (dx, dy) = match delta {
+                    MouseScrollDelta::LineDelta(x, y) => {
+                        (x * QTABLE_ROW_H * 3.0, y * QTABLE_ROW_H * 3.0)
+                    }
+                    MouseScrollDelta::PixelDelta(pos) => {
+                        (pos.x as f32 / scale, pos.y as f32 / scale)
+                    }
                 };
-                if dy != 0.0 {
-                    self.scroll_table(dy);
+                if dx != 0.0 || dy != 0.0 {
+                    self.scroll_view(dx, dy);
                 }
             }
             _ => {}
@@ -2088,9 +2433,9 @@ pub fn run_native(params: Params) {
 #[cfg(test)]
 mod tests {
     use super::{key_edit, App, KeyEdit, Params, QtForm};
-    use qt::core::QVariant;
-    use qt::gui::QRectF;
-    use qt::widgets::QWidgetTree;
+    use rqt::core::QVariant;
+    use rqt::gui::QRectF;
+    use rqt::widgets::QWidgetTree;
     use winit::keyboard::{Key, NamedKey};
 
     fn card_form(x: f32, y: f32, title: &str) -> QtForm {
@@ -2098,22 +2443,22 @@ mod tests {
         let root = tree.create_widget("QDialog", "Dialog");
         let widget = tree.widget_mut(root).unwrap();
         widget.geometry = QRectF::new(x, y, 300.0, 200.0);
-        widget.size_hint = qt::gui::QSizeF::new(300.0, 200.0);
+        widget.size_hint = rqt::gui::QSizeF::new(300.0, 200.0);
         widget.set_property("windowTitle", QVariant::String(title.into()));
         QtForm { tree, root }
     }
 
     #[test]
     fn mdi_subwindows_hit_test_and_raise() {
-        use qt::mdi::QMdiSubWindowHit;
+        use rqt::mdi::QMdiSubWindowHit;
 
         let mut app = App::new(Params::default());
         app.forms.insert("a".into(), card_form(32.0, 54.0, "One"));
         app.mdi
-            .add_subwindow("One", "a".into(), qt::gui::QSizeF::new(300.0, 200.0));
+            .add_subwindow("One", "a".into(), rqt::gui::QSizeF::new(300.0, 200.0));
         app.forms.insert("b".into(), card_form(60.0, 82.0, "Two"));
         app.mdi
-            .add_subwindow("Two", "b".into(), qt::gui::QSizeF::new(300.0, 200.0));
+            .add_subwindow("Two", "b".into(), rqt::gui::QSizeF::new(300.0, 200.0));
 
         assert_eq!(
             app.mdi_hit((40.0, 30.0)).map(|(_, hit)| hit),

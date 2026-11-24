@@ -198,7 +198,7 @@ defmodule EPlatform.Lua.Api do
 
   defp consecutive_from_one?(_keys), do: false
 
-  defp consecutive_from_one?([], next), do: true
+  defp consecutive_from_one?([], _next), do: true
 
   defp consecutive_from_one?([k | rest], next) when k == next do
     consecutive_from_one?(rest, next + 1)

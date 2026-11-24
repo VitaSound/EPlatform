@@ -61,6 +61,16 @@ function init(app_id, frm_id)
 
     end)
 
+    form:on("listWidget", "CurrentRowChanged", function()
+        local row = form:getProperty("listWidget", "currentRow")
+        form:setProperty("lineEdit_1", "text", row)
+    end)
+
+    form:on("treeWidget", "CurrentItemChanged", function()
+        local row = form:getProperty("treeWidget", "currentRow")
+        form:setProperty("lineEdit_2", "text", row)
+    end)
+
     form:on("pushButton_2", "Clicked", function()
         form:close()
         application:close(form.application_id)

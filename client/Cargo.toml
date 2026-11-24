@@ -2,9 +2,7 @@
 resolver = "2"
 members = [
     "crates/form-xml",
-    "crates/ui-core",
-    "crates/ui-render",
-    "crates/qt",
+    "crates/rqt",
     "crates/app",
 ]
 
