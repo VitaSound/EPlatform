@@ -235,10 +235,18 @@ impl QWidget {
                 )
             }
             "QCheckBox" | "QRadioButton" => {
-                QSizeF::new(text_width + 24.0, (font_height + 7.0).round())
+                let width = metrics.bounding_rect(&text).width.ceil();
+                QSizeF::new(width + 24.0, (font_height + 7.0).round())
             }
-            "QComboBox" => QSizeF::new(text_width.max(80.0) + 28.0, (font_height + 8.7).round()),
-            "QTableWidget" => QSizeF::new(480.0, 240.0),
+            "QComboBox" => QSizeF::new(
+                if text.is_empty() {
+                    86.0
+                } else {
+                    text_width.max(80.0) + 28.0
+                },
+                (font_height + 8.7).round(),
+            ),
+            "QTableWidget" => QSizeF::new(256.0, 192.0),
             "QListWidget" | "QTreeWidget" => QSizeF::new(256.0, 192.0),
             "QGroupBox" => QSizeF::new(text_width + 16.0, font_height + 16.0),
             _ => QSizeF::new(100.0, font_height + 8.0),
@@ -371,6 +379,16 @@ impl QWidgetTree {
         if name == "visible" {
             if let Some(visible) = value.as_bool() {
                 widget.visible = visible;
+            }
+        }
+        if name == "minimumSize" {
+            if let QVariant::Size(size) = &value {
+                widget.minimum_size = *size;
+            }
+        }
+        if name == "maximumSize" {
+            if let QVariant::Size(size) = &value {
+                widget.maximum_size = *size;
             }
         }
         if name == "styleSheet" {
@@ -809,10 +827,27 @@ impl QWidgetTree {
         }
         self.clear_focus();
         self.widgets[widget].has_focus = true;
-        if self.widgets[widget].class_name == "QTableWidget" {
-            if let Some(table) = self.widgets[widget].table.as_mut() {
-                table.ensure_current();
+        match self.widgets[widget].class_name.as_str() {
+            "QTableWidget" => {
+                if let Some(table) = self.widgets[widget].table.as_mut() {
+                    table.ensure_current();
+                }
             }
+            "QListWidget" => {
+                if let Some(list) = self.widgets[widget].list.as_mut() {
+                    if list.current.is_none() && list.row_count() > 0 {
+                        list.set_current(Some(0));
+                    }
+                }
+            }
+            "QTreeWidget" => {
+                if let Some(tree) = self.widgets[widget].tree.as_mut() {
+                    if tree.current.is_none() && tree.row_count() > 0 {
+                        tree.set_current(Some(0));
+                    }
+                }
+            }
+            _ => {}
         }
         true
     }
@@ -1237,7 +1272,6 @@ impl QWidgetTree {
         };
         let node = &mut self.widgets[widget];
         node.size_hint = hint;
-        node.minimum_size = hint;
         node.layout = layout;
         hint
     }
@@ -1258,7 +1292,7 @@ impl QWidgetTree {
         let mut perp = 0.0f32;
         for item in &layout.items {
             let size = match item {
-                QLayoutItem::Widget(widget) => self.widgets[*widget].size_hint,
+                QLayoutItem::Widget(widget) => self.widget_hint(*widget),
                 QLayoutItem::Spacer(spacer) => QSizeF::new(spacer.width, spacer.height),
                 QLayoutItem::Layout(inner) => self.layout_size_hint(inner),
             };
@@ -1352,7 +1386,7 @@ impl QWidgetTree {
         } else {
             inner.height
         };
-        let gaps = layout.spacing * (count as f32 - 1.0);
+        let mut gaps = layout.spacing * (count as f32 - 1.0);
         let slack = available - sizes.iter().sum::<f32>() - gaps;
         let mut cursor_extra = 0.0;
         let mut gap_extra_value = 0.0;
@@ -1365,44 +1399,43 @@ impl QWidgetTree {
                 .filter(|(_, item)| self.item_expands(item, horizontal))
                 .map(|(index, _)| index)
                 .collect();
-            let candidates = if expanders.is_empty() {
+            let spacer_expanders: Vec<usize> = expanders
+                .iter()
+                .copied()
+                .filter(|index| matches!(layout.items[*index], QLayoutItem::Spacer(_)))
+                .collect();
+            let has_widget_expanders = expanders
+                .iter()
+                .any(|index| !matches!(layout.items[*index], QLayoutItem::Spacer(_)));
+            let mut candidates = if expanders.is_empty() {
                 (0..count).collect::<Vec<_>>()
             } else {
                 expanders
             };
+            if has_widget_expanders {
+                for index in &spacer_expanders {
+                    sizes[*index] = 0.0;
+                }
+                gaps -= layout.spacing * spacer_expanders.len() as f32;
+                candidates.retain(|index| !spacer_expanders.contains(index));
+            }
+            let deficit = (sizes.iter().sum::<f32>() + gaps - available).max(0.0);
             let total: f32 = candidates.iter().map(|index| sizes[*index]).sum();
             if total > 0.0 {
-                let deficit = -slack;
                 for index in candidates {
-                    sizes[index] = (sizes[index] - sizes[index] / total * deficit).max(0.0);
+                    let minimum = self.item_min_size(&layout.items[index], horizontal);
+                    sizes[index] = (sizes[index] - sizes[index] / total * deficit).max(minimum);
                 }
             }
         } else if slack > 0.0 {
-            let spacers: Vec<usize> = layout
+            let expanders: Vec<usize> = layout
                 .items
                 .iter()
                 .enumerate()
-                .filter(|(_, item)| matches!(item, QLayoutItem::Spacer(_)))
                 .filter(|(_, item)| self.item_expands(item, horizontal))
                 .map(|(index, _)| index)
                 .collect();
-            let expanders: Vec<usize> = if spacers.is_empty() {
-                layout
-                    .items
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, item)| self.item_expands(item, horizontal))
-                    .map(|(index, _)| index)
-                    .collect()
-            } else {
-                spacers
-            };
-            if !expanders.is_empty() {
-                let share = slack / expanders.len() as f32;
-                for index in expanders {
-                    sizes[index] += share;
-                }
-            } else {
+            if expanders.is_empty() {
                 let growers: Vec<usize> = layout
                     .items
                     .iter()
@@ -1419,6 +1452,36 @@ impl QWidgetTree {
                     let gap_extra = slack / (count as f32 + 1.0);
                     cursor_extra = gap_extra;
                     gap_extra_value = gap_extra;
+                }
+            } else {
+                let fixed: f32 = (0..count)
+                    .filter(|index| !expanders.contains(index))
+                    .map(|index| sizes[index])
+                    .sum();
+                let mut remaining = available - fixed - gaps;
+                let mut active = expanders;
+                loop {
+                    if active.is_empty() {
+                        break;
+                    }
+                    let share = remaining / active.len() as f32;
+                    let mut fixed_any = false;
+                    let mut next_active = Vec::new();
+                    for index in &active {
+                        if sizes[*index] > share {
+                            remaining -= sizes[*index];
+                            fixed_any = true;
+                        } else {
+                            next_active.push(*index);
+                        }
+                    }
+                    if !fixed_any {
+                        for index in &active {
+                            sizes[*index] = share;
+                        }
+                        break;
+                    }
+                    active = next_active;
                 }
             }
         }
@@ -1441,15 +1504,43 @@ impl QWidgetTree {
                 QLayoutItem::Layout(inner_layout) => self.layout_box(inner_layout, slot),
                 QLayoutItem::Spacer(_) => {}
             }
-            cursor += main + layout.spacing + gap_extra_value;
+            cursor += main + if main > 0.0 { layout.spacing } else { 0.0 } + gap_extra_value;
         }
     }
 
     fn item_hint(&self, item: &QLayoutItem) -> QSizeF {
         match item {
-            QLayoutItem::Widget(widget) => self.widgets[*widget].size_hint,
+            QLayoutItem::Widget(widget) => self.widget_hint(*widget),
             QLayoutItem::Spacer(spacer) => QSizeF::new(spacer.width, spacer.height),
             QLayoutItem::Layout(layout) => self.layout_size_hint(layout),
+        }
+    }
+
+    fn widget_hint(&self, widget: QWidgetId) -> QSizeF {
+        let node = &self.widgets[widget];
+        QSizeF::new(
+            node.size_hint
+                .width
+                .max(node.minimum_size.width)
+                .min(node.maximum_size.width),
+            node.size_hint
+                .height
+                .max(node.minimum_size.height)
+                .min(node.maximum_size.height),
+        )
+    }
+
+    fn item_min_size(&self, item: &QLayoutItem, horizontal: bool) -> f32 {
+        let QLayoutItem::Widget(widget) = item else {
+            return 0.0;
+        };
+        let Some(widget) = self.widgets.get(*widget) else {
+            return 0.0;
+        };
+        if horizontal {
+            widget.minimum_size.width
+        } else {
+            widget.minimum_size.height
         }
     }
 
@@ -1502,7 +1593,6 @@ impl QWidgetTree {
                 || widget.class_name == "QTableWidget"
                 || widget.class_name == "QListWidget"
                 || widget.class_name == "QTreeWidget"
-                || widget.class_name == "QComboBox"
         } else {
             widget.size_policy == QSizePolicy::Expanding
                 || widget.size_policy == QSizePolicy::MinimumExpanding
@@ -1734,7 +1824,7 @@ fn load_widget(
     spec: &form_xml::Widget,
     parent: Option<QWidgetId>,
     is_root: bool,
-    _explicit: bool,
+    explicit: bool,
 ) -> QWidgetId {
     let id = tree.create_widget(spec.class.clone(), spec.name.clone());
     for (name, value) in &spec.properties {
@@ -1763,12 +1853,22 @@ fn load_widget(
     }
     if let Some(form_xml::PropValue::Rect { x, y, w, h }) = spec.property("geometry") {
         tree.widgets[id].geometry = QRectF::new(*x as f32, *y as f32, *w as f32, *h as f32);
+        if explicit {
+            tree.widgets[id].explicit_position = Some(QPointF::new(*x as f32, *y as f32));
+        }
     }
     if let Some(layout) = &spec.layout {
+        let explicit_margins = layout.margins.is_some();
         let mut layout = load_layout(tree, layout, id, is_root);
+        if !is_root && !explicit_margins {
+            layout.margins = QMargins::uniform(9.0);
+        }
         if spec.class == "QGroupBox" {
             let metrics = QFontMetrics::new(&tree.widgets[id].font);
-            layout.margins.top = layout.margins.top.max(metrics.height() + 6.0);
+            layout.margins.left += 3.0;
+            layout.margins.top += metrics.height() + 6.0;
+            layout.margins.right += 3.0;
+            layout.margins.bottom += 3.0;
         }
         tree.widgets[id].layout = Some(layout);
     }
@@ -1849,6 +1949,7 @@ mod tests {
     const FIXTURE: &str = include_str!("../../form-xml/tests/fixtures/test_dialog01.ui");
     const DIALOG02: &str = include_str!("../../../../server/priv/qt_forms/test_dialog02.ui");
     const QT6_DIALOG01: &str = include_str!("../tests/fixtures/qt6_test_dialog01.json");
+    const QT6_DIALOG02: &str = include_str!("../tests/fixtures/qt6_test_dialog02.json");
 
     #[test]
     fn dialog01_geometry_matches_qt6_offscreen() {
@@ -1897,6 +1998,44 @@ mod tests {
                 number(expected, "h"),
             );
         }
+    }
+
+    #[test]
+    fn dialog02_geometry_matches_qt6_offscreen() {
+        let (tree, _) = load_ui(DIALOG02).expect("loads ui");
+        let reference: serde_json::Value =
+            serde_json::from_str(QT6_DIALOG02).expect("reference json");
+        let widgets = reference["widgets"].as_array().expect("widgets array");
+
+        let number = |value: &serde_json::Value, key: &str| {
+            value[key]
+                .as_f64()
+                .unwrap_or_else(|| panic!("{key} missing"))
+        };
+        let mut failures = Vec::new();
+        for expected in widgets {
+            let name = expected["name"].as_str().expect("name");
+            let id = tree
+                .find_widget(name)
+                .unwrap_or_else(|| panic!("missing widget {name}"));
+            let actual = tree.widget(id).unwrap();
+            if actual.class_name != expected["class"].as_str().unwrap() {
+                failures.push(format!("{name}.class"));
+                continue;
+            }
+            for (key, actual) in [
+                ("x", actual.geometry.x),
+                ("y", actual.geometry.y),
+                ("w", actual.geometry.width),
+                ("h", actual.geometry.height),
+            ] {
+                let expected = number(expected, key);
+                if (actual - expected as f32).abs() > 3.0 {
+                    failures.push(format!("{name}.{key}: expected {expected}, got {actual}"));
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
     #[test]
@@ -2055,6 +2194,45 @@ mod tests {
         assert_eq!(
             tree.focus_next(root, false),
             Some(tree.find_widget("lineEdit_1").unwrap())
+        );
+    }
+
+    #[test]
+    fn focusing_list_and_tree_selects_first_current() {
+        let (mut tree, _root) = load_ui(DIALOG02).expect("loads ui");
+        let list = tree.find_widget("listWidget").expect("list");
+        let tree_widget = tree.find_widget("treeWidget").expect("tree");
+        tree.set_property(
+            list,
+            "items",
+            QVariant::List(vec![
+                QVariant::String("one".into()),
+                QVariant::String("two".into()),
+            ]),
+        );
+        tree.set_property(
+            tree_widget,
+            "headerLabels",
+            QVariant::List(vec![QVariant::String("Name".into())]),
+        );
+        tree.set_property(
+            tree_widget,
+            "data",
+            QVariant::List(vec![QVariant::Map(vec![(
+                "text".into(),
+                QVariant::String("Root".into()),
+            )])]),
+        );
+
+        assert!(tree.set_focus(list));
+        assert_eq!(
+            tree.get_table_property(list, "currentRow"),
+            Some(QVariant::Int(0))
+        );
+        assert!(tree.set_focus(tree_widget));
+        assert_eq!(
+            tree.get_table_property(tree_widget, "currentRow"),
+            Some(QVariant::Int(0))
         );
     }
 

@@ -34,6 +34,19 @@ function Form:close()
     close_form(self.application_id, self.form_id)
 end
 
+-- Открываем модальную форму и ждём её результат.
+-- Вызов блокирует текущий Lua-процесс, но дочерняя форма живёт в своём
+-- GenServer, поэтому вложенные модалки не приводят к дедлоку.
+function Form:open_modal_lua(lua_file, opts)
+    opts = opts or {}
+    return open_modal_lua(self.application_id, self.form_id, lua_file, opts)
+end
+
+-- Закрываем модальную форму и возвращаем результат родителю.
+function Form:finish_modal(result)
+    close_modal(self.application_id, self.form_id, result)
+end
+
 -- Установка свойства виджета
 function Form:setProperty(object_name, property, value)
     set_property(self.application_id, self.form_id, object_name, property, value)
@@ -51,9 +64,8 @@ function Form:getProperty(object_name, property, value)
 end
 
 -- Получение свойства формы
-function Form:getFormProperty(object_name, property, value)
-    value = get_form_property(self.application_id, self.form_id, property)
-    return value
+function Form:getFormProperty(property)
+    return get_form_property(self.application_id, self.form_id, property)
 end
 
 -- Регистрация обработчика события

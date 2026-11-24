@@ -209,6 +209,27 @@
 - Проверки: `cargo test --workspace` — 73 passed; `mix test` — 7 passed;
   wasm-check `app`/`qt` проходит.
 
+### Статус Tab-фокуса (2026-11-24)
+
+- `app`: `Tab`/`Shift+Tab` идут по tab-цепочке активной формы, начальный фокус
+  ставится на первый focusable при `createForm`/активации; неактивные формы
+  теряют фокус.
+- item-view: `Tab` двигает `current` (table row-major, list/tree по строкам), на
+  краю view фокус уходит на следующий/предыдущий виджет; редактор ячейки
+  коммитится перед переходом.
+- `QWidgetTree::set_focus` инициализирует `current` у list/tree, как у table.
+- Mouse release синхронизирует `focused`/`table_focus` с `QWidgetTree`, поэтому
+  выделение и фокус сохраняются при отпускании мыши вне поля/на неfocusable-зоне.
+- Layout: прямые дети без layout позиционируются через `explicit_position`;
+  `QGroupBox`-layout получил Qt-отступы (9 px + frame/contents inset + title);
+  учитываются `minimumSize`/`maximumSize`, спейсеры сжимаются первыми, нулевые
+  gaps не добавляются. Размеры `QTableWidget`/`QComboBox`/check/radio подогнаны
+  под Qt.
+- Golden: `qt6_test_dialog02.json/png`, `dialog02_geometry_matches_qt6_offscreen`,
+  `dialog02_raster_compared_to_qt6` (mean diff ≈4.85).
+- Проверки: `cargo test --workspace` — все тесты зелёные; клиентский `trunk build`
+  обновлён и проверен в headless Chromium (Tab/Shift+Tab меняют фокус).
+
 ### Критерии готовности этапа
 
 - Переполненные table/list/tree показывают Qt-подобные scrollbar-ы (12 px,

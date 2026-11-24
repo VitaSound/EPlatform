@@ -2,6 +2,48 @@
 
 ## 2026-11-24
 
+### Tab-фокус и переходы по виджетам
+
+- `app`: `Tab`/`Shift+Tab` переключают фокус по tab-цепочке активной формы через
+  `QWidgetTree::focus_next`; `QLineEdit` получает `focused`, item-view —
+  `table_focus`, остальные — только `has_focus`. При `Tab` в `QLineEdit`
+  выделяется текст, фокус неактивных MDI-форм сбрасывается.
+- При открытии и активации формы фокус ставится на первый focusable-виджет,
+  как в Qt.
+- В `QTableWidget`/`QListWidget`/`QTreeWidget` `Tab` сначала двигает `current`
+  (row-major у таблицы, вниз/вверх у list/tree), а на краю view переводит фокус
+  на следующий/предыдущий виджет; при открытом редакторе ячейки значение
+  сначала коммитится.
+- `QWidgetTree::set_focus` выставляет `current` у list/tree, если его не было.
+- После mouse release `focused`/`table_focus` синхронизируются с фактическим
+  фокусом `QWidgetTree`: отпускание мыши вне поля ввода или клик по
+  неfocusable-области больше не сбрасывают фокус и выделение текста.
+- Тесты: `create_form_focuses_first_focusable_widget`,
+  `mouse_release_keeps_tree_focus`,
+  `tab_cycles_focusable_widgets_in_active_form`, переходы внутри table/list/tree
+  и на краях, пропуск disabled, изоляция фокуса по активной форме,
+  `focusing_list_and_tree_selects_first_current`.
+
+### Qt-layout: QGroupBox, вложенные layout-ы и позиции детей
+
+- Прямые дочерние виджеты без layout (`QGroupBox` с `QRadioButton` по
+  `geometry`) снова позиционируются относительно родителя: `explicit_position`
+  заполняется в loader-е и применяется после раскладки.
+- Layout, установленный на `QGroupBox`, получает Qt-отступы: стилевые 9 px,
+  плюс 3 px frame/contents inset и высоту заголовка сверху; layout-ы на виджетах
+  (не на root) по умолчанию используют 9 px.
+- `minimumSize`/`maximumSize` из `.ui` учитываются при раскладке; hint-ы
+  элементов ограничиваются этими значениями.
+- Распределение свободного места: расширяемые виджеты и спейсеры делят его
+  поровну с учётом hint/min, при дефиците спейсеры сжимаются первыми, нулевые
+  спейсеры не добавляют лишний gap.
+- Размеры по умолчанию подогнаны под Qt: `QTableWidget` 256×192, пустой
+  `QComboBox` 86 px, ширина `QCheckBox`/`QRadioButton` считается по bounding
+  rect текста.
+- Новый golden: `qt6_test_dialog02.json/png`, тесты
+  `dialog02_geometry_matches_qt6_offscreen` и `dialog02_raster_compared_to_qt6`
+  (mean diff ≈4.85); `dialog01` по-прежнему совпадает в пределах 1 px.
+
 ### Переименование крейта qt → rqt
 
 - Каталог `client/crates/qt` переименован в `client/crates/rqt` (`git mv`),

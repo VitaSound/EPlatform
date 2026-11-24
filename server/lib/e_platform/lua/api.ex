@@ -17,12 +17,25 @@ defmodule EPlatform.Lua.Api do
 
     case File.read(path) do
       {:ok, content} ->
-        DialogSession.broadcast(application_id, %{
+        payload = %{
           "command" => "createForm",
           "application_id" => application_id,
           "form_id" => form_id,
           "ui_xml" => content
-        })
+        }
+
+        # The child session advertises its modal/mdi flags from the process
+        # dictionary set by `DialogSession.init/1`.
+        payload =
+          case Process.get(:e_platform_modal) do
+            %{mdi: mdi} ->
+              Map.merge(payload, %{"modal" => true, "mdi" => mdi})
+
+            _ ->
+              payload
+          end
+
+        DialogSession.broadcast(application_id, payload)
 
         form_id
 
@@ -32,14 +45,83 @@ defmodule EPlatform.Lua.Api do
   end
 
   deflua close_form(application_id, form_id) do
+    Process.put(:e_platform_closing, true)
+
     DialogSession.broadcast(application_id, %{
       "command" => "closeForm",
       "application_id" => application_id,
       "form_id" => form_id
     })
 
+    notify_modal(nil)
     send(self(), :stop_form)
     0
+  end
+
+  deflua close_modal(application_id, form_id, result), state do
+    result = decode_value(state, result)
+    Process.put(:e_platform_closing, true)
+
+    DialogSession.broadcast(application_id, %{
+      "command" => "closeForm",
+      "application_id" => application_id,
+      "form_id" => form_id
+    })
+
+    notify_modal(result)
+    send(self(), :stop_form)
+    0
+  end
+
+  deflua open_modal_lua(application_id, form_id, lua_file, opts), state do
+    opts = normalize_opts(decode_value(state, opts))
+    ui_file = Map.get(opts, "ui_file", "")
+    mdi = Map.get(opts, "mdi", true)
+    ref = EPlatform.ID.generate()
+    parent = self()
+
+    start_opts = %{
+      modal_parent: parent,
+      modal_ref: ref,
+      modal_parent_form_id: form_id,
+      mdi: mdi,
+      open_opts: opts
+    }
+
+    case EPlatform.DialogManager.start_modal(application_id, lua_file, ui_file, start_opts) do
+      {:ok, child_form_id, pid} ->
+        monitor = Process.monitor(pid)
+
+        receive do
+          {:modal_result, ^ref, result} ->
+            Process.demonitor(monitor, [:flush])
+            result
+
+          {:DOWN, ^monitor, :process, ^pid, _reason} ->
+            DialogSession.broadcast(application_id, %{
+              "command" => "closeForm",
+              "application_id" => application_id,
+              "form_id" => child_form_id
+            })
+
+            "error"
+        after
+          300_000 ->
+            Process.demonitor(monitor, [:flush])
+            _ = EPlatform.DialogManager.stop(application_id, child_form_id)
+
+            DialogSession.broadcast(application_id, %{
+              "command" => "closeForm",
+              "application_id" => application_id,
+              "form_id" => child_form_id
+            })
+
+            "timeout"
+        end
+
+      {:error, _reason} ->
+        "error"
+    end
   end
 
   deflua close_application(application_id) do
@@ -132,6 +214,28 @@ defmodule EPlatform.Lua.Api do
 
   # -- helpers ----------------------------------------------------------------
 
+  @doc """
+  Sends the modal result to the parent process exactly once.
+
+  Called from the child session when it closes. It is a raw `send/2` (not
+  `GenServer.call/3`) on purpose: the parent is blocked inside its Lua
+  `receive`, so a call would deadlock nested modals.
+  """
+  def notify_modal(result) do
+    case Process.get(:e_platform_modal) do
+      %{parent: parent, ref: ref} when is_pid(parent) ->
+        unless Process.get(:e_platform_modal_sent) do
+          send(parent, {:modal_result, ref, result})
+          Process.put(:e_platform_modal_sent, true)
+        end
+
+        :ok
+
+      _ ->
+        :ok
+    end
+  end
+
   defp decode_value(state, {:tref, _} = value) do
     state
     |> Lua.decode!(value)
@@ -139,6 +243,14 @@ defmodule EPlatform.Lua.Api do
   end
 
   defp decode_value(_state, value), do: value
+
+  defp normalize_opts(opts) when is_map(opts), do: opts
+
+  defp normalize_opts(opts) when is_list(opts) do
+    Map.new(opts, fn {key, value} -> {to_key(key), value} end)
+  end
+
+  defp normalize_opts(_opts), do: %{}
 
   defp normalize_property_value(value) when is_binary(value) do
     case Float.parse(value) do

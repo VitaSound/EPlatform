@@ -7,16 +7,70 @@ defmodule EPlatform.DialogManager do
 
   alias EPlatform.DialogSession
 
-  @doc "Starts a dialog session (Lua script + form) for the given application."
-  def start_dialog(application_id, lua_file, ui_file) do
+  @doc """
+  Starts a dialog session (Lua script + form) for the given application.
+
+  `opts` may contain `:modal`, `:mdi`, `:modal_parent`, `:modal_ref`,
+  `:modal_parent_form_id` and `:open_opts`. The default starts a normal,
+  non-modal form.
+  """
+  def start_dialog(application_id, lua_file, ui_file, opts \\ %{}) do
     form_id = EPlatform.ID.generate()
 
-    spec =
-      {DialogSession,
-       %{application_id: application_id, form_id: form_id, lua_file: lua_file, ui_file: ui_file}}
+    session_opts =
+      Map.merge(
+        %{
+          application_id: application_id,
+          form_id: form_id,
+          lua_file: lua_file,
+          ui_file: ui_file,
+          modal: false,
+          mdi: true
+        },
+        opts
+      )
+
+    spec = {DialogSession, session_opts}
 
     case DynamicSupervisor.start_child(EPlatform.DialogSupervisor, spec) do
       {:ok, _pid} -> {:ok, form_id}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
+  Starts a modal dialog session and returns its `form_id` and pid.
+
+  The caller (usually the parent `DialogSession` process) is responsible for
+  waiting for `{:modal_result, ref, result}`. The child sends that raw message
+  on close, so the parent's `GenServer` is not blocked by `GenServer.call/3`.
+  """
+  def start_modal(application_id, lua_file, ui_file, opts) do
+    form_id = EPlatform.ID.generate()
+
+    session_opts =
+      Map.merge(
+        %{
+          application_id: application_id,
+          form_id: form_id,
+          lua_file: lua_file,
+          ui_file: ui_file,
+          modal: true,
+          mdi: true
+        },
+        opts
+      )
+      |> Map.put(:modal, true)
+
+    spec = %{
+      id: {DialogSession, form_id},
+      start: {DialogSession, :start_link, [session_opts]},
+      restart: :temporary,
+      type: :worker
+    }
+
+    case DynamicSupervisor.start_child(EPlatform.DialogSupervisor, spec) do
+      {:ok, pid} -> {:ok, form_id, pid}
       {:error, reason} -> {:error, reason}
     end
   end

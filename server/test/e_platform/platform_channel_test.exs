@@ -15,8 +15,8 @@ defmodule EPlatform.PlatformChannelTest do
     %{socket: socket, app_id: app_id}
   end
 
-  defp start_dialog(socket, ui_file) do
-    ref = push(socket, "start_dialog", %{"lua_file" => "test_01.lua", "ui_file" => ui_file})
+  defp start_dialog(socket, ui_file, lua_file \\ "test_01.lua") do
+    ref = push(socket, "start_dialog", %{"lua_file" => lua_file, "ui_file" => ui_file})
     assert_reply ref, :ok, %{"form_id" => form_id}
     form_id
   end
@@ -105,6 +105,54 @@ defmodule EPlatform.PlatformChannelTest do
     }
 
     assert value in [726, 726.0]
+  end
+
+  test "modal child blocks parent and returns its result", %{socket: socket} do
+    parent_id = start_dialog(socket, "test_dialog01.ui", "test_modal_parent.lua")
+
+    assert_push "command", %{"command" => "createForm", "form_id" => ^parent_id}
+
+    assert_push "command", %{
+      "command" => "setFormProperty",
+      "form_id" => ^parent_id,
+      "property" => "windowTitle",
+      "value" => "Modal parent"
+    }
+
+    assert_push "command", %{
+      "command" => "setProperty",
+      "form_id" => ^parent_id,
+      "object_name" => "lineEdit_1",
+      "property" => "text",
+      "value" => "waiting"
+    }
+
+    assert_push "command", %{"command" => "createForm", "form_id" => child_id, "modal" => true}
+    assert child_id != parent_id
+
+    assert_push "command", %{
+      "command" => "setFormProperty",
+      "form_id" => ^child_id,
+      "property" => "windowTitle",
+      "value" => "Modal child"
+    }
+
+    push(socket, "send_event", %{
+      "form_id" => child_id,
+      "command" => "formEvent",
+      "widget_name" => "pushButton_1",
+      "event" => "Clicked"
+    })
+
+    assert_push "command", %{"command" => "closeForm", "form_id" => ^child_id}
+
+    assert_push "command", %{
+      "command" => "setProperty",
+      "form_id" => ^parent_id,
+      "object_name" => "lineEdit_1",
+      "property" => "text",
+      "value" => "result:ok"
+    }
   end
 
   test "killing one session restarts only that form", %{socket: socket} do

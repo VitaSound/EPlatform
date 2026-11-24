@@ -745,6 +745,58 @@ mod tests {
     }
 
     #[test]
+    fn dialog02_raster_compared_to_qt6() {
+        use crate::gui::QPainter;
+        use crate::paint::paint_widget_tree;
+        use crate::style::QFusionStyle;
+        use crate::widgets::load_ui;
+
+        let fixture = include_str!("../../../../server/priv/qt_forms/test_dialog02.ui");
+        let (mut tree, root) = load_ui(fixture).expect("loads ui");
+        if let Some(line) = tree.find_widget("lineEdit_1") {
+            tree.set_focus(line);
+        }
+        let mut painter = QPainter::new();
+        paint_widget_tree(&tree, root, &QFusionStyle::default(), &mut painter);
+        let image = rasterize(painter.commands(), 444, 483, QColor::rgb(0xef, 0xef, 0xef));
+        let _ = image.save_png("/tmp/rust_dialog02.png");
+        let reference = QRasterImage::from_png(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/qt6_test_dialog02.png"
+        ))
+        .expect("reference png");
+        assert_eq!(image.width, reference.width);
+        assert_eq!(image.height, reference.height);
+
+        let mut total = 0u64;
+        let mut count = 0u64;
+        let mut different = 0u64;
+        for (left, right) in image
+            .pixels
+            .chunks_exact(4)
+            .zip(reference.pixels.chunks_exact(4))
+        {
+            let mut pixel_diff = 0u32;
+            for channel in 0..3 {
+                let diff = u32::from(left[channel].abs_diff(right[channel]));
+                total += u64::from(diff);
+                pixel_diff = pixel_diff.max(diff);
+                count += 1;
+            }
+            if pixel_diff > 30 {
+                different += 1;
+            }
+        }
+        let mean = total as f64 / count as f64;
+        eprintln!(
+            "mean channel diff {mean:.2}, pixels >30: {different} / {}",
+            image.width * image.height
+        );
+        assert!(mean < 12.0, "mean diff {mean}");
+        assert!(different < (image.width * image.height) as u64 / 8);
+    }
+
+    #[test]
     fn scroll_table_raster_compared_to_qt6() {
         use crate::gui::QPainter;
         use crate::paint::paint_widget_tree;

@@ -183,16 +183,19 @@ struct App {
     /// Last known cursor position in canvas pixels (for hit-testing;
     /// `winit::MouseInput` does not carry a position).
     cursor: (f32, f32),
-    /// Widget with keyboard focus: `(form_id, objectName)`. Only
-    /// editable widgets (`QLineEdit`) take focus, like tabbing in Qt.
+    /// Focused `QLineEdit`: `(form_id, objectName)`. Keyboard focus itself
+    /// lives on `QWidget.has_focus`; this mirrors the line edit that
+    /// receives text input.
     focused: Option<(String, String)>,
-    /// Last clicked table: `(form_id, objectName)` — typing starts
+    /// Focused item view: `(form_id, objectName)` — typing starts
     /// editing its current cell (Qt's `AnyKeyPressed` edit trigger).
     table_focus: Option<(String, String)>,
     /// In-progress cell edit of `table_focus`.
     editing: Option<CellEdit>,
     /// Laid-out Qt widget trees by `form_id` (one per open dialog session).
     forms: HashMap<String, QtForm>,
+    /// Stack of currently open modal forms. The last one owns input.
+    modal_stack: Vec<String>,
     mdi: QMdiArea<String>,
     dragging: Option<Drag>,
     column_drag: Option<ColumnDrag>,
@@ -222,6 +225,7 @@ impl App {
             table_focus: None,
             editing: None,
             forms: HashMap::new(),
+            modal_stack: Vec::new(),
             mdi: QMdiArea::new(rqt::gui::QRectF::new(0.0, 0.0, 1280.0, 800.0)),
             dragging: None,
             column_drag: None,
@@ -396,7 +400,8 @@ impl App {
                 let mut title = None;
                 if let Some(form) = self.forms.get_mut(form_id) {
                     if let form_xml::PropValue::Rect { x, y, w, h } = &value {
-                        let rect = rqt::gui::QRectF::new(*x as f32, *y as f32, *w as f32, *h as f32);
+                        let rect =
+                            rqt::gui::QRectF::new(*x as f32, *y as f32, *w as f32, *h as f32);
                         if let Some(index) = self.mdi.index_of(|payload| payload == form_id) {
                             self.mdi.set_content_geometry(index, rect);
                         }
@@ -493,6 +498,8 @@ impl App {
 
     fn remove_form(&mut self, form_id: &str) {
         self.forms.remove(form_id);
+        let was_modal = self.modal_stack.iter().any(|id| id == form_id);
+        self.modal_stack.retain(|id| id != form_id);
         if let Some(index) = self.mdi.index_of(|payload| payload == form_id) {
             self.mdi.remove(index);
         }
@@ -519,10 +526,16 @@ impl App {
         {
             self.line_select = None;
         }
+        if was_modal {
+            if let Some(active) = self.mdi.active_payload().cloned() {
+                self.focus_initial_form(&active);
+            }
+        }
     }
 
     fn remove_all_forms(&mut self) {
         self.forms.clear();
+        self.modal_stack.clear();
         self.mdi.clear();
         self.focused = None;
         self.table_focus = None;
@@ -540,6 +553,10 @@ impl App {
             .unwrap_or("")
             .to_string();
         let xml = payload.get("ui_xml").and_then(|v| v.as_str()).unwrap_or("");
+        let modal = payload
+            .get("modal")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
         let (mut tree, root) = match rqt::widgets::load_ui(xml) {
             Ok(form) => form,
@@ -557,11 +574,18 @@ impl App {
         if let Some(index) = self.mdi.index_of(|payload| payload == &form_id) {
             self.mdi.remove(index);
         }
+        self.modal_stack.retain(|id| id != &form_id);
+        if modal {
+            self.modal_stack.push(form_id.clone());
+        }
         let index = self.mdi.add_subwindow(
             title,
             form_id.clone(),
             rqt::gui::QSizeF::new(area.width, area.height),
         );
+        if modal {
+            let _ = self.mdi.activate(index);
+        }
         let content = self
             .mdi
             .subwindow(index)
@@ -591,6 +615,7 @@ impl App {
         if self.editing.as_ref().is_some_and(|e| e.form_id == form_id) {
             self.editing = None;
         }
+        self.focus_initial_form(&form_id);
     }
 
     /// Collect the Qt-painted form commands into the flat batches the
@@ -743,9 +768,28 @@ impl App {
         self.mdi.hit_test(rqt::gui::QPointF::new(point.0, point.1))
     }
 
+    fn modal_form(&self) -> Option<&str> {
+        self.modal_stack.last().map(String::as_str)
+    }
+
+    /// Like `mdi_hit`, but while a modal form is open only that form's
+    /// subwindow may receive mouse input.
+    fn mdi_hit_modal(&self) -> Option<(usize, QMdiSubWindowHit)> {
+        let hit = self.mdi_hit(self.cursor)?;
+        if let Some(modal) = self.modal_form() {
+            let payload = self.mdi.subwindow(hit.0)?.payload.as_str();
+            if payload != modal {
+                return None;
+            }
+        }
+        Some(hit)
+    }
+
     fn activate_form(&mut self, form_id: &str) -> Option<usize> {
         let index = self.mdi.index_of(|payload| payload == form_id)?;
-        self.mdi.activate(index)
+        let activated = self.mdi.activate(index)?;
+        self.focus_initial_form(form_id);
+        Some(activated)
     }
 
     fn sync_form_geometry(&mut self, form_id: &str) {
@@ -768,7 +812,7 @@ impl App {
         self.left_down = true;
         self.line_select = None;
         self.caret_epoch = now_ms();
-        let Some((index, hit)) = self.mdi_hit(self.cursor) else {
+        let Some((index, hit)) = self.mdi_hit_modal() else {
             self.line_select = None;
             return;
         };
@@ -805,6 +849,7 @@ impl App {
                 else {
                     return;
                 };
+                self.clear_inactive_focus(&form_id);
                 let Some((_, name, class)) = self.hit_test(self.cursor) else {
                     self.line_select = None;
                     return;
@@ -905,6 +950,10 @@ impl App {
         let index = drag.index;
         let mode = drag.mode;
         drag.last = self.cursor;
+        Self::log(format!(
+            "drag {mode:?} dx={dx:.1} dy={dy:.1} cursor=({:.1},{:.1})",
+            self.cursor.0, self.cursor.1
+        ));
         match mode {
             MdiDragMode::Move => {
                 let Some(form_id) = self
@@ -955,7 +1004,13 @@ impl App {
     /// Topmost leaf widget under the cursor, using the Qt widget tree.
     fn hit_test(&self, point: (f32, f32)) -> Option<(String, String, String)> {
         let point = rqt::gui::QPointF::new(point.0, point.1);
+        let modal = self.modal_form();
         for subwindow in self.mdi.subwindows().iter().rev() {
+            if let Some(modal) = modal {
+                if subwindow.payload.as_str() != modal {
+                    continue;
+                }
+            }
             if !subwindow.content_rect().contains(point) {
                 continue;
             }
@@ -993,7 +1048,7 @@ impl App {
             return;
         }
 
-        match self.mdi_hit(self.cursor) {
+        match self.mdi_hit_modal() {
             Some((index, QMdiSubWindowHit::Close)) => {
                 let Some(form_id) = self
                     .mdi
@@ -1035,6 +1090,9 @@ impl App {
                 self.mdi.activate(index);
             }
             None => {
+                if self.modal_form().is_some() {
+                    return;
+                }
                 self.focused = None;
                 self.table_focus = None;
                 return;
@@ -1043,23 +1101,16 @@ impl App {
 
         let hit = self.hit_test(self.cursor);
 
-        // Focus follows the click; only editable widgets keep it.
-        self.focused = match &hit {
-            Some((form_id, name, class)) if class == "QLineEdit" => {
-                Some((form_id.clone(), name.clone()))
-            }
-            _ => None,
-        };
-        if self.focused.is_some() {
-            self.caret_epoch = now_ms();
-            Self::log(format!("focus {:?}", self.focused));
-        }
-
         let Some((form_id, widget_name, class)) = hit else {
             self.table_focus = None;
             self.table_press = None;
             return;
         };
+        self.refresh_keyboard_focus(&form_id);
+        if self.focused.is_some() {
+            self.caret_epoch = now_ms();
+            Self::log(format!("focus {:?}", self.focused));
+        }
 
         let (protocol_event, start_cell_edit) = {
             let Some(form) = self.forms.get_mut(&form_id) else {
@@ -1096,14 +1147,6 @@ impl App {
             (protocol_event, start_cell_edit)
         };
 
-        self.table_focus = if matches!(
-            class.as_str(),
-            "QTableWidget" | "QListWidget" | "QTreeWidget"
-        ) {
-            Some((form_id.clone(), widget_name.clone()))
-        } else {
-            None
-        };
         self.table_press = None;
         if let Some((row, column)) = start_cell_edit {
             self.start_edit(&form_id, &widget_name, row, column);
@@ -1281,6 +1324,7 @@ impl App {
             | KeyEdit::End
             | KeyEdit::Delete => {}
             KeyEdit::Commit => self.commit_edit(),
+            KeyEdit::Tab => {}
             KeyEdit::ClearFocus => {
                 if let Some(edit) = self.editing.take() {
                     if let Some(table) = self.table_mut_for(&edit.form_id, &edit.table) {
@@ -1424,6 +1468,11 @@ impl App {
         let action = key_edit(event.text.as_deref(), &event.logical_key);
         self.caret_epoch = now_ms();
 
+        if matches!(action, KeyEdit::Tab) {
+            self.tab_focus(self.shift);
+            return;
+        }
+
         if self.editing.is_some() {
             self.edit_key(action);
             return;
@@ -1539,6 +1588,7 @@ impl App {
             | KeyEdit::PageUp
             | KeyEdit::PageDown
             | KeyEdit::Commit
+            | KeyEdit::Tab
             | KeyEdit::Ignore => {}
         }
     }
@@ -1671,6 +1721,237 @@ impl App {
             _ => false,
         }
     }
+
+    fn clear_inactive_focus(&mut self, active: &str) {
+        for (form_id, form) in self.forms.iter_mut() {
+            if form_id != active {
+                form.tree.clear_focus();
+            }
+        }
+        if self
+            .focused
+            .as_ref()
+            .is_some_and(|(form_id, _)| form_id != active)
+        {
+            self.focused = None;
+        }
+        if self
+            .table_focus
+            .as_ref()
+            .is_some_and(|(form_id, _)| form_id != active)
+        {
+            self.table_focus = None;
+        }
+    }
+
+    fn focus_initial_form(&mut self, form_id: &str) {
+        self.clear_inactive_focus(form_id);
+        if self
+            .forms
+            .get(form_id)
+            .and_then(|form| form.tree.focus_widget())
+            .is_some()
+        {
+            return;
+        }
+        let Some(widget) = self
+            .forms
+            .get_mut(form_id)
+            .and_then(|form| form.tree.focus_next(form.root, false))
+        else {
+            return;
+        };
+        self.sync_focus(form_id, widget, true);
+    }
+
+    fn sync_focus(&mut self, form_id: &str, widget: QWidgetId, select_text: bool) {
+        let Some((class, name)) = self.forms.get(form_id).and_then(|form| {
+            form.tree
+                .widget(widget)
+                .map(|node| (node.class_name.clone(), node.object_name.clone()))
+        }) else {
+            return;
+        };
+        self.caret_epoch = now_ms();
+        match class.as_str() {
+            "QLineEdit" => {
+                self.focused = Some((form_id.to_string(), name.clone()));
+                self.table_focus = None;
+                if select_text {
+                    if let Some(form) = self.forms.get_mut(form_id) {
+                        if let Some(widget) = form.tree.find_widget(&name) {
+                            form.tree.select_all(widget);
+                        }
+                    }
+                }
+            }
+            "QTableWidget" | "QListWidget" | "QTreeWidget" => {
+                self.focused = None;
+                self.table_focus = Some((form_id.to_string(), name.clone()));
+            }
+            _ => {
+                self.focused = None;
+                self.table_focus = None;
+            }
+        }
+        Self::log(format!("focus {name} ({class})"));
+    }
+
+    fn tab_focus(&mut self, backwards: bool) {
+        let Some(form_id) = self.mdi.active_payload().cloned() else {
+            return;
+        };
+        self.commit_edit();
+        self.clear_inactive_focus(&form_id);
+        let focused = self.forms.get(&form_id).and_then(|form| {
+            form.tree.focus_widget().and_then(|widget| {
+                form.tree
+                    .widget(widget)
+                    .map(|node| (widget, node.class_name.clone()))
+            })
+        });
+        if let Some((widget, class)) = focused {
+            if matches!(
+                class.as_str(),
+                "QTableWidget" | "QListWidget" | "QTreeWidget"
+            ) && self.tab_view(&form_id, widget, &class, backwards)
+            {
+                return;
+            }
+        }
+        let Some(widget) = self
+            .forms
+            .get_mut(&form_id)
+            .and_then(|form| form.tree.focus_next(form.root, backwards))
+        else {
+            return;
+        };
+        self.sync_focus(&form_id, widget, true);
+    }
+
+    fn refresh_keyboard_focus(&mut self, form_id: &str) {
+        let widget = self
+            .forms
+            .get(form_id)
+            .and_then(|form| form.tree.focus_widget());
+        if let Some(widget) = widget {
+            self.sync_focus(form_id, widget, false);
+        } else {
+            self.focused = None;
+            self.table_focus = None;
+        }
+    }
+
+    fn tab_view(&mut self, form_id: &str, widget: QWidgetId, class: &str, backwards: bool) -> bool {
+        let Some(form) = self.forms.get_mut(form_id) else {
+            return false;
+        };
+        let Some(node) = form.tree.widget(widget) else {
+            return false;
+        };
+        let rect = node.geometry;
+        let font = node.font.clone();
+        match class {
+            "QTableWidget" => {
+                let Some(table) = form.tree.table_mut(widget) else {
+                    return false;
+                };
+                let rows = table.model.row_count();
+                let columns = table.model.column_count();
+                if rows == 0 || columns == 0 {
+                    return false;
+                }
+                let Some((row, column)) = table.current() else {
+                    return false;
+                };
+                let (row, column) = if backwards {
+                    if row == 0 && column == 0 {
+                        return false;
+                    }
+                    if column == 0 {
+                        (row - 1, columns - 1)
+                    } else {
+                        (row, column - 1)
+                    }
+                } else {
+                    if row + 1 >= rows && column + 1 >= columns {
+                        return false;
+                    }
+                    if column + 1 < columns {
+                        (row, column + 1)
+                    } else {
+                        (row + 1, 0)
+                    }
+                };
+                table.set_current_cell(row, column);
+                table.select_current();
+                let viewport = table.scroll_area(rect, &font).viewport;
+                table.reveal_current_row(viewport.height);
+                let row_header_w = table.row_header_width(&font);
+                table.reveal_current_column(viewport.width, row_header_w);
+                table.sync_scrollbars(rect, &font);
+                true
+            }
+            "QListWidget" => {
+                let Some(list) = form.tree.list_mut(widget) else {
+                    return false;
+                };
+                let rows = list.row_count();
+                if rows == 0 {
+                    return false;
+                }
+                let Some(current) = list.current else {
+                    return false;
+                };
+                let row = if backwards {
+                    if current == 0 {
+                        return false;
+                    }
+                    current - 1
+                } else {
+                    if current + 1 >= rows {
+                        return false;
+                    }
+                    current + 1
+                };
+                let viewport = list.scroll_area(rect).viewport;
+                list.set_current(Some(row));
+                list.ensure_visible(row, viewport.height);
+                list.sync_vertical_bar(viewport.height);
+                true
+            }
+            "QTreeWidget" => {
+                let Some(tree) = form.tree.tree_mut(widget) else {
+                    return false;
+                };
+                let rows = tree.row_count();
+                if rows == 0 {
+                    return false;
+                }
+                let Some(current) = tree.current else {
+                    return false;
+                };
+                let row = if backwards {
+                    if current == 0 {
+                        return false;
+                    }
+                    current - 1
+                } else {
+                    if current + 1 >= rows {
+                        return false;
+                    }
+                    current + 1
+                };
+                let viewport = tree.scroll_area(rect).viewport;
+                let body_height = (viewport.height - rqt::item_view::QVIEW_HEADER_H).max(0.0);
+                tree.set_current(Some(row));
+                tree.ensure_visible(row, body_height);
+                tree.sync_vertical_bar(body_height);
+                true
+            }
+            _ => false,
+        }
+    }
 }
 
 fn nav_row(action: &KeyEdit, current: usize, count: usize, page: usize) -> usize {
@@ -1701,13 +1982,15 @@ enum KeyEdit {
     Delete,
     /// Enter — commit an open cell editor.
     Commit,
+    /// Tab — move to the next focusable widget (Shift+Tab goes back).
+    Tab,
     ClearFocus,
     Ignore,
 }
 
 /// Map a winit key event to a tree edit. `text` carries the printable
 /// characters — on the web it also contains `"\r"` (Enter) and `"\t"`
-/// (Tab), which are filtered out instead of typed into the widget.
+/// (Tab); those are mapped to their own actions instead of being typed.
 fn key_edit(text: Option<&str>, key: &winit::keyboard::Key) -> KeyEdit {
     use winit::keyboard::{Key, NamedKey};
     match key {
@@ -1723,6 +2006,7 @@ fn key_edit(text: Option<&str>, key: &winit::keyboard::Key) -> KeyEdit {
         Key::Named(NamedKey::Delete) => KeyEdit::Delete,
         Key::Named(NamedKey::Escape) => KeyEdit::ClearFocus,
         Key::Named(NamedKey::Enter) => KeyEdit::Commit,
+        Key::Named(NamedKey::Tab) => KeyEdit::Tab,
         _ => {
             let printable: String = text
                 .unwrap_or("")
@@ -2124,7 +2408,10 @@ fn push_stroke_rect(
     push(QRectF::new(right - width, top, width, bottom - top));
 }
 
-fn intersect_rect(rect: rqt::gui::QRectF, clip: Option<rqt::gui::QRectF>) -> Option<rqt::gui::QRectF> {
+fn intersect_rect(
+    rect: rqt::gui::QRectF,
+    clip: Option<rqt::gui::QRectF>,
+) -> Option<rqt::gui::QRectF> {
     let Some(clip) = clip else {
         return (!rect.is_empty()).then_some(rect);
     };
@@ -2370,6 +2657,7 @@ impl ApplicationHandler for App {
                     return;
                 }
                 if self.dragging.take().is_some() || self.column_drag.take().is_some() {
+                    self.left_down = false;
                     return;
                 }
                 self.dispatch_mouse_release();
@@ -2484,6 +2772,269 @@ mod tests {
     }
 
     #[test]
+    fn modal_form_filters_mdi_hit_testing() {
+        let mut app = App::new(Params::default());
+        app.forms.insert("a".into(), card_form(32.0, 54.0, "One"));
+        app.mdi
+            .add_subwindow("One", "a".into(), rqt::gui::QSizeF::new(300.0, 200.0));
+        app.forms.insert("b".into(), card_form(60.0, 82.0, "Two"));
+        app.mdi
+            .add_subwindow("Two", "b".into(), rqt::gui::QSizeF::new(300.0, 200.0));
+
+        app.modal_stack.push("b".into());
+        app.cursor = (100.0, 100.0);
+        assert_eq!(app.mdi_hit_modal().map(|(index, _)| index), Some(1));
+
+        app.cursor = (40.0, 30.0);
+        assert_eq!(app.mdi_hit_modal(), None);
+    }
+
+    fn add_form(app: &mut App, id: &str, xml: &str) {
+        let (tree, root) = rqt::widgets::load_ui(xml).expect("ui");
+        app.forms.insert(id.into(), QtForm { tree, root });
+        app.mdi
+            .add_subwindow(id, id.into(), rqt::gui::QSizeF::new(300.0, 200.0));
+    }
+
+    fn focus_name(app: &App, form_id: &str) -> Option<String> {
+        let form = app.forms.get(form_id)?;
+        let widget = form.tree.focus_widget()?;
+        form.tree
+            .widget(widget)
+            .map(|node| node.object_name.clone())
+    }
+
+    const TAB_UI: &str = r#"<ui version="4.0"><class>Dialog</class><widget class="QDialog" name="Dialog"><property name="geometry"><rect><x>0</x><y>0</y><width>300</width><height>200</height></rect></property><layout class="QVBoxLayout" name="l"><item><widget class="QLineEdit" name="lineEdit_1"/></item><item><widget class="QLineEdit" name="lineEdit_2"/></item><item><widget class="QPushButton" name="pushButton_1"><property name="text"><string>OK</string></property></widget></item></layout></widget></ui>"#;
+    const TABLE_TAB_UI: &str = r#"<ui version="4.0"><class>Dialog</class><widget class="QDialog" name="Dialog"><property name="geometry"><rect><x>0</x><y>0</y><width>300</width><height>200</height></rect></property><layout class="QVBoxLayout" name="l"><item><widget class="QTableWidget" name="table"><property name="rowCount"><number>2</number></property><property name="columnCount"><number>2</number></property></widget></item><item><widget class="QPushButton" name="pushButton_1"><property name="text"><string>OK</string></property></widget></item></layout></widget></ui>"#;
+    const LIST_TREE_TAB_UI: &str = r#"<ui version="4.0"><class>Dialog</class><widget class="QDialog" name="Dialog"><property name="geometry"><rect><x>0</x><y>0</y><width>300</width><height>240</height></rect></property><layout class="QVBoxLayout" name="l"><item><widget class="QListWidget" name="listWidget"/></item><item><widget class="QTreeWidget" name="treeWidget"><column><property name="text"><string>1</string></property></column></widget></item><item><widget class="QPushButton" name="pushButton_1"><property name="text"><string>OK</string></property></widget></item></layout></widget></ui>"#;
+
+    #[test]
+    fn create_form_focuses_first_focusable_widget() {
+        let mut app = App::new(Params::default());
+        app.on_create_form(&serde_json::json!({
+            "form_id": "f",
+            "ui_xml": TAB_UI,
+        }));
+        assert_eq!(app.mdi.active_payload(), Some(&"f".to_string()));
+        assert_eq!(app.focused, Some(("f".into(), "lineEdit_1".into())));
+        assert_eq!(focus_name(&app, "f").as_deref(), Some("lineEdit_1"));
+    }
+
+    #[test]
+    fn mouse_release_keeps_tree_focus() {
+        let mut app = App::new(Params::default());
+        app.on_create_form(&serde_json::json!({
+            "form_id": "f",
+            "ui_xml": TAB_UI,
+        }));
+        let form = app.forms.get("f").unwrap();
+        let line = form.tree.find_widget("lineEdit_1").unwrap();
+        let line_rect = form.tree.widget(line).unwrap().geometry;
+        let root_rect = form.tree.widget(form.root).unwrap().geometry;
+
+        app.cursor = (line_rect.x + 4.0, line_rect.y + 4.0);
+        app.dispatch_mouse_press();
+        app.dispatch_mouse_release();
+        assert_eq!(app.focused, Some(("f".into(), "lineEdit_1".into())));
+
+        app.cursor = (root_rect.x + 2.0, root_rect.y + 2.0);
+        app.dispatch_mouse_press();
+        app.dispatch_mouse_release();
+        assert_eq!(app.focused, Some(("f".into(), "lineEdit_1".into())));
+        assert_eq!(focus_name(&app, "f").as_deref(), Some("lineEdit_1"));
+    }
+
+    #[test]
+    fn tab_cycles_focusable_widgets_in_active_form() {
+        let mut app = App::new(Params::default());
+        add_form(&mut app, "f", TAB_UI);
+        app.focus_initial_form("f");
+        assert_eq!(app.focused, Some(("f".into(), "lineEdit_1".into())));
+
+        app.tab_focus(false);
+        assert_eq!(app.focused, Some(("f".into(), "lineEdit_2".into())));
+        app.tab_focus(false);
+        assert_eq!(app.focused, None);
+        assert_eq!(app.table_focus, None);
+        assert_eq!(focus_name(&app, "f").as_deref(), Some("pushButton_1"));
+        app.tab_focus(false);
+        assert_eq!(app.focused, Some(("f".into(), "lineEdit_1".into())));
+        app.tab_focus(true);
+        assert_eq!(app.focused, None);
+        assert_eq!(focus_name(&app, "f").as_deref(), Some("pushButton_1"));
+    }
+
+    #[test]
+    fn tab_skips_disabled_widgets() {
+        let mut app = App::new(Params::default());
+        add_form(&mut app, "f", TAB_UI);
+        let form = app.forms.get_mut("f").unwrap();
+        let widget = form.tree.find_widget("lineEdit_2").unwrap();
+        form.tree.set_enabled(widget, false);
+        app.focus_initial_form("f");
+
+        app.tab_focus(false);
+        assert_eq!(app.focused, None);
+        assert_eq!(focus_name(&app, "f").as_deref(), Some("pushButton_1"));
+    }
+
+    #[test]
+    fn tab_moves_table_current_then_leaves_view() {
+        let mut app = App::new(Params::default());
+        add_form(&mut app, "f", TABLE_TAB_UI);
+        app.focus_initial_form("f");
+        let table = app
+            .forms
+            .get("f")
+            .unwrap()
+            .tree
+            .find_widget("table")
+            .unwrap();
+        assert_eq!(app.table_focus, Some(("f".into(), "table".into())));
+
+        app.tab_focus(false);
+        assert_eq!(
+            app.forms
+                .get("f")
+                .unwrap()
+                .tree
+                .table(table)
+                .unwrap()
+                .current(),
+            Some((0, 1))
+        );
+        app.tab_focus(false);
+        assert_eq!(
+            app.forms
+                .get("f")
+                .unwrap()
+                .tree
+                .table(table)
+                .unwrap()
+                .current(),
+            Some((1, 0))
+        );
+        app.tab_focus(false);
+        assert_eq!(
+            app.forms
+                .get("f")
+                .unwrap()
+                .tree
+                .table(table)
+                .unwrap()
+                .current(),
+            Some((1, 1))
+        );
+        app.tab_focus(false);
+        assert_eq!(app.table_focus, None);
+        assert_eq!(focus_name(&app, "f").as_deref(), Some("pushButton_1"));
+
+        app.tab_focus(true);
+        assert_eq!(app.table_focus, Some(("f".into(), "table".into())));
+        app.tab_focus(true);
+        assert_eq!(
+            app.forms
+                .get("f")
+                .unwrap()
+                .tree
+                .table(table)
+                .unwrap()
+                .current(),
+            Some((1, 0))
+        );
+    }
+
+    #[test]
+    fn tab_at_first_table_cell_goes_to_previous_widget() {
+        let mut app = App::new(Params::default());
+        add_form(&mut app, "f", TABLE_TAB_UI);
+        app.focus_initial_form("f");
+        let table = app
+            .forms
+            .get("f")
+            .unwrap()
+            .tree
+            .find_widget("table")
+            .unwrap();
+        app.forms
+            .get_mut("f")
+            .unwrap()
+            .tree
+            .table_mut(table)
+            .unwrap()
+            .set_current_cell(0, 0);
+
+        app.tab_focus(true);
+        assert_eq!(app.table_focus, None);
+        assert_eq!(focus_name(&app, "f").as_deref(), Some("pushButton_1"));
+    }
+
+    #[test]
+    fn tab_moves_list_and_tree_current_then_leaves_view() {
+        let mut app = App::new(Params::default());
+        add_form(&mut app, "f", LIST_TREE_TAB_UI);
+        let form = app.forms.get_mut("f").unwrap();
+        let list = form.tree.find_widget("listWidget").unwrap();
+        let tree = form.tree.find_widget("treeWidget").unwrap();
+        form.tree.set_property(
+            list,
+            "items",
+            QVariant::List(vec![
+                QVariant::String("one".into()),
+                QVariant::String("two".into()),
+            ]),
+        );
+        form.tree.set_property(
+            tree,
+            "headerLabels",
+            QVariant::List(vec![QVariant::String("Name".into())]),
+        );
+        form.tree.set_property(
+            tree,
+            "data",
+            QVariant::List(vec![QVariant::Map(vec![(
+                "text".into(),
+                QVariant::String("Root".into()),
+            )])]),
+        );
+
+        app.focus_initial_form("f");
+        assert_eq!(app.table_focus, Some(("f".into(), "listWidget".into())));
+        app.tab_focus(false);
+        assert_eq!(
+            app.forms.get("f").unwrap().tree.list(list).unwrap().current,
+            Some(1)
+        );
+        app.tab_focus(false);
+        assert_eq!(app.table_focus, Some(("f".into(), "treeWidget".into())));
+        assert_eq!(
+            app.forms.get("f").unwrap().tree.tree(tree).unwrap().current,
+            Some(0)
+        );
+        app.tab_focus(false);
+        assert_eq!(app.table_focus, None);
+        assert_eq!(focus_name(&app, "f").as_deref(), Some("pushButton_1"));
+    }
+
+    #[test]
+    fn tab_uses_active_form_only() {
+        let mut app = App::new(Params::default());
+        add_form(&mut app, "a", TAB_UI);
+        add_form(&mut app, "b", TAB_UI);
+        let form = app.forms.get_mut("a").unwrap();
+        if let Some(widget) = form.tree.find_widget("lineEdit_1") {
+            form.tree.set_focus(widget);
+        }
+        assert_eq!(focus_name(&app, "a").as_deref(), Some("lineEdit_1"));
+        assert_eq!(app.mdi.active_payload(), Some(&"b".to_string()));
+
+        app.tab_focus(false);
+        assert_eq!(focus_name(&app, "a"), None);
+        assert_eq!(focus_name(&app, "b").as_deref(), Some("lineEdit_1"));
+        assert_eq!(app.focused, Some(("b".into(), "lineEdit_1".into())));
+    }
+
+    #[test]
     fn printable_text_is_inserted() {
         assert_eq!(
             key_edit(Some("abc"), &Key::Character("abc".into())),
@@ -2499,15 +3050,15 @@ mod tests {
     #[test]
     fn enter_and_tab_are_not_typed_into_widgets() {
         // The web backend maps Enter to "\r" and Tab to "\t" in `text`.
-        // Enter is the cell-edit commit (stage 5), Tab stays a no-op —
-        // neither is ever typed into the widget.
+        // Enter commits a cell edit and Tab moves focus; neither is ever
+        // typed into the widget.
         assert_eq!(
             key_edit(Some("\r"), &Key::Named(NamedKey::Enter)),
             KeyEdit::Commit
         );
         assert_eq!(
             key_edit(Some("\t"), &Key::Named(NamedKey::Tab)),
-            KeyEdit::Ignore
+            KeyEdit::Tab
         );
         assert_eq!(
             key_edit(None, &Key::Named(NamedKey::Enter)),

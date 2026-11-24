@@ -19,6 +19,29 @@ defmodule EPlatform.DialogSession do
     {:via, Registry, {EPlatform.DialogRegistry, {application_id, form_id}}}
   end
 
+  # `Lua.Api` runs in this process, so the process dictionary is the simplest
+  # place to expose the modal parent/ref without threading a context argument
+  # through every Lua function.
+  defp expose_modal_context(state) do
+    if state.modal do
+      Process.put(:e_platform_modal, %{
+        parent: state.modal_parent,
+        ref: state.modal_ref,
+        parent_form_id: state.modal_parent_form_id,
+        mdi: state.mdi
+      })
+
+      Process.put(:e_platform_modal_sent, false)
+    end
+
+    monitor =
+      if state.modal and is_pid(state.modal_parent) do
+        Process.monitor(state.modal_parent)
+      end
+
+    %{state | modal_monitor: monitor}
+  end
+
   @impl true
   def init(opts) do
     state = %{
@@ -28,9 +51,17 @@ defmodule EPlatform.DialogSession do
       ui_file: opts.ui_file,
       lua_state: nil,
       widgets: %{},
-      form_props: %{}
+      form_props: %{},
+      modal: Map.get(opts, :modal, false),
+      mdi: Map.get(opts, :mdi, true),
+      modal_parent: Map.get(opts, :modal_parent),
+      modal_ref: Map.get(opts, :modal_ref),
+      modal_parent_form_id: Map.get(opts, :modal_parent_form_id),
+      open_opts: Map.get(opts, :open_opts, %{}),
+      modal_monitor: nil
     }
 
+    state = expose_modal_context(state)
     {:ok, state, {:continue, :boot}}
   end
 
@@ -74,25 +105,32 @@ defmodule EPlatform.DialogSession do
 
   @impl true
   def handle_cast({:dispatch, %{"command" => "formEvent"} = payload}, state) do
-    widget_name = payload["widget_name"] || payload["object_name"]
-    event = payload["event"] || payload["property"]
-
-    state =
-      try do
-        {_status, _res, lua_state} =
-          Lua.call_function(state.lua_state, :onEvent, [widget_name, event])
-
-        %{state | lua_state: lua_state}
-      rescue
-        e ->
-          Logger.error("onEvent failed form=#{state.form_id}: #{Exception.message(e)}")
-          state
-      end
-
-    if event == "Close" do
+    # A form that is already closing must not run queued events that arrived
+    # while it was blocked in a modal call. They are simply discarded.
+    if Process.get(:e_platform_closing) do
       {:stop, :normal, state}
     else
-      {:noreply, state}
+      widget_name = payload["widget_name"] || payload["object_name"]
+      event = payload["event"] || payload["property"]
+
+      state =
+        try do
+          {_status, _res, lua_state} =
+            Lua.call_function(state.lua_state, :onEvent, [widget_name, event])
+
+          %{state | lua_state: lua_state}
+        rescue
+          e ->
+            Logger.error("onEvent failed form=#{state.form_id}: #{Exception.message(e)}")
+            state
+        end
+
+      if event == "Close" do
+        _ = EPlatform.Lua.Api.notify_modal(nil)
+        {:stop, :normal, state}
+      else
+        {:noreply, state}
+      end
     end
   end
 
@@ -103,7 +141,11 @@ defmodule EPlatform.DialogSession do
   end
 
   def handle_cast({:dispatch, _payload}, state) do
-    {:noreply, state}
+    if Process.get(:e_platform_closing) do
+      {:stop, :normal, state}
+    else
+      {:noreply, state}
+    end
   end
 
   @impl true
@@ -117,7 +159,23 @@ defmodule EPlatform.DialogSession do
     {:noreply, put_in(state, [:form_props, property], value)}
   end
 
-  def handle_info(:stop_form, state), do: {:stop, :normal, state}
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, state)
+      when ref == state.modal_monitor do
+    # The parent disappeared while this modal was open; close the child on the
+    # client as well. The parent is gone, so there is nobody to notify.
+    broadcast(state.application_id, %{
+      "command" => "closeForm",
+      "application_id" => state.application_id,
+      "form_id" => state.form_id
+    })
+
+    {:stop, :normal, state}
+  end
+
+  def handle_info(:stop_form, state) do
+    _ = EPlatform.Lua.Api.notify_modal(nil)
+    {:stop, :normal, state}
+  end
 
   # Late/timeout getProperty replies and anything else — ignore.
   def handle_info(_msg, state), do: {:noreply, state}

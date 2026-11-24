@@ -27,8 +27,9 @@ defmodule EPlatformWeb.PlatformChannel do
     application_id = socket.assigns.application_id
     lua_file = params["lua_file"] || ""
     ui_file = params["ui_file"] || ""
+    opts = %{modal: params["modal"] == true, mdi: params["mdi"] != false}
 
-    case DialogManager.start_dialog(application_id, lua_file, ui_file) do
+    case DialogManager.start_dialog(application_id, lua_file, ui_file, opts) do
       {:ok, form_id} ->
         socket = assign(socket, :form_ids, MapSet.put(socket.assigns.form_ids, form_id))
         {:reply, {:ok, %{"form_id" => form_id}}, socket}
