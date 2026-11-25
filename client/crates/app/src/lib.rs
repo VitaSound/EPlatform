@@ -448,6 +448,8 @@ struct App {
     /// Start of the active touch, for long-press detection.
     touch_start: Option<(f32, f32, f64)>,
     long_tap_sent: bool,
+    /// Time of the last touch event, used to detect a missing `Ended`.
+    last_touch_ms: f64,
     /// Last click/tap, for word selection on a double tap.
     last_tap: Option<(String, String, f32, f32, f64)>,
     /// Last rectangle sent to the mobile HTML input overlay.
@@ -507,6 +509,7 @@ impl App {
             secondary_touches: Vec::new(),
             touch_start: None,
             long_tap_sent: false,
+            last_touch_ms: 0.0,
             last_tap: None,
             web_input_rect: None,
             chrome: AppChrome::default(),
@@ -4164,6 +4167,27 @@ impl App {
         self.update_hover(None);
     }
 
+    /// A new primary touch means any previous drag is over, even if the
+    /// browser never delivered its `Ended` event (iOS sometimes does this).
+    /// Called before `pointer_moved`, otherwise the stale drag would move
+    /// the window to the new touch position.
+    fn prepare_primary_touch(&mut self, id: u64) {
+        if self
+            .secondary_touches
+            .iter()
+            .any(|(secondary, _, _)| *secondary == id)
+        {
+            return;
+        }
+        if self.primary_touch.is_none() || self.primary_touch == Some(id) {
+            self.dragging = None;
+            self.column_drag = None;
+            self.left_down = false;
+            self.cancel_mouse_grabs();
+            self.primary_touch = Some(id);
+        }
+    }
+
     /// Long-press context event for the widget under the active touch.
     fn send_context_menu(&mut self) {
         let Some((form_id, widget_name, _class)) = self.hit_test(self.cursor) else {
@@ -4445,6 +4469,20 @@ impl ApplicationHandler for App {
                 // are lifted (pinch/two-finger scroll is a separate task).
                 let x = touch.location.x as f32 / self.ui_scale();
                 let y = touch.location.y as f32 / self.ui_scale();
+                let now = now_ms();
+                // Some mobile browsers drop `Ended` when a drag finishes near
+                // the screen edge. The next tap then arrives as a `Moved` at
+                // the new position; without this guard the stale drag would
+                // teleport the window there.
+                let stale_jump = (self.cursor.0 - x).hypot(self.cursor.1 - y) > 24.0
+                    && now - self.last_touch_ms > 120.0;
+                if touch.phase == TouchPhase::Moved && self.dragging.is_some() && stale_jump {
+                    self.dragging = None;
+                    self.column_drag = None;
+                    self.left_down = false;
+                    self.cancel_mouse_grabs();
+                }
+                self.last_touch_ms = now;
                 if let Some(index) = self
                     .secondary_touches
                     .iter()
@@ -4481,10 +4519,12 @@ impl ApplicationHandler for App {
                         return;
                     }
                 }
+                if touch.phase == TouchPhase::Started {
+                    self.prepare_primary_touch(touch.id);
+                }
                 self.pointer_moved(touch.location.x, touch.location.y);
                 match touch.phase {
                     TouchPhase::Started => {
-                        self.primary_touch = Some(touch.id);
                         self.touch_start = Some((self.cursor.0, self.cursor.1, now_ms()));
                         self.long_tap_sent = false;
                         self.dispatch_mouse_press();
@@ -4587,8 +4627,8 @@ mod tests {
     use super::{
         append_paint_commands, backend_with_version, base64_encode, cursor_icon_for_hit, gfx,
         icon_url, key_edit, now_ms, percent_decode, png_data_url, resized_frame, shell,
-        text_input_action, App, AppChrome, AppChromeAction, KeyEdit, Params, QtForm, WindowLayer,
-        QMDI_TITLE_H,
+        text_input_action, App, AppChrome, AppChromeAction, Drag, KeyEdit, MdiDragMode, Params,
+        QtForm, WindowLayer, QMDI_TITLE_H,
     };
     use rqt::core::QVariant;
     use rqt::gui::QRectF;
@@ -6111,6 +6151,27 @@ mod tests {
         let form = &app.forms["f"];
         assert!(!form.tree.widget(edit).unwrap().under_mouse);
         assert_eq!(form.under_mouse_widget, None);
+    }
+
+    #[test]
+    fn new_primary_touch_discards_stale_drag() {
+        let mut app = App::new(Params::default());
+        app.primary_touch = Some(7);
+        app.left_down = true;
+        app.dragging = Some(Drag {
+            layer: WindowLayer::Floating,
+            index: 0,
+            mode: MdiDragMode::Move,
+            last: (100.0, 100.0),
+            origin_frame: QRectF::new(10.0, 10.0, 300.0, 200.0),
+            origin_cursor: (100.0, 100.0),
+        });
+
+        app.prepare_primary_touch(7);
+
+        assert!(app.dragging.is_none());
+        assert!(!app.left_down);
+        assert_eq!(app.primary_touch, Some(7));
     }
 
     #[test]

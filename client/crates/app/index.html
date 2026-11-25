@@ -207,24 +207,6 @@
           window.visualViewport.addEventListener("resize", resetViewportScroll);
         }
 
-        // iOS only opens the keyboard from a user gesture. Rust focuses the
-        // hidden field on pointer release, which is sometimes too late after
-        // the keyboard was dismissed; re-focus at touchstart as well.
-        window.addEventListener(
-          "touchstart",
-          function () {
-            if (active) focusTextInput();
-          },
-          { capture: true, passive: true },
-        );
-        window.addEventListener(
-          "pointerdown",
-          function () {
-            if (active) focusTextInput();
-          },
-          { capture: true, passive: true },
-        );
-
         ta.addEventListener("compositionstart", function () {
           composing = true;
           suppressNextInput = false;

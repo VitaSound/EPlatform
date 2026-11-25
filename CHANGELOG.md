@@ -28,6 +28,13 @@
   только после первого фокуса. На десктопе overlay остаётся
   `pointer-events:none`. Rect обновляется Rust-ом при фокусе/движении
   окна; повторный `focus()` каждый кадр убран.
+- **Stale drag на touch.** Некоторые mobile-браузеры не присылают
+  `TouchPhase::Ended`; следующий тап приходит как `Moved` в новую точку.
+  Теперь новый primary touch или `Moved` после паузы >120 мс со скачком
+  >24 px сбрасывают `dragging`/`left_down`, поэтому окно не телепортируется
+  к месту нового тапа. Убран глобальный `touchstart`-focus, который мог
+  мешать завершению жеста. Воспроизведено CDP: drag без `touchend`,
+  пауза, тап — окно остаётся на месте drag-а.
 - **Viewport lock на iOS.** `html/body/canvas` зафиксированы (`position:
   fixed`, `inset:0`), скролл сбрасывается на `focus`/`scroll`/
   `visualViewport.resize`. Из-за открытия клавиатуры Safari больше не
@@ -78,8 +85,8 @@
   `expandAll`/`collapseAll`; `childrenCollapsible` не добавляли.
 - **Review.** `scripts/review.sh` пересобран: `qss/52_checks` 4.88 → 4.07,
   `qss/55_disabled` 11.44 → 4.41; браузерный скриншот QSS-формы проверен.
-- **Тесты.** `cargo test --workspace` — 199 passed, 1 ignored
-  (app 53+1 ignored, form-xml 13, rqt 133); wasm-check и `cargo fmt
+- **Тесты.** `cargo test --workspace` — 202 passed, 1 ignored
+  (app 56+1 ignored, form-xml 13, rqt 133); wasm-check и `cargo fmt
   --check` зелёные.
 
 ### Волна 0.16: combo popup, collapse/expand tree, `QSplitter`, QSS

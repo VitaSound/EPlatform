@@ -25,8 +25,8 @@ long tap, double tap, multi-touch и two-finger scroll проверены в
 ## Baseline (проверено 2026-11-25, после волны 0.17.4)
 
 ```
-cargo test --workspace   → 199 passed; 0 failed; 1 ignored
-  app 53 (1 ignored) · form-xml 13 · rqt 133
+cargo test --workspace   → 202 passed; 0 failed; 1 ignored
+  app 56 (1 ignored) · form-xml 13 · rqt 133
 mix test (server/)       → 30 passed
 cargo check -p app --target wasm32-unknown-unknown → ok
 ```
