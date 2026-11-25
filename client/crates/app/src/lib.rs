@@ -450,6 +450,8 @@ struct App {
     long_tap_sent: bool,
     /// Last click/tap, for word selection on a double tap.
     last_tap: Option<(String, String, f32, f32, f64)>,
+    /// Last rectangle sent to the mobile HTML input overlay.
+    web_input_rect: Option<rqt::gui::QRectF>,
     /// Application-level (browser chrome) properties from `setAppProperty`.
     chrome: AppChrome,
     /// Last size reported by `WindowEvent::Resized`.
@@ -506,6 +508,7 @@ impl App {
             touch_start: None,
             long_tap_sent: false,
             last_tap: None,
+            web_input_rect: None,
             chrome: AppChrome::default(),
             last_size: Rc::new(Cell::new(None)),
         }
@@ -1119,6 +1122,7 @@ impl App {
                 self.focus_initial_form(&active);
             }
         }
+        self.sync_web_text_input();
     }
 
     fn remove_all_forms(&mut self) {
@@ -1134,6 +1138,7 @@ impl App {
         self.editing = None;
         self.column_drag = None;
         self.line_select = None;
+        self.sync_web_text_input();
     }
 
     fn area(&self, layer: WindowLayer) -> &QMdiArea<String> {
@@ -1714,6 +1719,7 @@ impl App {
         if let Some(form) = self.forms.get_mut(form_id) {
             form.tree.set_geometry(form.root, content);
         }
+        self.sync_web_text_input();
     }
 
     /// Keep the browser cursor in sync with the MDI resize border under the
@@ -2001,6 +2007,7 @@ impl App {
                     if let Some(form) = self.forms.get_mut(&form_id) {
                         form.tree.translate(form.root, dx, dy);
                     }
+                    self.sync_web_text_input();
                 }
             }
             MdiDragMode::Resize(hit) => {
@@ -2183,6 +2190,7 @@ impl App {
                 }
                 self.focused = None;
                 self.table_focus = None;
+                self.sync_web_text_input();
                 return;
             }
         }
@@ -2547,9 +2555,20 @@ impl App {
         tree.sync_bars(rqt::gui::QSizeF::new(viewport.width, body_height));
     }
 
-    /// Show/hide the off-screen field that owns the soft keyboard.
-    fn sync_web_text_input(&self) {
-        set_web_text_input_active(self.focused.is_some());
+    /// Show/hide the mobile HTML input and keep its transparent hit area over
+    /// the focused `QLineEdit`. Only sends a change when the rect changes;
+    /// this runs from focus/layout updates, not every frame.
+    fn sync_web_text_input(&mut self) {
+        let rect = self.focused.as_ref().and_then(|(form_id, name)| {
+            let form = self.forms.get(form_id)?;
+            let widget = form.tree.find_widget(name)?;
+            form.tree.widget(widget).map(|node| node.geometry)
+        });
+        if self.web_input_rect == rect {
+            return;
+        }
+        self.web_input_rect = rect;
+        set_web_text_input(rect.is_some(), rect);
     }
 
     /// Apply messages from the hidden mobile field in arrival order.
@@ -2731,6 +2750,7 @@ impl App {
                         form.tree.clear_focus();
                     }
                 }
+                self.sync_web_text_input();
             }
             KeyEdit::Commit => {
                 let Some((form_id, name)) = self.focused.clone() else {
@@ -3032,6 +3052,7 @@ impl App {
         {
             self.table_focus = None;
         }
+        self.sync_web_text_input();
     }
 
     fn clear_inactive_focus(&mut self, active: &str) {
@@ -3055,6 +3076,7 @@ impl App {
         {
             self.table_focus = None;
         }
+        self.sync_web_text_input();
     }
 
     fn focus_initial_form(&mut self, form_id: &str) {
@@ -3107,6 +3129,7 @@ impl App {
                 self.table_focus = None;
             }
         }
+        self.sync_web_text_input();
         Self::log(format!("focus {name} ({class})"));
     }
 
@@ -3390,15 +3413,30 @@ fn install_web_text_input() {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn set_web_text_input_active(_active: bool) {}
+fn set_web_text_input(_active: bool, _rect: Option<rqt::gui::QRectF>) {}
 
 #[cfg(target_arch = "wasm32")]
-fn set_web_text_input_active(active: bool) {
+fn set_web_text_input(active: bool, rect: Option<rqt::gui::QRectF>) {
     use wasm_bindgen::{JsCast, JsValue};
 
     let Some(window) = web_sys::window() else {
         return;
     };
+    if let Some(rect) = rect {
+        if let Ok(setter) =
+            js_sys::Reflect::get(window.as_ref(), &JsValue::from_str("__epSetTextInputRect"))
+        {
+            if let Ok(setter) = setter.dyn_into::<js_sys::Function>() {
+                let _ = setter.call4(
+                    &JsValue::NULL,
+                    &JsValue::from_f64(rect.x as f64),
+                    &JsValue::from_f64(rect.y as f64),
+                    &JsValue::from_f64(rect.width as f64),
+                    &JsValue::from_f64(rect.height as f64),
+                );
+            }
+        }
+    }
     if let Ok(setter) = js_sys::Reflect::get(
         window.as_ref(),
         &JsValue::from_str("__epSetTextInputActive"),

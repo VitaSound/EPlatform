@@ -79,7 +79,7 @@
           "border:0",
           "padding:0",
           "margin:0",
-          "z-index:-1",
+          "z-index:1000",
           "font-size:16px",
           "caret-color:transparent",
           "background:transparent",
@@ -95,6 +95,34 @@
         var active = false;
         var composing = false;
         var suppressNextInput = false;
+        var inputRect = { x: 0, y: 0, w: 1, h: 1 };
+        // On phones the transparent textarea becomes a real hit target over
+        // the focused QLineEdit while the keyboard is closed. Tapping it is a
+        // native input tap, so iOS reopens the keyboard every time.
+        var overlayEnabled =
+          window.matchMedia("(pointer: coarse)").matches ||
+          (navigator.maxTouchPoints || 0) > 1;
+
+        function applyRect() {
+          if (!active) return;
+          ta.style.left = inputRect.x + "px";
+          ta.style.top = inputRect.y + "px";
+          ta.style.width = Math.max(1, inputRect.w) + "px";
+          ta.style.height = Math.max(1, inputRect.h) + "px";
+        }
+
+        function updatePointerEvents() {
+          // On touch devices the input itself must receive every tap over the
+          // focused line edit. This is the only reliable way to ask iOS for
+          // the keyboard again after it was dismissed.
+          ta.style.pointerEvents = active && overlayEnabled ? "auto" : "none";
+        }
+
+        window.__epSetTextInputRect = function (x, y, w, h) {
+          inputRect = { x: x, y: y, w: w, h: h };
+          applyRect();
+          updatePointerEvents();
+        };
 
         function send(kind, text) {
           if (typeof window.__epTextInput === "function") {
@@ -124,20 +152,31 @@
         window.__epSetTextInputActive = function (next) {
           next = !!next;
           if (next === active) {
-            if (next) focusTextInput();
+            applyRect();
+            updatePointerEvents();
             return;
           }
           active = next;
           if (active) {
             ta.value = "";
+            applyRect();
+            updatePointerEvents();
             focusTextInput();
           } else {
             ta.blur();
             ta.value = "";
             composing = false;
             suppressNextInput = false;
+            ta.style.left = "0";
+            ta.style.top = "0";
+            ta.style.width = "1px";
+            ta.style.height = "1px";
+            ta.style.pointerEvents = "none";
           }
         };
+
+        ta.addEventListener("focus", updatePointerEvents);
+        ta.addEventListener("blur", updatePointerEvents);
 
         // iOS only opens the keyboard from a user gesture. Rust focuses the
         // hidden field on pointer release, which is sometimes too late after
