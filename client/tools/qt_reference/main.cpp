@@ -1,4 +1,5 @@
 #include <QImage>
+#include <functional>
 #include <QLayout>
 #include <QPainter>
 #include <QScrollBar>
@@ -6,6 +7,12 @@
 #include <QApplication>
 #include <QFile>
 #include <QFormLayout>
+#include <QMainWindow>
+#include <QMenuBar>
+#include <QMenu>
+#include <QStatusBar>
+#include <QToolBar>
+#include <QAction>
 #include <QFont>
 #include <QFontMetricsF>
 #include <QJsonArray>
@@ -127,6 +134,109 @@ static void collect(QWidget *widget, QWidget *root, QJsonArray &array)
     }
 }
 
+static QJsonObject widgetChrome(QWidget *widget, QWidget *root)
+{
+    if (!widget)
+        return QJsonObject{{"present", false}};
+    const QPoint pos = widget->mapTo(root, QPoint(0, 0));
+    const QSize hint = widget->sizeHint();
+    return QJsonObject{
+        {"present", true},
+        {"class", QString::fromLatin1(widget->metaObject()->className())},
+        {"name", widget->objectName()},
+        {"x", pos.x()},
+        {"y", pos.y()},
+        {"w", widget->width()},
+        {"h", widget->height()},
+        {"hint_w", hint.width()},
+        {"hint_h", hint.height()},
+    };
+}
+
+static QJsonObject actionInfo(QAction *action, const std::function<QRect(QAction *)> &geometry)
+{
+    if (!action)
+        return QJsonObject();
+    const QRect rect = geometry ? geometry(action) : QRect();
+    return QJsonObject{
+        {"text", action->text()},
+        {"name", action->objectName()},
+        {"separator", action->isSeparator()},
+        {"enabled", action->isEnabled()},
+        {"checkable", action->isCheckable()},
+        {"checked", action->isChecked()},
+        {"visible", action->isVisible()},
+        {"x", rect.x()},
+        {"y", rect.y()},
+        {"w", rect.width()},
+        {"h", rect.height()},
+    };
+}
+
+static QJsonObject dumpMenus(QMenuBar *menuBar)
+{
+    QJsonArray menuArray;
+    for (QAction *top : menuBar->actions()) {
+        QMenu *menu = top->menu();
+        if (!menu)
+            continue;
+        menu->ensurePolished();
+        const QSize hint = menu->sizeHint();
+        QJsonArray actions;
+        for (QAction *action : menu->actions()) {
+            actions.append(actionInfo(action, [menu](QAction *a) {
+                return menu->actionGeometry(a);
+            }));
+        }
+        menuArray.append(QJsonObject{
+            {"name", menu->objectName()},
+            {"title", menu->title()},
+            {"hint_w", hint.width()},
+            {"hint_h", hint.height()},
+            {"actions", actions},
+        });
+    }
+    return QJsonObject{{"menus", menuArray}};
+}
+
+static QJsonObject dumpMainWindow(QMainWindow *window, QWidget *root)
+{
+    QJsonObject object;
+    object["menubar"] = widgetChrome(window->menuBar(), root);
+    object["statusbar"] = widgetChrome(window->statusBar(), root);
+    object["central"] = widgetChrome(window->centralWidget(), root);
+    if (QMenuBar *menuBar = window->menuBar()) {
+        QJsonArray actions;
+        for (QAction *action : menuBar->actions()) {
+            actions.append(actionInfo(action, [menuBar](QAction *a) {
+                return menuBar->actionGeometry(a);
+            }));
+        }
+        object["menubar_actions"] = actions;
+        object["menus"] = dumpMenus(menuBar)["menus"];
+    }
+    QJsonArray toolbars;
+    const auto bars = window->findChildren<QToolBar *>(QString(), Qt::FindDirectChildrenOnly);
+    for (QToolBar *toolbar : bars) {
+        QJsonArray actions;
+        for (QAction *action : toolbar->actions()) {
+            actions.append(actionInfo(action, [toolbar](QAction *a) {
+                return toolbar->actionGeometry(a);
+            }));
+        }
+        const QSize icon = toolbar->iconSize();
+        object["toolbar_icon_w"] = icon.width();
+        object["toolbar_icon_h"] = icon.height();
+        object["toolbar_style"] = int(toolbar->toolButtonStyle());
+        toolbars.append(QJsonObject{
+            {"chrome", widgetChrome(toolbar, root)},
+            {"actions", actions},
+        });
+    }
+    object["toolbars"] = toolbars;
+    return object;
+}
+
 int main(int argc, char **argv)
 {
     QApplication app(argc, argv);
@@ -205,6 +315,9 @@ int main(int argc, char **argv)
         dumpLayout(layout, items);
         output["root_layout_items"] = items;
     }
+
+    if (auto *mainWindow = qobject_cast<QMainWindow *>(root))
+        output["main_window"] = dumpMainWindow(mainWindow, root);
 
     QJsonDocument document(output);
     QFile out;

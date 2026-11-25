@@ -4605,6 +4605,235 @@ mod tests {
         })
     }
 
+    fn rasterize_batches(
+        batches: &[gfx::PaintBatch],
+        width: u32,
+        height: u32,
+    ) -> rqt::raster::QRasterImage {
+        use rqt::gui::{QColor, QFont, QPaintCommand, QRectF};
+
+        let scalar = |color: [f32; 4]| QColor::rgba(color[0], color[1], color[2], color[3]);
+        let mut commands = Vec::new();
+        for batch in batches {
+            match batch {
+                gfx::PaintBatch::Rects(rects) => {
+                    for rect in rects {
+                        commands.push(QPaintCommand::FillRect {
+                            rect: QRectF::new(rect.x, rect.y, rect.w, rect.h),
+                            color: scalar(rect.color),
+                        });
+                    }
+                }
+                gfx::PaintBatch::Text(texts) => {
+                    for text in texts {
+                        let [left, top, right, bottom] = text.clip;
+                        commands.push(QPaintCommand::Save);
+                        commands.push(QPaintCommand::SetClip {
+                            rect: Some(QRectF::new(
+                                left as f32,
+                                top as f32,
+                                (right - left) as f32,
+                                (bottom - top) as f32,
+                            )),
+                        });
+                        commands.push(QPaintCommand::DrawText {
+                            rect: QRectF::new(
+                                text.x,
+                                text.y,
+                                text.wrap_w.max(1.0),
+                                gfx::LINE_HEIGHT.max(1.0),
+                            ),
+                            text: text.text.clone(),
+                            font: QFont::default(),
+                            color: scalar(text.color),
+                        });
+                        commands.push(QPaintCommand::Restore);
+                    }
+                }
+            }
+        }
+        rqt::raster::rasterize(&commands, width, height, QColor::rgb(0, 0, 0))
+    }
+
+    fn compare_shell_raster(app: &App, name: &str, reference: &[u8], width: u32, height: u32) {
+        let reference = rqt::raster::QRasterImage::from_png_bytes(reference)
+            .unwrap_or_else(|error| panic!("{name} golden png: {error}"));
+        let image = rasterize_batches(&app.collect_paint(), width, height);
+        let _ = image.save_png(format!("/tmp/app_{name}.png"));
+        assert_eq!(image.width, reference.width, "{name} width");
+        assert_eq!(image.height, reference.height, "{name} height");
+
+        let mut total = 0u64;
+        let mut count = 0u64;
+        let mut different = 0u64;
+        for (left, right) in image
+            .pixels
+            .chunks_exact(4)
+            .zip(reference.pixels.chunks_exact(4))
+        {
+            let mut pixel_diff = 0u32;
+            for channel in 0..3 {
+                let diff = u32::from(left[channel].abs_diff(right[channel]));
+                total += u64::from(diff);
+                pixel_diff = pixel_diff.max(diff);
+                count += 1;
+            }
+            if pixel_diff > 30 {
+                different += 1;
+            }
+        }
+        let mean = total as f64 / count.max(1) as f64;
+        eprintln!(
+            "{name}: mean channel diff {mean:.2}, pixels >30: {different} / {}",
+            width * height
+        );
+        assert!(mean < 2.0, "{name}: mean diff {mean}");
+        assert!(
+            different < (width * height) as u64 / 50,
+            "{name}: pixels >30 {different}"
+        );
+    }
+
+    fn shell_popup_app() -> App {
+        use form_xml::PropValue;
+
+        let mut app = App::new(Params {
+            full: true,
+            main_lua: Some("main.lua".into()),
+            ..Params::default()
+        });
+        app.shell
+            .set_menu(&PropValue::List(vec![PropValue::Map(vec![
+                ("title".into(), PropValue::Str("File".into())),
+                (
+                    "children".into(),
+                    PropValue::List(vec![
+                        PropValue::Map(vec![
+                            ("title".into(), PropValue::Str("Open".into())),
+                            ("action".into(), PropValue::Str("open_lua".into())),
+                        ]),
+                        PropValue::Map(vec![
+                            ("title".into(), PropValue::Str("Save".into())),
+                            ("action".into(), PropValue::Str("save".into())),
+                        ]),
+                    ]),
+                ),
+            ])]));
+        app.shell.toolbar = vec![shell::MenuItem {
+            title: "ToolbarLabel".into(),
+            ..Default::default()
+        }];
+        app.shell.toolbar_visible = true;
+        let viewport = QRectF::new(0.0, 0.0, 480.0, 240.0);
+        app.floating.set_viewport(viewport);
+        app.mdi.set_viewport(app.shell.central(viewport));
+        app.shell.open_path = Some(vec![0]);
+        app
+    }
+
+    fn shell_nested_app() -> App {
+        use form_xml::PropValue;
+
+        let mut app = App::new(Params {
+            full: true,
+            main_lua: Some("main.lua".into()),
+            ..Params::default()
+        });
+        app.shell
+            .set_menu(&PropValue::List(vec![PropValue::Map(vec![
+                ("title".into(), PropValue::Str("View".into())),
+                (
+                    "children".into(),
+                    PropValue::List(vec![PropValue::Map(vec![
+                        ("title".into(), PropValue::Str("Submenu".into())),
+                        (
+                            "children".into(),
+                            PropValue::List(vec![PropValue::Map(vec![
+                                ("title".into(), PropValue::Str("Nested".into())),
+                                ("action".into(), PropValue::Str("open_lua".into())),
+                            ])]),
+                        ),
+                    ])]),
+                ),
+            ])]));
+        let viewport = QRectF::new(0.0, 0.0, 480.0, 260.0);
+        app.floating.set_viewport(viewport);
+        app.mdi.set_viewport(app.shell.central(viewport));
+        app.shell.open_path = Some(vec![0, 0]);
+        app
+    }
+
+    fn shell_windows_app() -> App {
+        let mut app = App::new(Params::default());
+        app.forms
+            .insert("mdi".into(), card_form(32.0, 54.0, "MdiWindow"));
+        app.mdi.add_subwindow(
+            "MdiWindow",
+            "mdi".into(),
+            rqt::gui::QSizeF::new(300.0, 200.0),
+        );
+        app.forms
+            .insert("float".into(), card_form(80.0, 90.0, "FloatingWindow"));
+        app.floating.add_subwindow(
+            "FloatingWindow",
+            "float".into(),
+            rqt::gui::QSizeF::new(300.0, 200.0),
+        );
+        let viewport = QRectF::new(0.0, 0.0, 520.0, 360.0);
+        app.floating.set_viewport(viewport);
+        app.mdi.set_viewport(viewport);
+        app
+    }
+
+    #[test]
+    #[ignore = "regenerate committed shell raster goldens"]
+    fn regenerate_shell_goldens() {
+        let fixtures = format!("{}/tests/fixtures", env!("CARGO_MANIFEST_DIR"));
+        for (name, app, width, height) in [
+            ("shell_popup_toolbar", shell_popup_app(), 480, 240),
+            ("shell_nested_menu", shell_nested_app(), 480, 260),
+            ("shell_overlapping_windows", shell_windows_app(), 520, 360),
+        ] {
+            let image = rasterize_batches(&app.collect_paint(), width, height);
+            image
+                .save_png(format!("{fixtures}/{name}.png"))
+                .unwrap_or_else(|error| panic!("write {name}: {error}"));
+        }
+    }
+
+    #[test]
+    fn shell_popup_over_toolbar_raster_matches_golden() {
+        compare_shell_raster(
+            &shell_popup_app(),
+            "shell_popup_toolbar",
+            include_bytes!("../tests/fixtures/shell_popup_toolbar.png"),
+            480,
+            240,
+        );
+    }
+
+    #[test]
+    fn shell_nested_menu_raster_matches_golden() {
+        compare_shell_raster(
+            &shell_nested_app(),
+            "shell_nested_menu",
+            include_bytes!("../tests/fixtures/shell_nested_menu.png"),
+            480,
+            260,
+        );
+    }
+
+    #[test]
+    fn shell_overlapping_windows_raster_matches_golden() {
+        compare_shell_raster(
+            &shell_windows_app(),
+            "shell_overlapping_windows",
+            include_bytes!("../tests/fixtures/shell_overlapping_windows.png"),
+            520,
+            360,
+        );
+    }
+
     #[test]
     fn paint_command_stream_keeps_rect_text_rect_text_order() {
         use rqt::gui::{QColor, QPainter, QRectF};

@@ -154,6 +154,13 @@ defmodule EPlatform.LuaModulesTest do
     }
 
     assert_push "command", %{
+      "command" => "createForm",
+      "form_id" => ^child_id,
+      "mode" => "full",
+      "placement" => "mdi"
+    }
+
+    assert_push "command", %{
       "command" => "setFormProperty",
       "form_id" => ^child_id,
       "property" => "windowTitle",

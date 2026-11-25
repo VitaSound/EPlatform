@@ -6,8 +6,8 @@
 ## Baseline
 
 ```
-cargo test --workspace   → 164 passed; 0 failed
-  app 43 · form-xml 13 · rqt 108
+cargo test --workspace   → 168 passed; 0 failed; 1 ignored
+  app 47 (1 ignored) · form-xml 13 · rqt 108
 mix test (server/)       → 30 passed; 0 failed
 ```
 
@@ -113,7 +113,7 @@ mix test (server/)       → 30 passed; 0 failed
 1. **Box-layout рост:** `QBoxLayout` должен делить избыток между
    виджетами с `maximumSize > hint` (как `qGeomCalc`), а не только
    отдавать его в зазоры; отдельный шаг с golden-тестом.
-2. **0.14.9:** golden-снимки menu/statusbar (0.14.8 закрыт).
+2. Дальнейшие layout-фронты — вне волны 0.14.
 
 ### Попутно исправлено
 
@@ -123,24 +123,36 @@ mix test (server/)       → 30 passed; 0 failed
   применяется (`gfx.resize`) сразу после создания `Gfx`, затем
   `request_redraw()`. Проверено: `canvas` = `1280x657` без ресайза окна.
 
-## Application shell 0.14 — ✅ 0.14.1–0.14.8
+### 0.15.5 Golden/визуальный diff — ✅
+
+- `rasterize_batches` в app-тестах проигрывает `gfx::PaintBatch` через
+  `rqt::raster` (rects + clipped text).
+- Эталоны: `client/crates/app/tests/fixtures/shell_popup_toolbar.png`,
+  `shell_nested_menu.png`, `shell_overlapping_windows.png`; тесты
+  `shell_*_raster_matches_golden` сравнивают реальный `collect_paint()`.
+- Ignored `regenerate_shell_goldens` — команда перегенерации эталонов.
+- Покрывает возврат text-masking, порядок popup→nested и
+  MDI→top-level наложение.
+
+## Application shell 0.14 — ✅ 0.14.1–0.14.9
 
 Главное окно как `QMainWindow`-аналог: menu + toolbar + central
 `QMdiArea` + statusbar; формы — MDI или top-level; application/window modal;
 запуск full (`?main=...`) и standalone (`?lua=...`, без главного окна).
 
 - Полный план: `docs/application-shell-plan.md` (§12 — статус реализации).
-- 0.14.1–0.14.8 реализованы; `QMainWindow.ui` грузит static
+- 0.14.1–0.14.9 реализованы; `QMainWindow.ui` грузит static
   menu/toolbar/status/title, Lua `set_menu`/`setToolBar` их заменяют.
-- 0.14.9 — браузерные сценарии full/standalone/static mainwindow
-  проверены, golden-снимки menu/statusbar ещё не зафиксированы.
+- 0.14.9: Qt6 golden меню/toolbar/status/central (1 px) и браузерные
+  сценарии full/standalone/top-level siblings/modal проверены.
 - `mdi` и `modal` разведены; `createForm` несёт `role`/`mode`/
   `placement`/`modal_scope`; main-сессия владеет top-level формами.
 - Этап не входит в 0.12/0.13 и не меняет их порядок.
 
 ## Paint order 0.15 — ✅ закрыто
 
-Упорядоченный display list: `gfx::PaintBatch::{Rects,Text}` вместо двух
+Упорядоченный display list и golden shell: `gfx::PaintBatch::{Rects,Text}`
+вместо двух
 глобальных пулов; `append_paint_commands` сохраняет порядок команд, а
 `gfx::render` проигрывает батчи в одном pass (rect-диапазоны и отдельный
 glyphon renderer на текстовый батч). Порядок слоёв: shell → MDI →

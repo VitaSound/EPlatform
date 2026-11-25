@@ -45,6 +45,7 @@
   </widget>
   <widget class="QToolBar" name="toolBar">
    <property name="windowTitle"><string>Панель</string></property>
+   <property name="toolButtonStyle"><enum>Qt::ToolButtonTextBesideIcon</enum></property>
    <addaction name="actionOpen"/>
    <addaction name="separator"/>
    <addaction name="actionExit"/>

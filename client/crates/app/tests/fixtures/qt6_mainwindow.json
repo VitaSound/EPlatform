@@ -1,0 +1,502 @@
+{
+    "font": {
+        "ascent": 13,
+        "descent": 3.296875,
+        "family": "DejaVu Sans",
+        "height": 16.296875,
+        "m_advance": 12.078125,
+        "pixel_size": 14,
+        "textlabel_advance": 66.015625,
+        "x_advance": 8.28125
+    },
+    "form_class": "QMainWindow",
+    "form_name": "MainWindow",
+    "geometry": {
+        "h": 600,
+        "w": 800,
+        "x": 0,
+        "y": 0
+    },
+    "layout": {
+        "bottom": 11,
+        "class": "QMainWindowLayout",
+        "left": 11,
+        "right": 11,
+        "spacing": 6,
+        "top": 11
+    },
+    "main_window": {
+        "central": {
+            "class": "QWidget",
+            "h": 517,
+            "hint_h": 400,
+            "hint_w": 533,
+            "name": "centralwidget",
+            "present": true,
+            "w": 800,
+            "x": 0,
+            "y": 61
+        },
+        "menubar": {
+            "class": "QMenuBar",
+            "h": 22,
+            "hint_h": 22,
+            "hint_w": 96,
+            "name": "menubar",
+            "present": true,
+            "w": 800,
+            "x": 0,
+            "y": 0
+        },
+        "menubar_actions": [
+            {
+                "checkable": false,
+                "checked": false,
+                "enabled": true,
+                "h": 22,
+                "name": "",
+                "separator": false,
+                "text": "Файл",
+                "visible": true,
+                "w": 47,
+                "x": 6,
+                "y": 0
+            },
+            {
+                "checkable": false,
+                "checked": false,
+                "enabled": true,
+                "h": 22,
+                "name": "",
+                "separator": false,
+                "text": "Вид",
+                "visible": true,
+                "w": 37,
+                "x": 59,
+                "y": 0
+            }
+        ],
+        "menus": [
+            {
+                "actions": [
+                    {
+                        "checkable": false,
+                        "checked": false,
+                        "enabled": true,
+                        "h": 24,
+                        "name": "actionOpen",
+                        "separator": false,
+                        "text": "Тестовая форма",
+                        "visible": true,
+                        "w": 179,
+                        "x": 0,
+                        "y": 0
+                    },
+                    {
+                        "checkable": false,
+                        "checked": false,
+                        "enabled": true,
+                        "h": 2,
+                        "name": "",
+                        "separator": true,
+                        "text": "",
+                        "visible": true,
+                        "w": 179,
+                        "x": 0,
+                        "y": 24
+                    },
+                    {
+                        "checkable": false,
+                        "checked": false,
+                        "enabled": true,
+                        "h": 24,
+                        "name": "actionExit",
+                        "separator": false,
+                        "text": "Выход",
+                        "visible": true,
+                        "w": 179,
+                        "x": 0,
+                        "y": 26
+                    }
+                ],
+                "hint_h": 50,
+                "hint_w": 179,
+                "name": "menuFile",
+                "title": "Файл"
+            },
+            {
+                "actions": [
+                ],
+                "hint_h": -1,
+                "hint_w": -1,
+                "name": "menuView",
+                "title": "Вид"
+            }
+        ],
+        "statusbar": {
+            "class": "QStatusBar",
+            "h": 22,
+            "hint_h": 22,
+            "hint_w": 20,
+            "name": "statusbar",
+            "present": true,
+            "w": 800,
+            "x": 0,
+            "y": 578
+        },
+        "toolbar_icon_h": 24,
+        "toolbar_icon_w": 24,
+        "toolbar_style": 2,
+        "toolbars": [
+            {
+                "actions": [
+                    {
+                        "checkable": false,
+                        "checked": false,
+                        "enabled": true,
+                        "h": 31,
+                        "name": "actionOpen",
+                        "separator": false,
+                        "text": "Тестовая форма",
+                        "visible": true,
+                        "w": 164,
+                        "x": 13,
+                        "y": 4
+                    },
+                    {
+                        "checkable": false,
+                        "checked": false,
+                        "enabled": true,
+                        "h": 31,
+                        "name": "",
+                        "separator": true,
+                        "text": "",
+                        "visible": true,
+                        "w": 6,
+                        "x": 178,
+                        "y": 4
+                    },
+                    {
+                        "checkable": false,
+                        "checked": false,
+                        "enabled": true,
+                        "h": 31,
+                        "name": "actionExit",
+                        "separator": false,
+                        "text": "Выход",
+                        "visible": true,
+                        "w": 92,
+                        "x": 185,
+                        "y": 4
+                    }
+                ],
+                "chrome": {
+                    "class": "QToolBar",
+                    "h": 39,
+                    "hint_h": 39,
+                    "hint_w": 281,
+                    "name": "toolBar",
+                    "present": true,
+                    "w": 800,
+                    "x": 0,
+                    "y": 22
+                }
+            }
+        ]
+    },
+    "root_layout_items": [
+        {
+            "class": "QToolBar",
+            "h": 39,
+            "hint_h": 39,
+            "hint_w": 281,
+            "i": 0,
+            "w": 800,
+            "widget": "toolBar",
+            "x": 0,
+            "y": 22
+        },
+        {
+            "class": "QWidget",
+            "h": 517,
+            "hint_h": 400,
+            "hint_w": 533,
+            "i": 1,
+            "w": 800,
+            "widget": "centralwidget",
+            "x": 0,
+            "y": 61
+        },
+        {
+            "class": "QStatusBar",
+            "h": 22,
+            "hint_h": 22,
+            "hint_w": 20,
+            "i": 2,
+            "w": 800,
+            "widget": "statusbar",
+            "x": 0,
+            "y": 578
+        }
+    ],
+    "scroll_areas": [
+        {
+            "class": "QMdiArea",
+            "hbar": {
+                "add_line": {
+                    "h": 30,
+                    "w": 14,
+                    "x": 86,
+                    "y": 0
+                },
+                "max": 0,
+                "min": 0,
+                "page": 10,
+                "rect": {
+                    "h": 30,
+                    "w": 100,
+                    "x": 0,
+                    "y": 61
+                },
+                "single": 1,
+                "slider": {
+                    "h": 30,
+                    "w": 72,
+                    "x": 14,
+                    "y": 0
+                },
+                "sub_line": {
+                    "h": 30,
+                    "w": 14,
+                    "x": 0,
+                    "y": 0
+                },
+                "value": 0,
+                "visible": false
+            },
+            "name": "mdiArea",
+            "vbar": {
+                "add_line": {
+                    "h": 14,
+                    "w": 100,
+                    "x": 0,
+                    "y": 16
+                },
+                "max": 0,
+                "min": 0,
+                "page": 10,
+                "rect": {
+                    "h": 30,
+                    "w": 100,
+                    "x": 0,
+                    "y": 61
+                },
+                "single": 1,
+                "slider": {
+                    "h": 2,
+                    "w": 100,
+                    "x": 0,
+                    "y": 14
+                },
+                "sub_line": {
+                    "h": 14,
+                    "w": 100,
+                    "x": 0,
+                    "y": 0
+                },
+                "value": 0,
+                "visible": false
+            },
+            "viewport": {
+                "h": 517,
+                "w": 800,
+                "x": 0,
+                "y": 61
+            }
+        }
+    ],
+    "widgets": [
+        {
+            "class": "QMainWindow",
+            "h": 600,
+            "hint_h": 483,
+            "hint_w": 533,
+            "min_h": 151,
+            "min_w": 196,
+            "name": "MainWindow",
+            "policy_h": 5,
+            "policy_v": 5,
+            "w": 800,
+            "x": 0,
+            "y": 0
+        },
+        {
+            "class": "QWidget",
+            "h": 517,
+            "hint_h": 400,
+            "hint_w": 533,
+            "min_h": 68,
+            "min_w": 196,
+            "name": "centralwidget",
+            "policy_h": 5,
+            "policy_v": 5,
+            "w": 800,
+            "x": 0,
+            "y": 61
+        },
+        {
+            "class": "QMdiArea",
+            "h": 517,
+            "hint_h": 400,
+            "hint_w": 533,
+            "min_h": 68,
+            "min_w": 196,
+            "name": "mdiArea",
+            "policy_h": 7,
+            "policy_v": 7,
+            "w": 800,
+            "x": 0,
+            "y": 61
+        },
+        {
+            "class": "QWidget",
+            "h": 30,
+            "hint_h": 14,
+            "hint_w": 54,
+            "min_h": 14,
+            "min_w": 54,
+            "name": "qt_scrollarea_hcontainer",
+            "policy_h": 5,
+            "policy_v": 5,
+            "w": 100,
+            "x": 0,
+            "y": 61
+        },
+        {
+            "class": "QWidget",
+            "h": 30,
+            "hint_h": 54,
+            "hint_w": 14,
+            "min_h": 54,
+            "min_w": 14,
+            "name": "qt_scrollarea_vcontainer",
+            "policy_h": 5,
+            "policy_v": 5,
+            "w": 100,
+            "x": 0,
+            "y": 61
+        },
+        {
+            "class": "QMenuBar",
+            "h": 22,
+            "hint_h": 22,
+            "hint_w": 96,
+            "min_h": 22,
+            "min_w": 47,
+            "name": "menubar",
+            "policy_h": 3,
+            "policy_v": 1,
+            "w": 800,
+            "x": 0,
+            "y": 0
+        },
+        {
+            "class": "QToolButton",
+            "h": 30,
+            "hint_h": 12,
+            "hint_w": 12,
+            "min_h": 12,
+            "min_w": 12,
+            "name": "qt_menubar_ext_button",
+            "policy_h": 0,
+            "policy_v": 0,
+            "w": 100,
+            "x": 0,
+            "y": 0
+        },
+        {
+            "class": "QMenu",
+            "h": 30,
+            "hint_h": 50,
+            "hint_w": 179,
+            "min_h": -1,
+            "min_w": -1,
+            "name": "menuFile",
+            "policy_h": 5,
+            "policy_v": 5,
+            "w": 100,
+            "x": 0,
+            "y": 0
+        },
+        {
+            "class": "QMenu",
+            "h": 30,
+            "hint_h": -1,
+            "hint_w": -1,
+            "min_h": -1,
+            "min_w": -1,
+            "name": "menuView",
+            "policy_h": 5,
+            "policy_v": 5,
+            "w": 100,
+            "x": 0,
+            "y": 0
+        },
+        {
+            "class": "QMenu",
+            "h": 30,
+            "hint_h": 24,
+            "hint_w": 179,
+            "min_h": -1,
+            "min_w": -1,
+            "name": "menuWindows",
+            "policy_h": 5,
+            "policy_v": 5,
+            "w": 100,
+            "x": 0,
+            "y": 0
+        },
+        {
+            "class": "QStatusBar",
+            "h": 22,
+            "hint_h": 22,
+            "hint_w": 20,
+            "min_h": 22,
+            "min_w": 20,
+            "name": "statusbar",
+            "policy_h": 5,
+            "policy_v": 5,
+            "w": 800,
+            "x": 0,
+            "y": 578
+        },
+        {
+            "class": "QToolBar",
+            "h": 39,
+            "hint_h": 39,
+            "hint_w": 281,
+            "min_h": 39,
+            "min_w": 194,
+            "name": "toolBar",
+            "policy_h": 5,
+            "policy_v": 0,
+            "w": 800,
+            "x": 0,
+            "y": 22
+        },
+        {
+            "class": "QToolBarExtension",
+            "h": 30,
+            "hint_h": 12,
+            "hint_w": 12,
+            "min_h": 12,
+            "min_w": 12,
+            "name": "qt_toolbar_ext_button",
+            "policy_h": 1,
+            "policy_v": 1,
+            "w": 100,
+            "x": 0,
+            "y": 22
+        }
+    ]
+}

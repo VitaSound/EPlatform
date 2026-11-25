@@ -11,10 +11,10 @@ use rqt::gui::{QColor, QFont, QFontMetrics, QPainter, QRectF};
 use rqt::icons;
 
 pub const MENU_H: f32 = 22.0;
-pub const TOOLBAR_H: f32 = 30.0;
+pub const TOOLBAR_H: f32 = 39.0;
 pub const STATUS_H: f32 = 22.0;
 const ITEM_H: f32 = 24.0;
-const SEPARATOR_H: f32 = 9.0;
+const SEPARATOR_H: f32 = 2.0;
 const ICON: f32 = 18.0;
 const TOOL_ICON: f32 = 24.0;
 
@@ -485,15 +485,15 @@ impl Shell {
     fn top_rects(&self, viewport: QRectF) -> Vec<QRectF> {
         let font = QFont::default();
         let metrics = QFontMetrics::new(&font);
-        let mut x = viewport.x;
+        let mut x = viewport.x + 6.0;
         let mut out = Vec::with_capacity(self.menu.len());
         for item in &self.menu {
             if item.separator {
                 continue;
             }
-            let width = metrics.horizontal_advance(&item.title) + 24.0;
+            let width = metrics.horizontal_advance(&item.title).ceil() + 8.0;
             out.push(QRectF::new(x, viewport.y, width, MENU_H));
-            x += width;
+            x += width + 6.0;
         }
         out
     }
@@ -573,13 +573,21 @@ impl Shell {
     fn menu_width(&self, items: &[MenuItem]) -> f32 {
         let font = QFont::default();
         let metrics = QFontMetrics::new(&font);
+        let icon_extra = if items
+            .iter()
+            .any(|item| !item.separator && item.icon.is_some())
+        {
+            8.0
+        } else {
+            0.0
+        };
         items
             .iter()
             .map(|item| {
                 if item.separator {
                     8.0
                 } else {
-                    metrics.horizontal_advance(&item.title) + 64.0
+                    metrics.horizontal_advance(&item.title) + 51.0 + icon_extra
                 }
             })
             .fold(120.0, f32::max)
@@ -693,18 +701,18 @@ impl Shell {
         let font = QFont::default();
         let metrics = QFontMetrics::new(&font);
         let y = viewport.y + self.menu_height();
-        let mut x = viewport.x + 4.0;
+        let mut x = viewport.x + 13.0;
         let mut out = Vec::new();
         for item in &self.toolbar {
             if item.separator {
-                out.push(QRectF::new(x, y + 4.0, 8.0, TOOLBAR_H - 8.0));
-                x += 8.0;
+                out.push(QRectF::new(x, y + 4.0, 6.0, TOOLBAR_H - 8.0));
+                x += 7.0;
                 continue;
             }
             let text_width = metrics.horizontal_advance(&item.title);
-            let width = (text_width + 36.0).max(32.0);
-            out.push(QRectF::new(x, y + 1.0, width, TOOLBAR_H - 2.0));
-            x += width;
+            let width = (text_width + 44.0).max(32.0);
+            out.push(QRectF::new(x, y + 4.0, width, TOOLBAR_H - 8.0));
+            x += width + 1.0;
         }
         out
     }
@@ -868,7 +876,7 @@ impl Shell {
                 painter.fill_rect(
                     QRectF::new(
                         entry.rect.x + 4.0,
-                        entry.rect.y + 4.0,
+                        entry.rect.y + 0.5,
                         entry.rect.width - 8.0,
                         1.0,
                     ),
@@ -1083,6 +1091,147 @@ mod tests {
         )])]));
         assert_eq!(shell.menu.len(), 1);
         assert_eq!(shell.menu[0].title, "Dynamic");
+    }
+
+    const QT6_MAINWINDOW: &str = include_str!("../tests/fixtures/qt6_mainwindow.json");
+
+    #[test]
+    fn main_window_shell_geometry_matches_qt6_offscreen() {
+        let golden: serde_json::Value =
+            serde_json::from_str(QT6_MAINWINDOW).expect("main window golden json");
+        let golden = &golden["main_window"];
+        let number = |value: &serde_json::Value, key: &str| {
+            value[key]
+                .as_f64()
+                .unwrap_or_else(|| panic!("{key} missing"))
+        };
+        let near = |context: &str, actual: f32, expected: f64| {
+            assert!(
+                (actual - expected as f32).abs() <= 1.0,
+                "{context}: expected {expected}, got {actual}"
+            );
+        };
+
+        let spec = parse_main_window(MAIN_WINDOW_UI).expect("main window parses");
+        let mut shell = Shell::default();
+        shell.visible = true;
+        shell.apply_main_window(spec);
+        let viewport = QRectF::new(0.0, 0.0, 800.0, 600.0);
+
+        let central = shell.central(viewport);
+        let golden_central = &golden["central"];
+        near("central.x", central.x, number(golden_central, "x"));
+        near("central.y", central.y, number(golden_central, "y"));
+        near("central.w", central.width, number(golden_central, "w"));
+        near("central.h", central.height, number(golden_central, "h"));
+        near(
+            "statusbar.y",
+            viewport.bottom() - STATUS_H,
+            number(&golden["statusbar"], "y"),
+        );
+        near("menu.h", MENU_H, number(&golden["menubar"], "h"));
+        near(
+            "toolbar.h",
+            TOOLBAR_H,
+            number(&golden["toolbars"][0]["chrome"], "h"),
+        );
+
+        let actions = golden["menubar_actions"]
+            .as_array()
+            .expect("menubar actions");
+        let rects = shell.top_rects(viewport);
+        assert_eq!(rects.len(), 2);
+        for (index, expected) in actions.iter().enumerate() {
+            let rect = rects[index];
+            near(
+                &format!("menubar[{index}].x"),
+                rect.x,
+                number(expected, "x"),
+            );
+            near(
+                &format!("menubar[{index}].y"),
+                rect.y,
+                number(expected, "y"),
+            );
+            near(
+                &format!("menubar[{index}].w"),
+                rect.width,
+                number(expected, "w"),
+            );
+            near(
+                &format!("menubar[{index}].h"),
+                rect.height,
+                number(expected, "h"),
+            );
+        }
+
+        shell.open_path = Some(vec![0]);
+        let entries = shell.menu_entries(viewport);
+        let menu = &golden["menus"][0];
+        let expected_actions = menu["actions"].as_array().expect("menu actions");
+        assert_eq!(entries.len(), expected_actions.len());
+        let origin_x = entries[0].rect.x;
+        let origin_y = entries[0].rect.y;
+        for (index, (entry, expected)) in entries.iter().zip(expected_actions).enumerate() {
+            near(
+                &format!("menu[{index}].x"),
+                entry.rect.x - origin_x,
+                number(expected, "x"),
+            );
+            near(
+                &format!("menu[{index}].y"),
+                entry.rect.y - origin_y,
+                number(expected, "y"),
+            );
+            near(
+                &format!("menu[{index}].w"),
+                entry.rect.width,
+                number(expected, "w"),
+            );
+            near(
+                &format!("menu[{index}].h"),
+                entry.rect.height,
+                number(expected, "h"),
+            );
+        }
+        let menu_height: f32 = entries.iter().map(|entry| entry.rect.height).sum();
+        near("menu.popup.h", menu_height, number(menu, "hint_h"));
+        near(
+            "menu.popup.w",
+            entries[0].rect.width,
+            number(menu, "hint_w"),
+        );
+
+        let expected_toolbar = golden["toolbars"][0]["actions"]
+            .as_array()
+            .expect("toolbar actions");
+        let toolbar = shell.toolbar_rects(viewport);
+        assert_eq!(toolbar.len(), expected_toolbar.len());
+        let toolbar_origin_x = number(&golden["toolbars"][0]["chrome"], "x") as f32;
+        let toolbar_origin_y = number(&golden["toolbars"][0]["chrome"], "y") as f32;
+        for (index, expected) in expected_toolbar.iter().enumerate() {
+            let rect = toolbar[index];
+            near(
+                &format!("toolbar[{index}].x"),
+                rect.x - toolbar_origin_x,
+                number(expected, "x"),
+            );
+            near(
+                &format!("toolbar[{index}].y"),
+                rect.y - toolbar_origin_y,
+                number(expected, "y"),
+            );
+            near(
+                &format!("toolbar[{index}].w"),
+                rect.width,
+                number(expected, "w"),
+            );
+            near(
+                &format!("toolbar[{index}].h"),
+                rect.height,
+                number(expected, "h"),
+            );
+        }
     }
 
     #[test]

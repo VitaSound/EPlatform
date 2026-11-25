@@ -1,8 +1,8 @@
 # Этап 0.14 — Application shell: главное окно, меню, MDI/top-level, statusbar
 
-Статус: ✅ 0.14.1–0.14.8 реализованы (2026-11-25); 0.14.9 —
-браузерные сценарии full/standalone/static `QMainWindow` проверены,
-golden-снимки menu/statusbar ещё не зафиксированы.
+Статус: ✅ 0.14.1–0.14.9 реализованы (2026-11-25); Qt6 golden
+menu/toolbar/status/central и браузерные сценарии full/standalone/
+top-level/modal проверены.
 
 Дата: 2026-11-25.
 Связанные документы: `widgets-plan.md`, `EPlan_Status.md`,
@@ -385,16 +385,23 @@ central area.
 **DoD:** ✅ `mainwindow.ui` загружается без ручной сборки shell; в
 браузере работают static menu/toolbar/status, action открывает MDI-форму.
 
-### 0.14.9 Интеграция и golden (M)
+### 0.14.9 Интеграция и golden — ✅ сделано (2026-11-25)
 
-- фикстуры: `main.lua` + menu, standalone form, top-level siblings,
-  modal MDI/top-level;
-- браузерные сценарии full/standalone;
-- Qt6 golden для menu/status/geometry (допуск 1 px);
-- обновить doc/status, прогнать `cargo test --workspace`, `mix test`,
-  `trunk build --release`.
+- фикстуры: `test_main.lua`/`test_mainwindow.lua` + menu,
+  `test_dialog01.ui` standalone, `test_shell_siblings.lua` (parent + два
+  top-level sibling), `test_modal_flow.lua` (modal child);
+- браузерные сценарии full/standalone/top-level/modal проверены через
+  chrome-devtools MCP (:9222);
+- Qt6 golden: `client/crates/app/tests/fixtures/qt6_mainwindow.json` +
+  PNG; `tools/qt_reference` выгружает `main_window` (menu/toolbar/status/
+  central, `actionGeometry`, размеры меню);
+- тест `main_window_shell_geometry_matches_qt6_offscreen` — допуск 1 px;
+  геометрия shell подогнана под Qt (toolbar 39 px, меню-бар x=6,
+  popup separator 2 px, action rects);
+- обновлены doc/status; `cargo test --workspace` — 165 passed,
+  `mix test` — 30 passed, `trunk build --release` — ok.
 
-**DoD:** обе модели запуска работают в браузере; регрессий нет.
+**DoD:** ✅ обе модели запуска работают в браузере; регрессий нет.
 
 ---
 
@@ -640,9 +647,9 @@ clamp в viewport; `Form:center`/`centered` — отдельное свойст�
 - **0.14.8** ✅ `QMainWindow` из `.ui`: `form-xml` actions/addaction,
   `shell::parse_main_window`, start_app `ui_file` → `loadMainWindow`;
   static menu/toolbar/status заменяются Lua-свойствами.
-- **0.14.9** ⚠️ браузерная проверка full/standalone/menu/toolbar/
-  top-level/static `QMainWindow` выполнена; golden-снимки
-  menu/statusbar ещё не зафиксированы.
+- **0.14.9** ✅ Qt6 golden shell (`qt6_mainwindow.json`/PNG, 1 px);
+  браузерные сценарии full/standalone/top-level siblings/modal,
+  static и dynamic menu/toolbar проверены.
 
 Проверки на момент статуса: `cargo test --workspace`, `mix test`,
 `trunk build --release`; live-сценарии `?main=test_main.lua` и

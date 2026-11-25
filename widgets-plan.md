@@ -3,10 +3,10 @@
 Обновлено: 2026-11-25 (актуализация по коду и прогонам тестов).
 Статус: события волны 0 закрыты; **0.12 (`QGridLayout`) закрыт**
 (0.12.1–0.12.5); **0.13 (`QFormLayout`) закрыт** (0.13.1–0.13.3).
-Отдельный этап **0.14 (Application shell / главное окно)** реализован
-в объёме 0.14.1–0.14.8 (включая загрузку `QMainWindow.ui`); 0.14.9
-(integration/golden) проверен в браузере, golden-снимки ещё нет.
-Этап **0.15 PaintBatch / display list** закрыт: painter order сохранён на
+Отдельный этап **0.14 (Application shell / главное окно)** закрыт:
+0.14.1–0.14.9 (включая `QMainWindow.ui` и Qt6 golden shell).
+Этап **0.15 PaintBatch / display list** закрыт (включая golden-diff):
+painter order сохранён на
 всех слоях, маскировка текста под popup удалена.
 Следующий шаг — рост в `QBoxLayout` (см. известный дефект 0.12);
 0.13 больше не блокирует layout-фронт.
@@ -18,12 +18,12 @@
 
 ---
 
-## Baseline (проверено 2026-11-25, после 0.13.3)
+## Baseline (проверено 2026-11-25, после 0.15.5)
 
 ```
-cargo test --workspace   → 161 passed
-  app 41 · form-xml 12 · rqt 108
-mix test (server/)       → 29 passed
+cargo test --workspace   → 168 passed; 1 ignored
+  app 47 (1 ignored) · form-xml 13 · rqt 108
+mix test (server/)       → 30 passed
 ```
 
 ## Browser testing — обязательное правило для UI
@@ -257,7 +257,7 @@ Reset/Close и ввод в ячейку проверены в WSLg-Chromium (:92
 
 ---
 
-## 0.14 Application shell / главное окно — ✅ 0.14.1–0.14.8
+## 0.14 Application shell / главное окно — ✅ 0.14.1–0.14.9
 
 Не входит в текущую волну 0.12/0.13 и вынесен в отдельный этап:
 главное окно как `QMainWindow`-аналог (menu + toolbar + central
@@ -281,7 +281,8 @@ modal, меню из Lua и старый запуск без главного о
 - **0.14.8** ✅ загрузка `QMainWindow`/`QMenuBar`/`QToolBar`/
   `QStatusBar` и `<action>`/`<addaction>` из `.ui`; static menu/toolbar
   заменяются Lua-свойствами;
-- **0.14.9** ⚠️ интеграция/браузер проверены; golden-снимки ещё нет.
+- **0.14.9** ✅ Qt6 golden меню/toolbar/status/central (1 px),
+  браузерные сценарии full/standalone/top-level/modal.
 
 ---
 
@@ -383,15 +384,24 @@ chrome-devtools MCP на `127.0.0.1:9222`, скриншоты до/после с
 - Добавить regression-тест на порядок батчей, чтобы маскировка не
   вернулась.
 
-### 0.15.5 Golden/визуальный diff (S/M)
+### 0.15.5 Golden/визуальный diff — ✅ сделано (2026-11-25)
 
-**Статус:** ⚠️ браузерные PNG до/после сняты и проверены визуально;
-автоматический golden-diff меню/toolbar/overlapping/nested ещё не
-зафиксирован в репозитории.
+**Сделано:** программный рендер `gfx::PaintBatch` (`rasterize_batches`)
+в app-тестах через `rqt::raster`; эталонные PNG зафиксированы в
+`client/crates/app/tests/fixtures/`:
 
-- зафиксировать эталонные PNG для menu popup + toolbar, overlapping
+- `shell_popup_toolbar.png` — popup над toolbar/base текстом;
+- `shell_nested_menu.png` — parent + nested submenu;
+- `shell_overlapping_windows.png` — MDI content под top-level окном.
+
+Тесты `shell_*_raster_matches_golden` собирают реальный `collect_paint()`
+и сравнивают mean/max diff; ignored-тест `regenerate_shell_goldens`
+перегенерирует эталоны. Дополнительно к batch-order unit-тестам это
+ловит возврат text-masking/перестановки слоёв.
+
+- ✅ зафиксировать эталонные PNG для menu popup + toolbar, overlapping
   windows и nested menu;
-- сравнение с Qt6/rqt raster, если применимо.
+- ✅ сравнение с rqt software raster; Qt6/rqt формы остаются в 0.12/0.13.
 
 **Definition of done 0.15:** порядок рисования иерархичен на всех слоях;
 меню/toolbar/формы/top-level не смешиваются без text-masking; браузерные
@@ -411,7 +421,7 @@ chrome-devtools MCP на `127.0.0.1:9222`, скриншоты до/после с
 6. ⬅ 0.13.1 свойства `QFormLayout` + распознавание.
 7. 0.13.2 движок двух колонок + политики.
 8. 0.13.3 фикстуры + golden.
-9. 0.14 — отдельный этап `docs/application-shell-plan.md`; 0.14.1–0.14.8
+9. 0.14 — отдельный этап `docs/application-shell-plan.md`; 0.14.1–0.14.9
    ✅.
 10. ✅ 0.15 — `PaintBatch`/упорядоченный display list; text-masking убран,
     проверено через chrome-devtools MCP (:9222).

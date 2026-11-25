@@ -2,6 +2,48 @@
 
 ## 2026-11-25
 
+### Paint order 0.15.5: golden PNG для shell и окон
+
+- **Rasterizer батчей.** В app-тестах `rasterize_batches` проигрывает
+  реальный `gfx::PaintBatch` через `rqt::raster`: rect-батчи → `FillRect`,
+  text-батчи → `DrawText` с сохранённым clip. Это тот же ordered display
+  list, что уходит в GPU.
+- **Эталоны.** `client/crates/app/tests/fixtures/shell_popup_toolbar.png`
+  (popup над toolbar), `shell_nested_menu.png` (parent + nested submenu),
+  `shell_overlapping_windows.png` (MDI под top-level окном).
+- **Тесты.** `shell_*_raster_matches_golden` собирают `collect_paint()` и
+  сравнивают mean/max diff; ignored `regenerate_shell_goldens`
+  перегенерирует PNG. Регрессия text-masking/перестановки слоёв теперь
+  ловится визуально, а не только по индексам батчей.
+- **Проверки.** `cargo test --workspace` — 168 passed, 1 ignored
+  (app 47, form-xml 13, rqt 108); `mix test` — 30 passed.
+
+### Application shell 0.14.9: интеграция и Qt6 golden shell
+
+- **Golden.** `tools/qt_reference` выгружает `main_window`: геометрию
+  `QMenuBar`/`QToolBar`/`QStatusBar`/central widget, прямоугольники
+  actions (`actionGeometry`), размеры меню и popup-строк. Фикстуры
+  `client/crates/app/tests/fixtures/qt6_mainwindow.json` + PNG.
+- **Геометрия под Qt.** `TOOLBAR_H` 30 → 39, меню-бар начинается с
+  x=6 и считает ширину `ceil(hint)+8` с зазором 6, popup separator 2 px,
+  ширина меню `hint+51 (+8 при иконке)`, toolbar action rect
+  `x=13,y=4,h=31`, ширина `hint+44`, separator 6 px. Тест
+  `main_window_shell_geometry_matches_qt6_offscreen` сверяет меню/toolbar/
+  status/central с Qt6 (допуск 1 px).
+- **Интеграция.** Добавлен `server/priv/lua_modules/test_shell_siblings.lua`
+  (parent + два top-level sibling). Серверный тест `open_lua` теперь
+  проверяет и `createForm` ребёнка (`placement=mdi`; `mode` наследуется
+  от родителя).
+- **Браузер (chrome-devtools MCP :9222).** Проверены:
+  `?main=test_mainwindow.lua&ui=mainwindow.ui` (static shell + toolbar →
+  MDI форма), `?main=test_main.lua` (dynamic menu/toolbar заменяют static;
+  File → MDI форма), `?lua=demo_icons.lua&ui=test_dialog01.ui`
+  (standalone), `?lua=test_shell_siblings.lua&ui=test_dialog01.ui`
+  (3 окна), `?lua=test_modal_flow.lua&ui=test_dialog01.ui` (modal child).
+- **Проверки.** `cargo test --workspace` — 165 passed (app 44,
+  form-xml 13, rqt 108); `mix test` — 30 passed; `trunk build --release`
+  — ok.
+
 ### Application shell 0.14.8: `QMainWindow` из `.ui`
 
 - **Парсер.** `form_xml::Widget` получил `actions: Vec<Action>` и
@@ -224,8 +266,8 @@
   `showMessage`, `setStatusVisible`, `setStatusInfo`; menu actions
   выполняет main-сессия через `App:open_lua`/`App:close`.
 - **0.14.8.** Загрузка `QMainWindow`/`QMenuBar`/`QStatusBar`/`QToolBar`
-  из `.ui` реализована (см. отдельный раздел выше); golden-снимки
-  menu/statusbar остаются в 0.14.9.
+  из `.ui` реализована (см. отдельный раздел выше); golden shell и
+  браузерная интеграция закрыты в 0.14.9.
 - **Тесты.** `cargo test --workspace` — 132 passed (app 37, form-xml 8,
   rqt 87); `mix test` — 29 passed; wasm check — ok. Live:
   `?main=test_main.lua` (menu/toolbar/status/MDI/top-level/exit),
