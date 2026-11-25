@@ -19,8 +19,12 @@
       body {
         margin: 0;
         padding: 0;
+        width: 100%;
         height: 100%;
         overflow: hidden;
+        position: fixed;
+        inset: 0;
+        overscroll-behavior: none;
         background: #1c1e22;
       }
       canvas {
@@ -143,10 +147,25 @@
           }
         };
 
+        function resetViewportScroll() {
+          if (window.scrollX !== 0 || window.scrollY !== 0) {
+            window.scrollTo(0, 0);
+          }
+          if (document.documentElement.scrollTop !== 0) {
+            document.documentElement.scrollTop = 0;
+          }
+          if (document.body.scrollTop !== 0) {
+            document.body.scrollTop = 0;
+          }
+        }
+
         function focusTextInput() {
           try {
             ta.focus({ preventScroll: true });
           } catch (_) {}
+          resetViewportScroll();
+          setTimeout(resetViewportScroll, 50);
+          setTimeout(resetViewportScroll, 250);
         }
 
         window.__epSetTextInputActive = function (next) {
@@ -175,8 +194,18 @@
           }
         };
 
-        ta.addEventListener("focus", updatePointerEvents);
+        ta.addEventListener("focus", function () {
+          updatePointerEvents();
+          resetViewportScroll();
+          setTimeout(resetViewportScroll, 50);
+          setTimeout(resetViewportScroll, 250);
+        });
         ta.addEventListener("blur", updatePointerEvents);
+        window.addEventListener("scroll", resetViewportScroll, { passive: true });
+        if (window.visualViewport) {
+          window.visualViewport.addEventListener("scroll", resetViewportScroll);
+          window.visualViewport.addEventListener("resize", resetViewportScroll);
+        }
 
         // iOS only opens the keyboard from a user gesture. Rust focuses the
         // hidden field on pointer release, which is sometimes too late after

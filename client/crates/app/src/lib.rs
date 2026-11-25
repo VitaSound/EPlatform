@@ -4268,14 +4268,14 @@ impl ApplicationHandler for App {
                     {
                         let style = canvas.style();
                         let _ = style.set_property("display", "block");
-                        let _ = style.set_property("position", "absolute");
+                        let _ = style.set_property("position", "fixed");
                         let _ = style.set_property("top", "0");
                         let _ = style.set_property("left", "0");
                         let _ = style.set_property("width", "100%");
                         let _ = style.set_property("height", "100%");
                         let _ = body.set_attribute(
                             "style",
-                            "margin:0; overflow:hidden; background:#1c1f26;",
+                            "margin:0; overflow:hidden; position:fixed; inset:0; width:100%; height:100%; overscroll-behavior:none; background:#1c1f26;",
                         );
                         let _ = body.append_child(&canvas);
                     }
