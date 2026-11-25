@@ -90,8 +90,17 @@
   переход между MDI и top-level слоями. Исправлен старый индекс после
   `activate()` в release-body ветке; добавлен тест
   `activating_mdi_window_raises_it_above_floating`.
-- **Тесты.** `cargo test --workspace` — 203 passed, 1 ignored
-  (app 57+1 ignored, form-xml 13, rqt 133); wasm-check и `cargo fmt
+- **Tab-focus indicators.** Как в Qt Fusion: у focused `QCheckBox`/
+  `QRadioButton` — пунктирный прямоугольник вокруг текста, у radio ещё
+  синее кольцо; у focused `QPushButton` — пунктирная рамка внутри
+  кнопки; у `QListWidget`/`QTreeWidget` — пунктир вокруг current row.
+  `QLineEdit`/`QComboBox` сохраняют синюю focus-рамку.
+- **Caret в `QLineEdit`.** Текст и caret теперь начинаются с inset 3 px,
+  caret рисуется ровно на glyph advance (без `+1` gap), вертикально
+  `y+4`, высотой `h-7` — совпадает с Qt `cursorRect` (проверено через
+  `xvfb` + Qt6 Fusion: caret после `ab` = `x+3+advance(ab)`).
+- **Тесты.** `cargo test --workspace` — 205 passed, 1 ignored
+  (app 57+1 ignored, form-xml 13, rqt 135); wasm-check и `cargo fmt
   --check` зелёные.
 
 ### Волна 0.16: combo popup, collapse/expand tree, `QSplitter`, QSS

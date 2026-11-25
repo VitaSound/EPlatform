@@ -99,6 +99,7 @@ fn paint_widget(
     paint_line_edit_selection(widget, painter, &qss);
     paint_widget_text(widget, painter, &qss);
     paint_line_edit_caret(widget, painter, &qss);
+    paint_focus_indicators(widget, painter, &qss);
 
     // Keep the widget's clip active while painting children: Qt clips a
     // child to every ancestor, so content that overflows a small form does
@@ -479,6 +480,85 @@ fn combo_text(widget: &QWidget) -> Option<String> {
     widget_text(widget)
 }
 
+/// Qt's focus indicators are style-dependent: Windows draws a dotted text
+/// rectangle for check/radio and a dotted inner rectangle for buttons, while
+/// Fusion fills the check/radio text area and keeps only the button frame.
+/// EPlatform uses the dotted variant for check/radio/button so the focus is
+/// obvious on its flat palette; line edits and combos keep the Fusion blue
+/// frame.
+fn paint_focus_indicators(widget: &QWidget, painter: &mut QPainter, qss: &QStyleDeclarations) {
+    if !widget.has_focus || !widget.enabled {
+        return;
+    }
+    let color = widget
+        .palette
+        .color(QPaletteRole::WindowText)
+        .with_alpha(0.72);
+    match widget.class_name.as_str() {
+        "QPushButton" | "QToolButton" => {
+            let frame = qss_frame_rect(widget, qss);
+            paint_dotted_rect(
+                painter,
+                QRectF::new(
+                    frame.x + 3.0,
+                    frame.y + 3.0,
+                    (frame.width - 6.0).max(1.0),
+                    (frame.height - 6.0).max(1.0),
+                ),
+                color,
+            );
+        }
+        "QCheckBox" | "QRadioButton" => {
+            let Some(text) = widget_text(widget) else {
+                return;
+            };
+            if text.is_empty() {
+                return;
+            }
+            let content = qss_content_rect(widget, qss, (0.0, 0.0, 0.0, 0.0));
+            let font = qss_font(widget, qss);
+            let metrics = QFontMetrics::new(&font);
+            let line_height = metrics.height();
+            let text_width = metrics.horizontal_advance(&text);
+            let text_x = content.x + widget.font.pixel_size + 6.0;
+            let text_y = content.y + ((content.height - line_height) / 2.0).max(0.0);
+            paint_dotted_rect(
+                painter,
+                QRectF::new(
+                    text_x - 2.0,
+                    text_y - 1.0,
+                    text_width + 4.0,
+                    line_height + 2.0,
+                ),
+                color,
+            );
+        }
+        _ => {}
+    }
+}
+
+fn paint_dotted_rect(painter: &mut QPainter, rect: QRectF, color: QColor) {
+    let left = rect.x.floor();
+    let top = rect.y.floor();
+    let right = rect.right().floor();
+    let bottom = rect.bottom().floor();
+    if right <= left || bottom <= top {
+        return;
+    }
+    let mut x = left;
+    while x <= right {
+        painter.fill_rect(QRectF::new(x, top, 1.0, 1.0), color);
+        painter.fill_rect(QRectF::new(x, bottom, 1.0, 1.0), color);
+        x += 2.0;
+    }
+    let mut y = top + 2.0;
+    while y < bottom {
+        painter.fill_rect(QRectF::new(left, y, 1.0, 1.0), color);
+        painter.fill_rect(QRectF::new(right, y, 1.0, 1.0), color);
+        y += 2.0;
+    }
+}
+
 fn paint_item_views(
     widget: &QWidget,
     painter: &mut QPainter,
@@ -526,6 +606,18 @@ fn paint_list_widget(widget: &QWidget, painter: &mut QPainter, item_qss: &QStyle
             );
         } else if let Some(background) = item_qss.background {
             painter.fill_rect(row_rect, background);
+        }
+        if widget.has_focus && list.current == Some(index) {
+            paint_dotted_rect(
+                painter,
+                QRectF::new(
+                    row_rect.x + 1.0,
+                    row_rect.y + 1.0,
+                    (row_rect.width - 2.0).max(1.0),
+                    (row_rect.height - 2.0).max(1.0),
+                ),
+                palette.color(QPaletteRole::WindowText).with_alpha(0.72),
+            );
         }
         painter.draw_text(
             QRectF::new(
@@ -782,6 +874,18 @@ fn paint_tree_widget(
         } else if let Some(background) = item_qss.background {
             painter.fill_rect(row_rect, background);
         }
+        if widget.has_focus && tree.current == Some(index) {
+            paint_dotted_rect(
+                painter,
+                QRectF::new(
+                    row_rect.x + 1.0,
+                    row_rect.y + 1.0,
+                    (row_rect.width - 2.0).max(1.0),
+                    (row_rect.height - 2.0).max(1.0),
+                ),
+                palette.color(QPaletteRole::WindowText).with_alpha(0.72),
+            );
+        }
         let text_x = body.x + 4.0 + row.indent() + QVIEW_BRANCH_W - tree.horizontal;
         if row.has_children {
             let expanded = tree
@@ -859,10 +963,12 @@ fn paint_control_indicator(widget: &QWidget, painter: &mut QPainter) {
             .max(9.0);
         let x = widget.geometry.x.round();
         let y = (widget.geometry.y + (widget.geometry.height - size) / 2.0).round();
-        let outline = if widget.enabled {
-            widget.palette.color(QPaletteRole::Window).darker(150)
-        } else {
+        let outline = if !widget.enabled {
             widget.palette.color(QPaletteRole::Mid)
+        } else if widget.has_focus {
+            widget.palette.color(QPaletteRole::Highlight).darker(110)
+        } else {
+            widget.palette.color(QPaletteRole::Window).darker(150)
         };
         painter.fill_ellipse(
             QRectF::new(x, y, size, size),
@@ -1317,7 +1423,7 @@ fn paint_table(
                 if caret_h > 0.0 {
                     painter.fill_rect(
                         QRectF::new(
-                            (column_x + 3.0 + metrics.horizontal_advance(&editor.text) + 1.0)
+                            (column_x + 3.0 + metrics.horizontal_advance(&editor.text))
                                 .min(column_x + width - 2.0),
                             caret_y.max(body_top),
                             1.0,
@@ -1357,7 +1463,7 @@ fn paint_line_edit_selection(widget: &QWidget, painter: &mut QPainter, qss: &QSt
     let metrics = QFontMetrics::new(&font);
     let prefix: String = text.chars().take(start).collect();
     let selected: String = text.chars().take(end).skip(start).collect();
-    let content = qss_content_rect(widget, qss, (4.0, 2.0, 4.0, 2.0));
+    let content = qss_content_rect(widget, qss, (3.0, 4.0, 3.0, 3.0));
     let x = content.x + metrics.horizontal_advance(&prefix);
     let width = metrics.horizontal_advance(&selected);
     let y = content.y;
@@ -1383,11 +1489,11 @@ fn paint_line_edit_caret(widget: &QWidget, painter: &mut QPainter, qss: &QStyleD
     let prefix: String = text.chars().take(widget.cursor_position).collect();
     let font = qss_font(widget, qss);
     let metrics = QFontMetrics::new(&font);
-    let content = qss_content_rect(widget, qss, (4.0, 2.0, 4.0, 2.0));
-    let gap = if widget.cursor_position > 0 { 1.0 } else { 0.0 };
-    let caret_x = (content.x + metrics.horizontal_advance(&prefix) + gap).min(content.right());
-    let caret_y = content.y + 1.0;
-    let caret_h = (content.height - 2.0).max(0.0);
+    let content = qss_content_rect(widget, qss, (3.0, 4.0, 3.0, 3.0));
+    // Qt puts the 1 px caret exactly at the glyph advance; no extra gap.
+    let caret_x = (content.x + metrics.horizontal_advance(&prefix)).min(content.right());
+    let caret_y = content.y;
+    let caret_h = content.height.max(0.0);
     if caret_h > 0.0 {
         painter.fill_rect(
             QRectF::new(caret_x, caret_y, 1.0, caret_h),
@@ -1406,7 +1512,7 @@ fn paint_line_edit_text(widget: &QWidget, painter: &mut QPainter, qss: &QStyleDe
     let font = qss_font(widget, qss);
     let metrics = QFontMetrics::new(&font);
     let line_height = metrics.height();
-    let content = qss_content_rect(widget, qss, (4.0, 2.0, 4.0, 2.0));
+    let content = qss_content_rect(widget, qss, (3.0, 4.0, 3.0, 3.0));
     let y = content.y + ((content.height - line_height) / 2.0).max(0.0);
     let base_x = content.x;
     let color = text_color(widget, qss);
@@ -1834,6 +1940,63 @@ mod tests {
             QPaintCommand::DrawText { text, color, .. }
                 if text == "Root" && *color == QColor::rgb(0, 255, 0)
         )));
+    }
+
+    #[test]
+    fn line_edit_caret_sits_at_the_glyph_advance_like_qt() {
+        let (mut tree, root) = load_ui(FIXTURE).expect("loads ui");
+        let line = tree.find_widget("lineEdit_1").expect("line edit");
+        tree.set_property(line, "text", QVariant::String("abcd".into()));
+        tree.layout(root, tree.widget(root).unwrap().geometry);
+        tree.set_cursor_position(line, 2);
+        tree.widget_mut(line).unwrap().cursor_visible = true;
+        tree.set_focus(line);
+
+        let geometry = tree.widget(line).unwrap().geometry;
+        let font = tree.widget(line).unwrap().font.clone();
+        let metrics = QFontMetrics::new(&font);
+        let expected_x = geometry.x + 3.0 + metrics.horizontal_advance("ab");
+        let style = QFusionStyle::default();
+        let mut painter = QPainter::new();
+        paint_widget_tree(&tree, root, &style, &mut painter);
+
+        let caret = painter.commands().iter().find_map(|command| match command {
+            QPaintCommand::FillRect { rect, .. }
+                if (rect.width - 1.0).abs() < 0.01
+                    && rect.height > 8.0
+                    && (rect.x - expected_x).abs() < 0.01 =>
+            {
+                Some(*rect)
+            }
+            _ => None,
+        });
+        let caret = caret.expect("caret at Qt advance position");
+        assert!((caret.y - (geometry.y + 4.0)).abs() < 0.01);
+        assert!((caret.height - (geometry.height - 7.0)).abs() < 0.01);
+    }
+
+    #[test]
+    fn focused_checkbox_gets_a_dotted_text_focus_rect() {
+        let (mut tree, root) = load_ui(DIALOG02).expect("loads ui");
+        let check = tree.find_widget("checkBox_1").expect("checkbox");
+        tree.layout(root, tree.widget(root).unwrap().geometry);
+        tree.set_focus(check);
+        let geometry = tree.widget(check).unwrap().geometry;
+        let font = tree.widget(check).unwrap().font.clone();
+        let metrics = QFontMetrics::new(&font);
+        let text = "CheckBox";
+        let text_x = geometry.x + font.pixel_size + 6.0;
+        let style = QFusionStyle::default();
+        let mut painter = QPainter::new();
+        paint_widget_tree(&tree, root, &style, &mut painter);
+        let dots = painter
+            .commands()
+            .iter()
+            .filter(|command| matches!(command, QPaintCommand::FillRect { rect, .. }
+                if (rect.width - 1.0).abs() < 0.01 && (rect.height - 1.0).abs() < 0.01
+                    && rect.x >= text_x - 4.0 && rect.x <= text_x + metrics.horizontal_advance(text) + 4.0))
+            .count();
+        assert!(dots >= 8, "expected dotted focus rect, got {dots} dots");
     }
 
     #[test]

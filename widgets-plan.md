@@ -25,8 +25,8 @@ long tap, double tap, multi-touch и two-finger scroll проверены в
 ## Baseline (проверено 2026-11-25, после волны 0.17.4)
 
 ```
-cargo test --workspace   → 203 passed; 0 failed; 1 ignored
-  app 57 (1 ignored) · form-xml 13 · rqt 133
+cargo test --workspace   → 205 passed; 0 failed; 1 ignored
+  app 57 (1 ignored) · form-xml 13 · rqt 135
 mix test (server/)       → 30 passed
 cargo check -p app --target wasm32-unknown-unknown → ok
 ```
@@ -226,7 +226,18 @@ tree/table item подхватывают QSS; 3 новых unit/paint-теста
 - [x] Тест `activating_mdi_window_raises_it_above_floating`; браузер:
       MDI-окно, открытое под top-level, после клика выходит наверх.
 
-### 0.17.3.5 App sugar — не расширять без запроса
+### 0.17.3.5 Tab-focus indicators и caret — ✅
+
+- [x] Qt Fusion-подобные focus-индикаторы: пунктир вокруг текста
+      check/radio, кольцо radio, пунктир внутри кнопки, пунктир current
+      row в list/tree; синие рамки line edit/combo сохранены.
+- [x] Caret `QLineEdit` выровнен по Qt: inset 3 px, x = 3 + advance,
+      y + 4, height = h - 7; mouse `cursor_at_x` использует тот же inset.
+- [x] Тесты `line_edit_caret_sits_at_the_glyph_advance_like_qt`,
+      `focused_checkbox_gets_a_dotted_text_focus_rect`; браузер: Tab по
+      lineEdit/radio/checkbox/button, пунктир виден.
+
+### 0.17.3.6 App sugar — не расширять без запроса
 
 `setWindowTitle`/`setIcon` уже работают; геометрия главного окна в
 браузере остаётся no-op по D5. `set_menu`/toolbar/statusbar закрыты в

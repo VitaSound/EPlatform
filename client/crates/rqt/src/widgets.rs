@@ -1017,7 +1017,7 @@ impl QWidgetTree {
         let mut best_distance = f32::MAX;
         for index in 0..=text.chars().count() {
             let prefix: String = text.chars().take(index).collect();
-            let width = 4.0 + metrics.horizontal_advance(&prefix);
+            let width = 3.0 + metrics.horizontal_advance(&prefix);
             let distance = (local_x - width).abs();
             if distance < best_distance {
                 best = index;
@@ -4981,7 +4981,7 @@ mod tests {
         tree.layout(root, tree.widget(root).unwrap().geometry);
         let font = tree.widget(line).unwrap().font.clone();
         let metrics = QFontMetrics::new(&font);
-        let local_x = 4.0 + metrics.horizontal_advance("hello wor");
+        let local_x = 3.0 + metrics.horizontal_advance("hello wor");
         assert!(tree.select_word_at(line, local_x));
         assert_eq!(tree.line_edit_selection(line), Some((6, 11)));
     }

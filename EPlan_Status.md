@@ -8,8 +8,8 @@
 ## Baseline
 
 ```
-cargo test --workspace   → 203 passed; 0 failed; 1 ignored
-  app 57 (1 ignored) · form-xml 13 · rqt 133
+cargo test --workspace   → 205 passed; 0 failed; 1 ignored
+  app 57 (1 ignored) · form-xml 13 · rqt 135
 mix test (server/)       → 30 passed; 0 failed
 ```
 
@@ -135,6 +135,7 @@ geometry + drag/min, QSS parser/selector. Итог: `cargo test --workspace`
 | QSS item-view | `QTreeWidget::item`/`QListWidget::item`/`QTableWidget::item`, `QHeaderView::section`, `QComboBox QAbstractItemView` |
 | API | `Form:center` (`centered`), `QSplitter.sizes`, `QTreeWidget.expandAll/collapseAll` |
 | z-order | общий порядок MDI/top-level: активное окно поверх; paint и hit-test синхронны |
+| tab-focus | пунктир check/radio/button/list/tree, кольцо radio; caret line edit по Qt-advance |
 | review | `scripts/review.sh`: `qss/52_checks` 4.88 → 4.07, `qss/55_disabled` 11.44 → 4.41; браузерный QSS-скриншот |
 
 Тесты: `cargo test --workspace` — 199 passed, 1 ignored; wasm-check и
