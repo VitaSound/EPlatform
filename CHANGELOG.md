@@ -2,6 +2,30 @@
 
 ## 2026-11-25
 
+### Application shell 0.14.8: `QMainWindow` из `.ui`
+
+- **Парсер.** `form_xml::Widget` получил `actions: Vec<Action>` и
+  `add_actions: Vec<String>`; разбираются `<action>` с `<property>` и
+  `<addaction name=...>` в порядке документа.
+- **Статическая оболочка.** `shell::parse_main_window` вытаскивает из
+  `QMainWindow.ui` title, `QMenuBar`/`QMenu` (`<addaction>`), `QToolBar`,
+  `QStatusBar` и central widget; проверяет, что central содержит
+  `QMdiArea`. `Shell::apply_main_window` применяет меню/toolbar/status.
+- **Протокол.** `start_app` принимает `ui_file`; `DialogSession` для main
+  читает `priv/qt_forms/<ui_file>` и шлёт команду `loadMainWindow` с
+  `ui_xml` (до Lua `init`). Клиент в full mode по умолчанию берёт
+  `mainwindow.ui` (`?ui=`/`?mainui=` переопределяют).
+- **Замена динамикой.** Static menu/toolbar живут до первого Lua
+  `App:set_menu`/`setToolBar`; динамические команды заменяют модель.
+- **Фикстуры.** `server/priv/qt_forms/mainwindow.ui` (меню File/View,
+  вложенное меню, toolbar с separator, statusbar, central `QMdiArea`) и
+  `server/priv/lua_modules/test_mainwindow.lua`.
+- **Проверки.** `cargo test --workspace` — 164 passed (app 43,
+  form-xml 13, rqt 108); `mix test` — 30 passed; `trunk build --release`
+  — ok. Браузер: `?main=test_mainwindow.lua&ui=mainwindow.ui` —
+  статические menu/toolbar/status из `.ui`, toolbar-кнопка открывает
+  MDI-форму, меню File показывает action+separator.
+
 ### `scripts/serve_dist.py`: gzip и keep-alive
 
 - **Проблема.** Страница на телефоне открывалась десятки секунд:
@@ -199,9 +223,9 @@
 - **Lua.** `App:setToolBar`, `setToolBarVisible`, `setStatusMessage`/
   `showMessage`, `setStatusVisible`, `setStatusInfo`; menu actions
   выполняет main-сессия через `App:open_lua`/`App:close`.
-- **Отложено.** 0.14.8 — загрузка `QMainWindow`/`QMenuBar`/`QStatusBar`
-  из `.ui` (D3-A: пока фиксированная оболочка); golden-снимки
-  menu/statusbar.
+- **0.14.8.** Загрузка `QMainWindow`/`QMenuBar`/`QStatusBar`/`QToolBar`
+  из `.ui` реализована (см. отдельный раздел выше); golden-снимки
+  menu/statusbar остаются в 0.14.9.
 - **Тесты.** `cargo test --workspace` — 132 passed (app 37, form-xml 8,
   rqt 87); `mix test` — 29 passed; wasm check — ok. Live:
   `?main=test_main.lua` (menu/toolbar/status/MDI/top-level/exit),

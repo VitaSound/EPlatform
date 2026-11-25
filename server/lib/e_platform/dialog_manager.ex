@@ -52,7 +52,7 @@ defmodule EPlatform.DialogManager do
         opts
       )
 
-    start_dialog(application_id, lua_file, "", opts)
+    start_dialog(application_id, lua_file, Map.get(opts, :ui_file, ""), opts)
   end
 
   @doc """

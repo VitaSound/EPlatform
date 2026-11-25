@@ -6,9 +6,9 @@
 ## Baseline
 
 ```
-cargo test --workspace   → 161 passed; 0 failed
-  app 41 · form-xml 12 · rqt 108
-mix test (server/)       → 29 passed; 0 failed
+cargo test --workspace   → 164 passed; 0 failed
+  app 43 · form-xml 13 · rqt 108
+mix test (server/)       → 30 passed; 0 failed
 ```
 
 ## События (0.1–0.11) — ✅ закрыто
@@ -113,7 +113,7 @@ mix test (server/)       → 29 passed; 0 failed
 1. **Box-layout рост:** `QBoxLayout` должен делить избыток между
    виджетами с `maximumSize > hint` (как `qGeomCalc`), а не только
    отдавать его в зазоры; отдельный шаг с golden-тестом.
-2. **0.14.8/0.14.9:** `QMainWindow` из `.ui` и golden-снимки shell.
+2. **0.14.9:** golden-снимки menu/statusbar (0.14.8 закрыт).
 
 ### Попутно исправлено
 
@@ -123,16 +123,17 @@ mix test (server/)       → 29 passed; 0 failed
   применяется (`gfx.resize`) сразу после создания `Gfx`, затем
   `request_redraw()`. Проверено: `canvas` = `1280x657` без ресайза окна.
 
-## Application shell 0.14 — ✅ 0.14.1–0.14.7
+## Application shell 0.14 — ✅ 0.14.1–0.14.8
 
 Главное окно как `QMainWindow`-аналог: menu + toolbar + central
 `QMdiArea` + statusbar; формы — MDI или top-level; application/window modal;
 запуск full (`?main=...`) и standalone (`?lua=...`, без главного окна).
 
 - Полный план: `docs/application-shell-plan.md` (§12 — статус реализации).
-- 0.14.1–0.14.7 реализованы; 0.14.8 (`QMainWindow` из `.ui`) отложен;
-  0.14.9 — браузерные сценарии проверены, golden-снимки menu/statusbar
-  ещё не зафиксированы.
+- 0.14.1–0.14.8 реализованы; `QMainWindow.ui` грузит static
+  menu/toolbar/status/title, Lua `set_menu`/`setToolBar` их заменяют.
+- 0.14.9 — браузерные сценарии full/standalone/static mainwindow
+  проверены, golden-снимки menu/statusbar ещё не зафиксированы.
 - `mdi` и `modal` разведены; `createForm` несёт `role`/`mode`/
   `placement`/`modal_scope`; main-сессия владеет top-level формами.
 - Этап не входит в 0.12/0.13 и не меняет их порядок.

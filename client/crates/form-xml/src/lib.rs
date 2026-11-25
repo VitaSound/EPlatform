@@ -79,6 +79,22 @@ impl PropValue {
     }
 }
 
+/// `<action name="...">` definition, used by `QMainWindow` menus/toolbars.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Action {
+    pub name: String,
+    pub properties: Vec<(String, PropValue)>,
+}
+
+impl Action {
+    pub fn property(&self, name: &str) -> Option<&PropValue> {
+        self.properties
+            .iter()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Widget {
     pub class: String,
@@ -88,6 +104,10 @@ pub struct Widget {
     pub children: Vec<Widget>,
     /// The widget's single layout, if it has one (Qt allows at most one).
     pub layout: Option<Layout>,
+    /// `<action>` definitions owned by this widget (usually `QMainWindow`).
+    pub actions: Vec<Action>,
+    /// `<addaction name="...">` references in document order.
+    pub add_actions: Vec<String>,
 }
 
 impl Widget {
@@ -272,6 +292,8 @@ fn parse_widget(node: Node<'_, '_>) -> Result<Widget, ParseError> {
     let mut properties = Vec::new();
     let mut children = Vec::new();
     let mut layout = None;
+    let mut actions = Vec::new();
+    let mut add_actions = Vec::new();
     for child in node.children().filter(|n| n.is_element()) {
         match child.tag_name().name() {
             "property" => {
@@ -285,6 +307,12 @@ fn parse_widget(node: Node<'_, '_>) -> Result<Widget, ParseError> {
             "layout" => {
                 layout = Some(parse_layout(child)?);
             }
+            "action" => actions.push(parse_action(child)),
+            "addaction" => {
+                if let Some(name) = child.attribute("name") {
+                    add_actions.push(name.to_string());
+                }
+            }
             _ => {}
         }
     }
@@ -295,7 +323,20 @@ fn parse_widget(node: Node<'_, '_>) -> Result<Widget, ParseError> {
         properties,
         children,
         layout,
+        actions,
+        add_actions,
     })
+}
+
+/// `<action>` definition: name plus its `<property>` children.
+fn parse_action(node: Node<'_, '_>) -> Action {
+    let name = node.attribute("name").unwrap_or("").to_string();
+    let properties = node
+        .children()
+        .filter(|child| child.has_tag_name("property"))
+        .filter_map(parse_property)
+        .collect();
+    Action { name, properties }
 }
 
 fn parse_layout(node: Node<'_, '_>) -> Result<Layout, ParseError> {
@@ -950,6 +991,66 @@ mod tests {
         );
         assert_eq!(policy.get("horstretch"), Some(&PropValue::Int(0)));
         assert_eq!(policy.get("verstretch"), Some(&PropValue::Int(2)));
+    }
+
+    #[test]
+    fn parses_main_window_actions_and_addaction_order() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0"><class>MainWindow</class>
+ <widget class="QMainWindow" name="MainWindow">
+  <widget class="QMenuBar" name="menubar">
+   <widget class="QMenu" name="menuFile">
+    <property name="title"><string>File</string></property>
+    <addaction name="actionOpen"/>
+    <addaction name="separator"/>
+    <addaction name="actionExit"/>
+   </widget>
+   <addaction name="menuFile"/>
+  </widget>
+  <widget class="QToolBar" name="toolBar">
+   <addaction name="actionOpen"/>
+  </widget>
+  <action name="actionOpen">
+   <property name="text"><string>Open</string></property>
+   <property name="enabled"><bool>false</bool></property>
+  </action>
+  <action name="actionExit">
+   <property name="text"><string>Exit</string></property>
+  </action>
+ </widget>
+</ui>"#;
+        let form = parse(xml).expect("main window parses");
+        assert_eq!(form.root.class, "QMainWindow");
+        assert_eq!(form.root.actions.len(), 2);
+        assert_eq!(form.root.actions[0].name, "actionOpen");
+        assert_eq!(
+            form.root.actions[0].property("enabled"),
+            Some(&PropValue::Bool(false))
+        );
+        let menu_bar = form
+            .root
+            .children
+            .iter()
+            .find(|widget| widget.class == "QMenuBar")
+            .expect("menu bar");
+        assert_eq!(menu_bar.add_actions, vec!["menuFile".to_string()]);
+        let menu = &menu_bar.children[0];
+        assert_eq!(menu.class, "QMenu");
+        assert_eq!(
+            menu.add_actions,
+            vec![
+                "actionOpen".to_string(),
+                "separator".to_string(),
+                "actionExit".to_string()
+            ]
+        );
+        let toolbar = form
+            .root
+            .children
+            .iter()
+            .find(|widget| widget.class == "QToolBar")
+            .expect("toolbar");
+        assert_eq!(toolbar.add_actions, vec!["actionOpen".to_string()]);
     }
 
     #[test]

@@ -95,6 +95,8 @@ defmodule EPlatform.DialogSession do
 
   @impl true
   def handle_continue(:boot, state) do
+    broadcast_main_window(state)
+
     try do
       {:ok, lua_state} = LuaLogic.compile_file(state.lua_file)
       {encoded_open_opts, lua_state} = Lua.encode!(lua_state, state.open_opts)
@@ -256,4 +258,26 @@ defmodule EPlatform.DialogSession do
   def broadcast(application_id, payload) do
     EPlatformWeb.Endpoint.broadcast("app_events:" <> application_id, "command", payload)
   end
+
+  defp broadcast_main_window(%{role: :main, ui_file: ui_file} = state)
+       when ui_file not in [nil, ""] do
+    priv_dir = :code.priv_dir(:e_platform)
+    path = "#{priv_dir}/qt_forms/#{ui_file}"
+
+    case File.read(path) do
+      {:ok, content} ->
+        broadcast(state.application_id, %{
+          "command" => "loadMainWindow",
+          "application_id" => state.application_id,
+          "form_id" => state.form_id,
+          "role" => "main",
+          "ui_xml" => content
+        })
+
+      {:error, reason} ->
+        Logger.warning("main window ui #{ui_file} not loaded: #{:file.format_error(reason)}")
+    end
+  end
+
+  defp broadcast_main_window(_state), do: :ok
 end

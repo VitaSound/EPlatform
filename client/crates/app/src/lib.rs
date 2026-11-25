@@ -92,6 +92,8 @@ pub struct Params {
     full: bool,
     /// Lua script for the main session when `full` is true.
     main_lua: Option<String>,
+    /// Optional `QMainWindow` `.ui` for the main session (0.14.8).
+    main_ui: Option<String>,
 }
 
 impl Default for Params {
@@ -103,6 +105,7 @@ impl Default for Params {
             ui: "test_dialog01.ui".into(),
             full: false,
             main_lua: None,
+            main_ui: None,
         }
     }
 }
@@ -112,6 +115,8 @@ impl Params {
     fn from_location() -> Self {
         let mut params = Params::default();
         let mut has_app = false;
+        let mut ui_value = None;
+        let mut main_ui_value = None;
         if let Some(window) = web_sys::window() {
             let location = window.location();
             if let Ok(search) = location.search() {
@@ -129,7 +134,11 @@ impl Params {
                             has_app = true;
                         }
                         "lua" => params.lua = value,
-                        "ui" => params.ui = value,
+                        "ui" => {
+                            params.ui = value.clone();
+                            ui_value = Some(value);
+                        }
+                        "mainui" => main_ui_value = Some(value),
                         "main" => {
                             params.main_lua = Some(value);
                             params.full = true;
@@ -149,6 +158,11 @@ impl Params {
             }
             if params.full && params.main_lua.is_none() {
                 params.main_lua = Some(params.lua.clone());
+            }
+            if params.full {
+                params.main_ui = main_ui_value
+                    .or(ui_value)
+                    .or_else(|| Some("mainwindow.ui".to_string()));
             }
             if params.backend.starts_with("ws://127.0.0.1") {
                 // Default backend follows the page host so remote browsers work.
@@ -614,14 +628,18 @@ impl App {
                         .main_lua
                         .clone()
                         .unwrap_or_else(|| self.params.lua.clone());
-                    socket.send(
-                        "start_app",
-                        serde_json::json!({
-                            "lua_file": main,
-                            "mode": "full",
-                        }),
-                    );
-                    Self::log(format!("start_app sent lua_file={main}"));
+                    let mut payload = serde_json::json!({
+                        "lua_file": main,
+                        "mode": "full",
+                    });
+                    if let Some(ui_file) = &self.params.main_ui {
+                        payload["ui_file"] = serde_json::Value::String(ui_file.clone());
+                    }
+                    socket.send("start_app", payload);
+                    Self::log(format!(
+                        "start_app sent lua_file={main} ui_file={}",
+                        self.params.main_ui.as_deref().unwrap_or("")
+                    ));
                 } else {
                     socket.send(
                         "start_dialog",
@@ -651,6 +669,7 @@ impl App {
             .unwrap_or("");
         match command {
             "createForm" => self.on_create_form(payload),
+            "loadMainWindow" => self.on_load_main_window(payload),
             "setProperty" => {
                 let object_name = str_field(payload, "object_name");
                 let property = str_field(payload, "property");
@@ -1074,6 +1093,34 @@ impl App {
     /// into the central MDI area (`placement=mdi`) or into the top-level
     /// layer (`placement=top-level`). Standalone mode coerces every form to
     /// top-level: there is no main window / MDI area to attach to.
+    /// 0.14.8: static `QMainWindow.ui` parts (menu/toolbar/status/title).
+    ///
+    /// Loaded before the main Lua script sends dynamic `menu`/`toolBar`
+    /// properties; later those properties replace the static model.
+    fn on_load_main_window(&mut self, payload: &serde_json::Value) {
+        let xml = payload
+            .get("ui_xml")
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
+        match shell::parse_main_window(xml) {
+            Ok(spec) => {
+                if let Some(title) = &spec.title {
+                    self.apply_window_title(title);
+                }
+                Self::log(format!(
+                    "loadMainWindow menu={} toolbar={} status={} central={} mdi={}",
+                    spec.menu.len(),
+                    spec.toolbar.len(),
+                    spec.status_visible,
+                    spec.central_class.as_deref().unwrap_or(""),
+                    spec.central_is_mdi
+                ));
+                self.shell.apply_main_window(spec);
+            }
+            Err(error) => Self::log(format!("loadMainWindow failed: {error}")),
+        }
+    }
+
     fn on_create_form(&mut self, payload: &serde_json::Value) {
         let form_id = payload
             .get("form_id")
@@ -4326,6 +4373,36 @@ mod tests {
         assert_eq!(content.x, central.x + 40.0);
         assert_eq!(content.y, central.y + 40.0);
         assert_eq!(content.size(), rqt::gui::QSizeF::new(320.0, 200.0));
+    }
+
+    #[test]
+    fn load_main_window_command_applies_static_shell() {
+        use serde_json::json;
+
+        const MAIN_WINDOW: &str = include_str!("../../../../server/priv/qt_forms/mainwindow.ui");
+
+        let mut app = App::new(Params {
+            full: true,
+            main_lua: Some("main.lua".into()),
+            main_ui: Some("mainwindow.ui".into()),
+            ..Params::default()
+        });
+        app.on_command(&json!({
+            "command": "loadMainWindow",
+            "role": "main",
+            "ui_xml": MAIN_WINDOW
+        }));
+        assert_eq!(app.shell.menu.len(), 2);
+        assert_eq!(app.shell.toolbar.len(), 3);
+        assert!(app.shell.status_visible);
+
+        app.on_command(&json!({
+            "command": "setAppProperty",
+            "property": "menu",
+            "value": [{ "title": "Dynamic" }]
+        }));
+        assert_eq!(app.shell.menu.len(), 1);
+        assert_eq!(app.shell.menu[0].title, "Dynamic");
     }
 
     #[test]

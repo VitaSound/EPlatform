@@ -4,6 +4,8 @@
 //! application chrome, while forms are placed either into the central MDI
 //! area (`placement=mdi`) or into a separate top-level layer.
 
+use std::collections::HashMap;
+
 use form_xml::PropValue;
 use rqt::gui::{QColor, QFont, QFontMetrics, QPainter, QRectF};
 use rqt::icons;
@@ -55,6 +57,322 @@ impl Default for MenuItem {
     }
 }
 
+/// Static parts extracted from a `QMainWindow` `.ui` file (0.14.8).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct MainWindowSpec {
+    pub title: Option<String>,
+    pub menu: Vec<MenuItem>,
+    pub toolbar: Vec<MenuItem>,
+    pub has_menu_bar: bool,
+    pub has_toolbar: bool,
+    pub status_visible: bool,
+    pub central_class: Option<String>,
+    pub central_is_mdi: bool,
+}
+
+/// Parse a Qt Designer `QMainWindow` form: menu bar, toolbar, status bar and
+/// the central widget. Actions are resolved by `<addaction name="...">`.
+pub fn parse_main_window(xml: &str) -> Result<MainWindowSpec, String> {
+    let form = form_xml::parse(xml).map_err(|error| error.to_string())?;
+    let root = &form.root;
+    if root.class != "QMainWindow" && root.class != "QWidget" && root.class != "QDialog" {
+        return Err(format!("root widget is {}, not QMainWindow", root.class));
+    }
+
+    let mut actions = HashMap::new();
+    collect_actions(root, &mut actions);
+    let mut menus = HashMap::new();
+    collect_menus(root, &mut menus);
+
+    let menu_bar = root
+        .children
+        .iter()
+        .find(|widget| widget.class == "QMenuBar" || widget.name.eq_ignore_ascii_case("menubar"));
+    let status_bar = root.children.iter().find(|widget| {
+        widget.class == "QStatusBar" || widget.name.eq_ignore_ascii_case("statusbar")
+    });
+    let toolbars: Vec<&form_xml::Widget> = root
+        .children
+        .iter()
+        .filter(|widget| widget.class == "QToolBar")
+        .collect();
+
+    let menu = menu_bar
+        .map(|bar| menu_items_from_bar(bar, &actions, &menus))
+        .unwrap_or_default();
+    let toolbar = toolbar_items(&toolbars, &actions);
+
+    let chrome = |class: &str| {
+        matches!(
+            class,
+            "QMenuBar" | "QStatusBar" | "QToolBar" | "QMenu" | "QDockWidget"
+        )
+    };
+    let central = root
+        .children
+        .iter()
+        .find(|widget| widget.name.eq_ignore_ascii_case("centralwidget"))
+        .or_else(|| root.children.iter().find(|widget| !chrome(&widget.class)));
+
+    Ok(MainWindowSpec {
+        title: root
+            .property("windowTitle")
+            .and_then(PropValue::as_str)
+            .map(str::to_string),
+        has_menu_bar: menu_bar.is_some(),
+        has_toolbar: !toolbars.is_empty(),
+        status_visible: status_bar.is_some(),
+        central_class: central.map(|widget| widget.class.clone()),
+        central_is_mdi: central.is_some_and(contains_mdi_area),
+        menu,
+        toolbar,
+    })
+}
+
+fn contains_mdi_area(widget: &form_xml::Widget) -> bool {
+    widget.class == "QMdiArea"
+        || widget.children.iter().any(contains_mdi_area)
+        || widget.layout.as_ref().is_some_and(layout_contains_mdi_area)
+}
+
+fn layout_contains_mdi_area(layout: &form_xml::Layout) -> bool {
+    layout.items.iter().any(|item| match item {
+        form_xml::LayoutItem::Widget(widget, _) => contains_mdi_area(widget),
+        form_xml::LayoutItem::Layout(layout, _) => layout_contains_mdi_area(layout),
+        form_xml::LayoutItem::Spacer(_, _) => false,
+    })
+}
+
+fn collect_actions(widget: &form_xml::Widget, actions: &mut HashMap<String, form_xml::Action>) {
+    for action in &widget.actions {
+        actions
+            .entry(action.name.clone())
+            .or_insert_with(|| action.clone());
+    }
+    for child in &widget.children {
+        collect_actions(child, actions);
+    }
+}
+
+fn collect_menus<'a>(
+    widget: &'a form_xml::Widget,
+    menus: &mut HashMap<String, &'a form_xml::Widget>,
+) {
+    if widget.class == "QMenu" {
+        menus.entry(widget.name.clone()).or_insert(widget);
+    }
+    for child in &widget.children {
+        collect_menus(child, menus);
+    }
+}
+
+fn menu_items_from_bar(
+    menu_bar: &form_xml::Widget,
+    actions: &HashMap<String, form_xml::Action>,
+    menus: &HashMap<String, &form_xml::Widget>,
+) -> Vec<MenuItem> {
+    let mut out = Vec::new();
+    let references: Vec<String> = if menu_bar.add_actions.is_empty() {
+        menu_bar
+            .children
+            .iter()
+            .filter(|widget| widget.class == "QMenu")
+            .map(|widget| widget.name.clone())
+            .collect()
+    } else {
+        menu_bar.add_actions.clone()
+    };
+    for (index, reference) in references.iter().enumerate() {
+        if let Some(item) =
+            resolve_menu_reference(reference, actions, menus, &index.to_string(), true)
+        {
+            out.push(item);
+        }
+    }
+    out
+}
+
+fn resolve_menu_reference(
+    reference: &str,
+    actions: &HashMap<String, form_xml::Action>,
+    menus: &HashMap<String, &form_xml::Widget>,
+    path: &str,
+    top_level: bool,
+) -> Option<MenuItem> {
+    if reference == "separator" {
+        return Some(MenuItem {
+            id: path.to_string(),
+            separator: true,
+            ..MenuItem::default()
+        });
+    }
+    if let Some(action) = actions.get(reference) {
+        return Some(menu_item_from_action(action, path));
+    }
+    if let Some(menu) = menus.get(reference) {
+        let title = menu
+            .property("title")
+            .and_then(PropValue::as_str)
+            .unwrap_or(&menu.name)
+            .to_string();
+        let children = if menu.add_actions.is_empty() {
+            menu.children
+                .iter()
+                .filter(|widget| widget.class == "QMenu")
+                .enumerate()
+                .filter_map(|(index, child)| {
+                    resolve_menu_reference(
+                        &child.name,
+                        actions,
+                        menus,
+                        &format!("{path}/{index}"),
+                        false,
+                    )
+                })
+                .collect()
+        } else {
+            menu.add_actions
+                .iter()
+                .enumerate()
+                .filter_map(|(index, child)| {
+                    resolve_menu_reference(child, actions, menus, &format!("{path}/{index}"), false)
+                })
+                .collect()
+        };
+        return Some(MenuItem {
+            id: path.to_string(),
+            title,
+            icon: property_icon(menu),
+            enabled: menu
+                .property("enabled")
+                .and_then(PropValue::as_bool)
+                .unwrap_or(true),
+            children,
+            ..MenuItem::default()
+        });
+    }
+    // Unknown references are rendered by their object name so that a broken
+    // `.ui` does not silently drop a whole menu row.
+    if top_level {
+        Some(MenuItem {
+            id: path.to_string(),
+            title: reference.to_string(),
+            ..MenuItem::default()
+        })
+    } else {
+        None
+    }
+}
+
+fn menu_item_from_action(action: &form_xml::Action, path: &str) -> MenuItem {
+    let text = action
+        .property("text")
+        .and_then(PropValue::as_str)
+        .unwrap_or(&action.name)
+        .to_string();
+    let action_name = action
+        .property("action")
+        .and_then(PropValue::as_str)
+        .map(str::to_string);
+    let lua_file = action
+        .property("lua_file")
+        .and_then(PropValue::as_str)
+        .map(str::to_string);
+    let action_name = action_name.or_else(|| lua_file.as_ref().map(|_| "open_lua".to_string()));
+    MenuItem {
+        id: path.to_string(),
+        title: text,
+        icon: property_icon_from(&action.properties),
+        action: action_name,
+        lua_file,
+        ui_file: action
+            .property("ui_file")
+            .and_then(PropValue::as_str)
+            .map(str::to_string),
+        mdi: action
+            .property("mdi")
+            .and_then(PropValue::as_bool)
+            .unwrap_or(false),
+        modal: action
+            .property("modal")
+            .and_then(PropValue::as_bool)
+            .unwrap_or(false),
+        modal_scope: action
+            .property("modal_scope")
+            .and_then(PropValue::as_str)
+            .unwrap_or("application")
+            .to_string(),
+        enabled: action
+            .property("enabled")
+            .and_then(PropValue::as_bool)
+            .unwrap_or(true),
+        separator: action.name == "separator"
+            || action
+                .property("separator")
+                .and_then(PropValue::as_bool)
+                .unwrap_or(false),
+        checkable: action
+            .property("checkable")
+            .and_then(PropValue::as_bool)
+            .unwrap_or(false),
+        checked: action
+            .property("checked")
+            .and_then(PropValue::as_bool)
+            .unwrap_or(false),
+        children: Vec::new(),
+    }
+}
+
+fn toolbar_items(
+    toolbars: &[&form_xml::Widget],
+    actions: &HashMap<String, form_xml::Action>,
+) -> Vec<MenuItem> {
+    let mut out = Vec::new();
+    for toolbar in toolbars {
+        if !out.is_empty() {
+            out.push(MenuItem {
+                id: format!("separator/{}", out.len()),
+                separator: true,
+                ..MenuItem::default()
+            });
+        }
+        for (index, reference) in toolbar.add_actions.iter().enumerate() {
+            let path = format!("{}/{}", out.len(), index);
+            if reference == "separator" {
+                out.push(MenuItem {
+                    id: path,
+                    separator: true,
+                    ..MenuItem::default()
+                });
+            } else if let Some(action) = actions.get(reference) {
+                out.push(menu_item_from_action(action, &path));
+            }
+        }
+    }
+    out
+}
+
+fn property_icon(widget: &form_xml::Widget) -> Option<String> {
+    property_icon_from(&widget.properties)
+}
+
+fn property_icon_from(properties: &[(String, PropValue)]) -> Option<String> {
+    let value = properties
+        .iter()
+        .find(|(key, _)| key == "icon")
+        .map(|(_, value)| value)?;
+    match value {
+        PropValue::Map(entries) => entries
+            .iter()
+            .find(|(key, _)| key == "normaloff")
+            .or_else(|| entries.first())
+            .and_then(|(_, value)| value.as_str())
+            .map(str::to_string),
+        PropValue::Str(spec) => Some(spec.clone()),
+        _ => None,
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum ShellHit {
     MenuTop(usize),
@@ -86,13 +404,29 @@ pub struct Shell {
 
 impl Shell {
     pub fn set_menu(&mut self, value: &PropValue) {
-        self.menu = items_from_value(value);
+        self.set_menu_items(items_from_value(value));
+    }
+
+    pub fn set_menu_items(&mut self, items: Vec<MenuItem>) {
+        self.menu = items;
         self.open_path = None;
     }
 
     pub fn set_toolbar(&mut self, value: &PropValue) {
-        self.toolbar = items_from_value(value);
+        self.set_toolbar_items(items_from_value(value));
+    }
+
+    pub fn set_toolbar_items(&mut self, items: Vec<MenuItem>) {
+        self.toolbar = items;
         self.toolbar_visible = !self.toolbar.is_empty();
+    }
+
+    /// Apply static `QMainWindow.ui` parts. Later Lua `menu`/`toolBar`
+    /// properties replace them through the normal setters.
+    pub fn apply_main_window(&mut self, spec: MainWindowSpec) {
+        self.set_menu_items(spec.menu);
+        self.set_toolbar_items(spec.toolbar);
+        self.status_visible = spec.status_visible;
     }
 
     pub fn set_status_message(&mut self, text: Option<String>, timeout_ms: Option<f64>, now: f64) {
@@ -705,6 +1039,50 @@ mod tests {
                 ),
             ]),
         ])
+    }
+
+    const MAIN_WINDOW_UI: &str = include_str!("../../../../server/priv/qt_forms/mainwindow.ui");
+
+    #[test]
+    fn parses_qmainwindow_ui_static_shell() {
+        let spec = parse_main_window(MAIN_WINDOW_UI).expect("main window parses");
+        assert_eq!(spec.title.as_deref(), Some("EPlatform main window"));
+        assert!(spec.has_menu_bar);
+        assert!(spec.has_toolbar);
+        assert!(spec.status_visible);
+        assert_eq!(spec.central_class.as_deref(), Some("QWidget"));
+        assert!(spec.central_is_mdi);
+        assert_eq!(spec.menu.len(), 2);
+        assert_eq!(spec.menu[0].title, "Файл");
+        assert_eq!(spec.menu[0].children.len(), 3);
+        assert_eq!(spec.menu[0].children[0].title, "Тестовая форма");
+        assert_eq!(
+            spec.menu[0].children[0].lua_file.as_deref(),
+            Some("test_form_move.lua")
+        );
+        assert_eq!(spec.menu[0].children[0].action.as_deref(), Some("open_lua"));
+        assert_eq!(spec.menu[0].children[0].icon.as_deref(), Some("img24:45"));
+        assert!(spec.menu[0].children[1].separator);
+        assert_eq!(spec.menu[0].children[2].action.as_deref(), Some("exit"));
+        assert_eq!(spec.menu[1].children[0].title, "Окна");
+        assert_eq!(spec.toolbar.len(), 3);
+        assert_eq!(spec.toolbar[0].title, "Тестовая форма");
+        assert!(spec.toolbar[1].separator);
+
+        let mut shell = Shell::default();
+        shell.visible = true;
+        shell.apply_main_window(spec);
+        assert!(shell.menu.len() >= 2);
+        assert!(shell.toolbar_visible);
+        assert!(shell.status_visible);
+
+        // Dynamic `set_menu` replaces the static model.
+        shell.set_menu(&PropValue::List(vec![PropValue::Map(vec![(
+            "title".into(),
+            PropValue::Str("Dynamic".into()),
+        )])]));
+        assert_eq!(shell.menu.len(), 1);
+        assert_eq!(shell.menu[0].title, "Dynamic");
     }
 
     #[test]

@@ -62,6 +62,33 @@ defmodule EPlatform.PlatformChannelTest do
     }
   end
 
+  test "start_app with ui_file sends static QMainWindow parts", %{socket: socket} do
+    ref =
+      push(socket, "start_app", %{
+        "lua_file" => "test_mainwindow.lua",
+        "ui_file" => "mainwindow.ui"
+      })
+
+    assert_reply ref, :ok, %{"form_id" => main_id, "role" => "main"}
+
+    assert_push "command", %{
+      "command" => "loadMainWindow",
+      "form_id" => ^main_id,
+      "role" => "main",
+      "ui_xml" => xml
+    }
+
+    assert xml =~ "QMainWindow"
+    assert xml =~ "actionOpen"
+
+    # The script does not call set_menu/setToolBar: the static model survives.
+    assert_push "command", %{
+      "command" => "setAppProperty",
+      "property" => "statusMessage",
+      "source_form_id" => ^main_id
+    }
+  end
+
   test "main session menu action opens an MDI form", %{socket: socket} do
     ref = push(socket, "start_app", %{"lua_file" => "test_main.lua"})
     assert_reply ref, :ok, %{"form_id" => main_id}

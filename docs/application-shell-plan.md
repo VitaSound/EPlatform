@@ -1,8 +1,8 @@
 # Этап 0.14 — Application shell: главное окно, меню, MDI/top-level, statusbar
 
-Статус: ✅ 0.14.1–0.14.7 реализованы (2026-11-25); 0.14.8
-(`QMainWindow` из `.ui`) отложен; 0.14.9 — браузерные сценарии
-проверены, golden-снимки menu/statusbar ещё не зафиксированы.
+Статус: ✅ 0.14.1–0.14.8 реализованы (2026-11-25); 0.14.9 —
+браузерные сценарии full/standalone/static `QMainWindow` проверены,
+golden-снимки menu/statusbar ещё не зафиксированы.
 
 Дата: 2026-11-25.
 Связанные документы: `widgets-plan.md`, `EPlan_Status.md`,
@@ -183,7 +183,8 @@ Application (application_id)
 - main-сессия одна на `application_id`;
 - главное окно показывает menu, toolbar, central MDI area и statusbar;
 - main использует фиксированную клиентскую оболочку; menu/toolbar/status;
-  `QMainWindow.ui` отложен до 0.14.8 (решение D3);
+  `QMainWindow.ui` реализован в 0.14.8 (static menu/toolbar/status
+  вытесняются динамическими `set_menu`/`setToolBar`);
 - `App:setWindowTitle`, `setIcon`, `set_menu`, `setToolBar` принадлежат
   main;
 - `App:open_lua` из main создаёт top-level форму с owner=main;
@@ -264,7 +265,7 @@ Application (application_id)
 - `App:setToolBar(spec)` / `setAppProperty("toolBar", spec)` и
   `toolbarVisible`;
 - action dispatch — тот же путь, что у меню (main-сессия);
-- статический toolbar из `QMainWindow.ui` — в 0.14.8;
+- статический toolbar из `QMainWindow.ui` — ✅ 0.14.8;
 - overflow/extension, drag между областями и кастомизация — позже,
   но модель должна допускать `Top/Bottom/Left/Right`.
 
@@ -366,17 +367,23 @@ central area.
 приложение; скрытие через `toolbarVisible` работает; golden-тест
 панели.
 
-### 0.14.8 `QMainWindow` в `.ui` — отложено (M)
+### 0.14.8 `QMainWindow` в `.ui` — ✅ сделано (2026-11-25)
 
-- `form-xml`: `QMainWindow`, `QMenuBar`, `QStatusBar`, `QToolBar`,
-  `<action>`, `<addaction>`;
-- `rqt`: `QMdiArea` как central widget, static menu/toolbar;
+- `form-xml`: `QMainWindow`/`QWidget` actions — `Widget.actions` и
+  `Widget.add_actions` (`<action>`, `<addaction>`), свойства actions
+  через общий `parse_property`;
+- `shell::parse_main_window` собирает title, `QMenuBar`/`QMenu`,
+  `QToolBar`, `QStatusBar`, central widget и проверяет наличие
+  `QMdiArea`; `Shell::apply_main_window` применяет модель;
+- `start_app` принимает `ui_file`; main-сессия шлёт `loadMainWindow`
+  с `ui_xml`, клиент по умолчанию грузит `mainwindow.ui` в full mode;
 - dynamic `App:set_menu`/`setToolBar` заменяет static;
-- toolbar из `.ui` — статический, пока не переопределён Lua.
+- toolbar из `.ui` — статический, пока не переопределён Lua;
+- фикстуры `server/priv/qt_forms/mainwindow.ui`,
+  `server/priv/lua_modules/test_mainwindow.lua`.
 
-**DoD:** `mainwindow.ui` из `tcs_qtgui` (или его аналог) загружается
-без ручной сборки shell. До этого этапа используется фиксированная
-оболочка (D3-A).
+**DoD:** ✅ `mainwindow.ui` загружается без ручной сборки shell; в
+браузере работают static menu/toolbar/status, action открывает MDI-форму.
 
 ### 0.14.9 Интеграция и golden (M)
 
@@ -514,7 +521,8 @@ standalone/формы; текущие `?lua`-URL остаются standalone п�
 
 **Решение: A.** Фиксированная оболочка в 0.14; меню и toolbar из Lua.
 `QToolBar` — обязательный виджет, входит в 0.14.7; `QMainWindow.ui` —
-отдельный 0.14.8.
+отдельный 0.14.8 (✅ static menu/toolbar/status из `.ui`, сама оболочка
+остаётся клиентской).
 
 ### D4. Top-level окна в браузере
 
@@ -629,10 +637,12 @@ clamp в viewport; `Form:center`/`centered` — отдельное свойст�
 - **0.15** ✅ popup/toolbar/MDI/top-level больше не используют
   маскировку текста: painter order сохранён упорядоченным
   `PaintBatch`-display list (см. `widgets-plan.md` §0.15).
-- **0.14.8** ⏸ `QMainWindow` из `.ui` отложен по D3-A; используется
-  фиксированная оболочка.
+- **0.14.8** ✅ `QMainWindow` из `.ui`: `form-xml` actions/addaction,
+  `shell::parse_main_window`, start_app `ui_file` → `loadMainWindow`;
+  static menu/toolbar/status заменяются Lua-свойствами.
 - **0.14.9** ⚠️ браузерная проверка full/standalone/menu/toolbar/
-  top-level выполнена; golden-снимки menu/statusbar ещё не зафиксированы.
+  top-level/static `QMainWindow` выполнена; golden-снимки
+  menu/statusbar ещё не зафиксированы.
 
 Проверки на момент статуса: `cargo test --workspace`, `mix test`,
 `trunk build --release`; live-сценарии `?main=test_main.lua` и

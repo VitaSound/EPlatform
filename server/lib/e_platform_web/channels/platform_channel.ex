@@ -32,6 +32,7 @@ defmodule EPlatformWeb.PlatformChannel do
       mode: :full,
       role: :main,
       mdi: false,
+      ui_file: params["ui_file"] || "",
       open_opts: params["open_opts"] || %{}
     }
 

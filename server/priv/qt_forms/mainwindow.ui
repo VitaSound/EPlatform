@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>MainWindow</class>
+ <widget class="QMainWindow" name="MainWindow">
+  <property name="geometry">
+   <rect><x>0</x><y>0</y><width>800</width><height>600</height></rect>
+  </property>
+  <property name="windowTitle">
+   <string>EPlatform main window</string>
+  </property>
+  <widget class="QWidget" name="centralwidget">
+   <layout class="QVBoxLayout" name="centralLayout">
+    <property name="leftMargin"><number>0</number></property>
+    <property name="topMargin"><number>0</number></property>
+    <property name="rightMargin"><number>0</number></property>
+    <property name="bottomMargin"><number>0</number></property>
+    <item>
+     <widget class="QMdiArea" name="mdiArea"/>
+    </item>
+   </layout>
+  </widget>
+  <widget class="QMenuBar" name="menubar">
+   <property name="geometry">
+    <rect><x>0</x><y>0</y><width>800</width><height>22</height></rect>
+   </property>
+   <widget class="QMenu" name="menuFile">
+    <property name="title"><string>Файл</string></property>
+    <addaction name="actionOpen"/>
+    <addaction name="separator"/>
+    <addaction name="actionExit"/>
+   </widget>
+   <widget class="QMenu" name="menuView">
+    <property name="title"><string>Вид</string></property>
+    <addaction name="menuWindows"/>
+   </widget>
+   <widget class="QMenu" name="menuWindows">
+    <property name="title"><string>Окна</string></property>
+    <addaction name="actionOpen"/>
+   </widget>
+   <addaction name="menuFile"/>
+   <addaction name="menuView"/>
+  </widget>
+  <widget class="QStatusBar" name="statusbar">
+   <property name="sizeGripEnabled"><bool>true</bool></property>
+  </widget>
+  <widget class="QToolBar" name="toolBar">
+   <property name="windowTitle"><string>Панель</string></property>
+   <addaction name="actionOpen"/>
+   <addaction name="separator"/>
+   <addaction name="actionExit"/>
+  </widget>
+  <action name="actionOpen">
+   <property name="text"><string>Тестовая форма</string></property>
+   <property name="icon">
+    <iconset>
+     <normaloff>img24:45</normaloff>
+     <normalon>img24:45</normalon>
+     <disabledoff>img24d:45</disabledoff>
+     <disabledon>img24d:45</disabledon>
+    </iconset>
+   </property>
+   <property name="action"><string>open_lua</string></property>
+   <property name="lua_file"><string>test_form_move.lua</string></property>
+   <property name="mdi"><bool>true</bool></property>
+  </action>
+  <action name="actionExit">
+   <property name="text"><string>Выход</string></property>
+   <property name="icon">
+    <iconset>
+     <normaloff>img24:12</normaloff>
+     <normalon>img24:12</normalon>
+    </iconset>
+   </property>
+   <property name="action"><string>exit</string></property>
+  </action>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>
