@@ -2,6 +2,14 @@
 <html lang="ru">
   <head>
     <meta charset="utf-8" />
+    <!-- Without this the mobile browser uses a 980px layout viewport and zooms
+         out: the canvas is laid out at 980x2120 while winit reports pointer
+         coordinates in visual-viewport CSS pixels, so every tap lands ~2.5x
+         away from its target. -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no"
+    />
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
     <meta http-equiv="Pragma" content="no-cache" />
     <meta http-equiv="Expires" content="0" />
@@ -18,6 +26,13 @@
       canvas {
         display: block;
         outline: none;
+        /* Touch devices: the canvas owns all gestures, so the browser must not
+           scroll/zoom/double-tap-zoom instead of delivering pointer events. */
+        touch-action: none;
+        -webkit-user-select: none;
+        user-select: none;
+        -webkit-touch-callout: none;
+        -webkit-tap-highlight-color: transparent;
       }
     </style>
   </head>

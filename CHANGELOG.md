@@ -2,6 +2,66 @@
 
 ## 2026-11-25
 
+### `scripts/serve_dist.py`: gzip и keep-alive
+
+- **Проблема.** Страница на телефоне открывалась десятки секунд:
+  `app-*_bg.wasm` весит 10.4 МБ и отдавался без сжатия
+  (`SimpleHTTPRequestHandler` игнорирует `Accept-Encoding`), а по
+  HTTP/1.0 каждое из трёх тел шло в новом TCP-соединении поверх
+  WireGuard-релея.
+- **Правка.** `send_head` отдаёт `.wasm/.js/.html/.css/.json/.svg/.xml`
+  (>1 КБ) с `Content-Encoding: gzip` и `Vary: Accept-Encoding`,
+  сжатие кешируется по mtime; `protocol_version = "HTTP/1.1"` — работает
+  keep-alive.
+- **Эффект.** wasm 10 413 979 → 3 479 075 Б (2.99x), js 149 159 →
+  22 934 Б (6.5x). В браузере `encodedBodySize=3 479 075`,
+  `decodedBodySize=10 413 979` — приложение стартует как раньше.
+- **Осталось в резерве.** 2.7 МБ внутри wasm — секция `name` (символы):
+  `strip = "symbols"` в `[profile.release]` даёт 7.3 МБ raw /
+  2.95 МБ gzip (−11 %), `wasm-opt -Oz` (сейчас
+  `data-wasm-opt="0"`) — ещё больше.
+
+### Ввод с сенсорных экранов в wasm-клиенте (iOS/Android)
+
+- **Симптом.** На iPhone (Chrome = WebKit) страница рисовалась, меню
+  открывалось, окно формы создавалось, но кнопки, `QLineEdit`,
+  перемещение и ресайз подокон не работали: «работал» только левый
+  верхний угол. Причина — три независимых дефекта.
+- **1. Не было `WindowEvent::Touch`.** `winit` на web отдаёт касания
+  только как `Touch` (`CursorMoved`+`MouseInput` — лишь для
+  `pointerType == "mouse"`), а в `App::window_event` ветки `Touch` не
+  было. Логика указателя вынесена в `App::pointer_moved(x, y)` /
+  `App::pointer_released()` (отдельный `impl App`), `Touch{Started,
+  Moved,Ended,Cancelled}` делегируют туда же. В CSS —
+  `canvas { touch-action: none; user-select: none; -webkit-touch-callout:
+  none; -webkit-tap-highlight-color: transparent }`.
+- **2. Не было `<meta name="viewport">`.** Мобильный браузер брал layout
+  viewport 980 px: `innerWidth=980`, `canvas=980×2120`,
+  `visualViewport.scale=0.398`. Координаты указателя приходят в CSS
+  visual viewport, виджеты живут в layout-пикселях → промах 2.5×.
+  Добавлен `width=device-width, initial-scale=1, viewport-fit=cover,
+  user-scalable=no`.
+- **3. DPI-рассинхрон.** Web-бэкенд `winit` отдаёт `inner_size()` в
+  CSS-пикселях, а позиции указателя — в device-пикселях
+  (`css * dpr`), при `scale_factor()==3`; из-за этого `Gfx::ui_scale`
+  становился 3, логическое пространство — `130×281` вместо `390×844`.
+  Добавлены `App::physical_size()` (домножает размер окна на DPR на
+  wasm) и `App::sync_canvas_backing()` (backing store канваса в
+  device-пикселях: `1170×2532` при CSS `390×844`) — `ui_scale` остался
+  реальным DPR, а картинка стала HiDPI-резкой.
+- **Проверки.** `cargo check --workspace`, `trunk build --release` — ok.
+  Доверенный тач через CDP `Input.dispatchTouchEvent` (WSLg Chromium
+  :9222, 390×844, `deviceScaleFactor=3`, `maxTouchPoints=5`): тап по
+  «Файл» → меню; тап по «Тестовая форма» → `createForm` через WS; тап по
+  `QPushButton` → `event Clicked -> pushButton_1` + `formEvent Clicked` на
+  сервер; тап по `QLineEdit` → `focus lineEdit_2`; drag заголовка → окно
+  переехало; drag правой грани и угла → ресайз.
+- **Осталось** (подробно — `widgets-plan.md`, раздел «Touch-ввод на
+  смартфоне»): мягкая клавиатура/ввод текста (`keydown` на canvas, нужен
+  скрытый `<input>` + bridging в `KeyboardInput`), pinch/зум и
+  двухпальцевый скролл, контекстное меню по долгому тапу, выделение
+  текста тачем, сброс hover после `TouchPhase::Ended`.
+
 ### Form layout 0.13.1–0.13.3: `QFormLayout` раскладывается двумя колонками
 
 - **Парсер.** `form_xml::Layout` получил `field_growth_policy`,

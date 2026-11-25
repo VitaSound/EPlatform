@@ -462,3 +462,100 @@ chrome-devtools MCP на `127.0.0.1:9222`, скриншоты до/после с
 Меню/тулбар/главное окно вынесены в отдельный этап 0.14
 (`docs/application-shell-plan.md`), а не в волну 0.
 
+## Touch-ввод на смартфоне (iOS/Android) — состояние на 2026-11-25
+
+Проверка шла со смартфона (iPhone, Chrome = WebKit) по адресу
+`http://10.0.0.7:8080/?main=test_main.lua`; страницу отдаёт
+`client/scripts/serve_dist.py`, приложение — Phoenix на `:4000` через
+WireGuard-пир `10.0.0.7`. Симптом до правок: экран рисуется, меню
+открывается, окно формы создаётся, но **дальше не работает ничего** —
+кнопки, `QLineEdit`, перемещение и ресайз MDI-подокон. Всё, что не
+в левом верхнем углу, «промахивается».
+
+### Причина — три независимых дефекта, наложившихся друг на друга
+
+1. **Не было обработчика `WindowEvent::Touch`.** `winit` на web отдаёт
+   касания только как `Touch`; `CursorMoved` + `MouseInput` приходят
+   лишь для `pointerType == "mouse"`
+   (`winit/src/platform_impl/web/event_loop/window_target.rs`). В
+   `App::window_event` ветки `Touch` не было — тапы уходили в `_ => {}`.
+   ✅ Исправлено: логика указателя вынесена в `App::pointer_moved(x, y)`
+   / `App::pointer_released()`, `Touch{Started,Moved,Ended,Cancelled}`
+   делегируют туда же. Плюс `canvas { touch-action: none; user-select:
+   none; -webkit-touch-callout: none }`, чтобы WebKit не забирал жест под
+   скролл/зум/двойной тап.
+2. **В `index.html` не было `<meta name="viewport">`.** Мобильный
+   браузер брал layout viewport 980 px и масштабировал страницу:
+   `innerWidth = 980`, `canvas = 980×2120`, `visualViewport.scale =
+   0.398`. `winit` считает координаты указателя в CSS-пикселях
+   visual viewport, а виджеты живут в layout-пикселях → **промах 2.5×**,
+   растущий от левого верхнего угла. Поэтому «работало» только меню.
+   ✅ Исправлено: `width=device-width, initial-scale=1,
+   viewport-fit=cover, user-scalable=no` → `innerWidth = 390`,
+   `scale = 1`.
+3. **Рассинхрон DPI между `inner_size()` и координатами указателя.**
+   Web-бэкенд `winit` отдаёт `Resized`/`inner_size()` в CSS-пикселях, а
+   позиции указателя — в device-пикселях (`css * devicePixelRatio`),
+   при этом `window.scale_factor() == 3`. `Gfx::ui_scale` вычислялся как
+   `config / (size / dpr)`, т.е. 3 → логическое пространство приложения
+   становилось `130×281` вместо `390×844`, а `cursor = position /
+   ui_scale` давал ту же тройную ошибку (замер: тап в CSS `(213,269)`
+   приходил как `(639,807)`).
+   ✅ Исправлено: `App::physical_size()` домножает размер окна на DPR на
+   wasm, `App::sync_canvas_backing()` держит backing store канваса в
+   device-пикселях (`canvas = 1170×2532` при CSS `390×844`), так что
+   `ui_scale = 3`, логика — `390×844`, и картинка стала HiDPI-резкой.
+   То же пересчитывается в `ScaleFactorChanged` (`App::scaled_size`):
+   проверено поворотом 390×844 → 844×390 (`canvas` 2532×1170, тапы
+   продолжают попадать).
+
+### Проверено (доверенный тач, не синтетические события)
+
+Через CDP (`Input.dispatchTouchEvent` в WSLg Chromium :9222, эмуляция
+390×844, `deviceScaleFactor=3`, `maxTouchPoints=5`):
+
+- тап по меню «Файл» → меню открылось;
+- тап по пункту «Тестовая форма» → `menuAction open_lua` → `createForm`
+  через WS, форма разложена;
+- тап по `QPushButton` → `focus pushButton_1`, `event Clicked ->
+  pushButton_1`, `formEvent Clicked` ушёл на сервер;
+- тап по `QLineEdit` → `focus lineEdit_2`, `MouseButtonRelease ->
+  lineEdit_2`;
+- drag заголовка MDI-подокна → окно переехало (release гасится веткой
+  `dragging`, отдельного `click at` нет — так и задумано);
+- drag правой грани и правого нижнего угла → окно ресайзится.
+
+### Что осталось (не сделано, кандидаты в задачи)
+
+- [ ] **Мягкая клавиатура / ввод текста.** `winit` слушает `keydown` на
+  `canvas` (`tabindex=0`), iOS так клавиатуру не поднимает: `QLineEdit`
+  фокусируется, но печатать нечем. Нужен скрытый `<input>`/
+  `contenteditable` + `compositionend`/`beforeinput` → `KeyboardInput`
+  (и это единственный способ получить IME/эмодзи/русскую раскладку).
+- [ ] **Жесты не отключают поведение браузера целиком.** Сейчас запрещены
+  только те, что мапятся на `touch-action`; двойной тап, pinch-zoom и
+  скролл двумя пальцами в приложении не реализованы (и намеренно
+  заблокированы в браузере). Для «десктопного» приложения на телефоне
+  нужен свой набор: pinch → масштаб сцены, два пальца → `MouseWheel`
+  (сейчас `MouseWheel` приходит только от колеса мыши/трекпада).
+- [ ] **Контекстное меню / долгий тап.** `contextmenu` winit глушит через
+  `prevent_default`, но `QWidget::contextMenuEvent` в `rqt` не
+  задействован — долгий тап ничего не делает.
+- [ ] **Выделение текста в `QLineEdit`.** Двойной тап («слово») и
+  перетаскивание маркеров выделения не реализованы; сейчас выделение
+  живёт только через drag мышью (который на тач-экране означает
+  прокрутку/ресайз).
+- [ ] **`hover`-состояния на тач-экране.** После `TouchPhase::Ended`
+  `under_mouse_widget` остаётся выставленным — виджеты остаются
+  подсвеченными «под курсором». По-хорошему после тача hover нужно
+  сбрасывать (как Qt `QEvent::HoverLeave`).
+- [ ] **`touch` на нескольких пальцах.** Обрабатывается только основное
+  касание; `winit` отдаёт и остальные `Touch`-id, игнорируем.
+
+### Как воспроизводить
+
+`python3 client/scripts/serve_dist.py --port 8080` (отдаёт
+`client/crates/app/dist` с gzip, см. `CHANGELOG.md`), `mix phx.server` в
+`server/`, затем `http://<ip>:8080/?main=test_main.lua` с телефона, либо
+через CDP-эмуляцию touch (как выше) — синтетические `PointerEvent` из
+`page.evaluate` дают тот же путь, но проверять лучше `dispatchTouchEvent`.

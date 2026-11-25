@@ -19,7 +19,7 @@ use std::sync::mpsc::{channel, Receiver};
 use std::sync::Arc;
 use winit::{
     application::ApplicationHandler,
-    event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent},
+    event::{ElementState, MouseButton, MouseScrollDelta, TouchPhase, WindowEvent},
     event_loop::{ActiveEventLoop, EventLoop},
     window::{CursorIcon, Window, WindowId},
 };
@@ -469,6 +469,75 @@ impl App {
         #[cfg(not(target_arch = "wasm32"))]
         let _ = png;
     }
+
+    /// Surface size in device pixels.
+    ///
+    /// winit's web backend reports `inner_size()` as the canvas' CSS size while
+    /// pointer events arrive in device pixels (`css * devicePixelRatio`). The
+    /// app's contract is "surface = device pixels, logical = surface /
+    /// ui_scale", so the DPR has to be applied here; otherwise the logical
+    /// area is squeezed and every tap lands DPR-times away from its widget.
+    fn physical_size(&self, size: winit::dpi::PhysicalSize<u32>) -> (u32, u32) {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let dpr = self
+                .window
+                .as_ref()
+                .map(|window| window.scale_factor())
+                .unwrap_or(1.0);
+            if dpr > 0.0 && dpr != 1.0 {
+                return (
+                    ((size.width as f64) * dpr).round().max(1.0) as u32,
+                    ((size.height as f64) * dpr).round().max(1.0) as u32,
+                );
+            }
+        }
+        (size.width.max(1), size.height.max(1))
+    }
+
+    /// Device-pixel size after a DPR change: on wasm `inner_size()` is the CSS
+    /// size, so the new scale factor has to be applied to it; natively the size
+    /// is already physical.
+    fn scaled_size(&self, scale_factor: f64) -> (u32, u32) {
+        let size = self
+            .window
+            .as_ref()
+            .map(|window| window.inner_size())
+            .unwrap_or(winit::dpi::PhysicalSize::new(0, 0));
+        #[cfg(target_arch = "wasm32")]
+        {
+            let dpr = if scale_factor > 0.0 {
+                scale_factor
+            } else {
+                1.0
+            };
+            if dpr != 1.0 {
+                return (
+                    ((size.width as f64) * dpr).round().max(1.0) as u32,
+                    ((size.height as f64) * dpr).round().max(1.0) as u32,
+                );
+            }
+        }
+        let _ = scale_factor;
+        (size.width.max(1), size.height.max(1))
+    }
+
+    /// Keep the canvas backing store in device pixels; the CSS size stays
+    /// 100% so the browser scales it down (HiDPI stays crisp).
+    #[cfg(target_arch = "wasm32")]
+    fn sync_canvas_backing(&self, width: u32, height: u32) {
+        use winit::platform::web::WindowExtWebSys;
+        let Some(canvas) = self.window.as_ref().and_then(|window| window.canvas()) else {
+            return;
+        };
+        if canvas.width() != width || canvas.height() != height {
+            canvas.set_width(width);
+            canvas.set_height(height);
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn sync_canvas_backing(&self, _width: u32, _height: u32) {}
 
     fn ui_scale(&self) -> f32 {
         self.gfx
@@ -3482,6 +3551,163 @@ fn intersect_rect(
     ))
 }
 
+impl App {
+    /// Pointer position in canvas pixels, shared by mouse and touch input.
+    fn pointer_moved(&mut self, x: f64, y: f64) {
+        let scale = self.ui_scale();
+        let previous = self.dragging.as_ref().map(|drag| drag.last);
+        self.cursor = (x as f32 / scale, y as f32 / scale);
+        if self.shell.visible {
+            self.shell.hover(self.cursor, self.floating.viewport());
+        }
+        self.mdi_hover = self.window_hit_modal().filter(|(_, _, hit)| {
+            matches!(
+                hit,
+                QMdiSubWindowHit::Close
+                    | QMdiSubWindowHit::Maximize
+                    | QMdiSubWindowHit::Minimize
+                    | QMdiSubWindowHit::SystemMenu
+            )
+        });
+        if self.dragging.is_none() {
+            let hit = self.window_hit_modal().map(|(_, _, hit)| hit);
+            self.update_resize_cursor(hit);
+        }
+        if self.left_down {
+            let point = rqt::gui::QPointF::new(self.cursor.0, self.cursor.1);
+            let mut moved = false;
+            for form in self.forms.values_mut() {
+                if form.tree.mouse_move(point) {
+                    moved = true;
+                    break;
+                }
+            }
+            if moved {
+                return;
+            }
+            if let Some(select) = self.line_select.clone() {
+                if let Some(form) = self.forms.get_mut(&select.form_id) {
+                    if let Some(widget) = form.tree.find_widget(&select.name) {
+                        if let Some(rect) = form.tree.widget(widget).map(|widget| widget.geometry) {
+                            form.tree
+                                .select_line_edit_to(widget, self.cursor.0 - rect.x);
+                            self.caret_epoch = now_ms();
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+        if let Some((form_id, name, column, last_x)) = self.column_drag.as_ref().map(|drag| {
+            (
+                drag.form_id.clone(),
+                drag.name.clone(),
+                drag.column,
+                drag.last_x,
+            )
+        }) {
+            let delta = self.cursor.0 - last_x;
+            if let Some(table) = self.table_mut_for(&form_id, &name) {
+                let width = table.model.column_width(column) + delta;
+                table.resize_column(column, width);
+            }
+            if let Some(drag) = self.column_drag.as_mut() {
+                drag.last_x = self.cursor.0;
+            }
+            return;
+        }
+        if let Some(last) = previous {
+            self.drag_card(self.cursor.0 - last.0, self.cursor.1 - last.1);
+        }
+
+        // Under mouse Enter/Leave handling (following Qt behavior)
+        // Track changes per form and generate events immediately
+        let point = rqt::gui::QPointF::new(self.cursor.0, self.cursor.1);
+
+        // Collect form_ids before iterating (since we borrow forms mutably)
+        let form_ids: Vec<String> = self.forms.keys().cloned().collect();
+
+        for form_id in form_ids {
+            let form = self.forms.get_mut(&form_id).expect("form exists");
+            let new_widget = form.tree.widget_at_point(point);
+            let prev_widget = form.under_mouse_widget;
+
+            // Generate Leave event if mouse left a widget
+            if let Some(old) = prev_widget {
+                // Check if mouse actually left (new_widget is different or None)
+                if new_widget != Some(old) {
+                    if let Some(widget) = form.tree.widget(old) {
+                        if let Some(socket) = &self.socket {
+                            socket.send(
+                                "send_event",
+                                serde_json::json!({
+                                    "command": "formEvent",
+                                    "form_id": form_id.clone(),
+                                    "event": "Leave",
+                                    "widget_name": widget.object_name,
+                                }),
+                            );
+                        }
+                    }
+                }
+            }
+
+            // Generate Enter event if mouse entered a new widget
+            if let Some(new) = new_widget {
+                // Check if mouse actually entered (prev was different)
+                if prev_widget != new_widget {
+                    if let Some(widget) = form.tree.widget(new) {
+                        if let Some(socket) = &self.socket {
+                            socket.send(
+                                "send_event",
+                                serde_json::json!({
+                                    "command": "formEvent",
+                                    "form_id": form_id.clone(),
+                                    "event": "Enter",
+                                    "widget_name": widget.object_name,
+                                }),
+                            );
+                        }
+                    }
+                }
+            }
+
+            // Update under_mouse_widget for this form
+            form.under_mouse_widget = new_widget;
+        }
+    }
+
+    fn pointer_released(&mut self) {
+        if self.scroll_click {
+            self.scroll_click = false;
+            self.left_down = false;
+            self.table_press = None;
+            let point = rqt::gui::QPointF::new(self.cursor.0, self.cursor.1);
+            for form in self.forms.values_mut() {
+                form.tree.mouse_release(form.root, point);
+            }
+            return;
+        }
+        if self.dragging.take().is_some() || self.column_drag.take().is_some() {
+            self.left_down = false;
+            return;
+        }
+        self.dispatch_mouse_release();
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn self_physical(window: &Window, size: winit::dpi::PhysicalSize<u32>) -> (u32, u32) {
+    let dpr = window.scale_factor();
+    if dpr > 0.0 && dpr != 1.0 {
+        return (
+            ((size.width as f64) * dpr).round().max(1.0) as u32,
+            ((size.height as f64) * dpr).round().max(1.0) as u32,
+        );
+    }
+    (size.width.max(1), size.height.max(1))
+}
+
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_none() {
@@ -3568,7 +3794,7 @@ impl ApplicationHandler for App {
                         // `inner_size()` may still report the 1x1 canvas.
                         let (width, height) = last_size.get().unwrap_or_else(|| {
                             let size = gfx_window.inner_size();
-                            (size.width, size.height)
+                            self_physical(&gfx_window, size)
                         });
                         if let Some(state) = gfx.borrow_mut().as_mut() {
                             state.resize(width, height);
@@ -3611,9 +3837,11 @@ impl ApplicationHandler for App {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::CursorLeft { .. } => self.update_resize_cursor(None),
             WindowEvent::Resized(size) => {
-                self.last_size.set(Some((size.width, size.height)));
+                let (width, height) = self.physical_size(size);
+                self.last_size.set(Some((width, height)));
+                self.sync_canvas_backing(width, height);
                 if let Some(gfx) = self.gfx.borrow_mut().as_mut() {
-                    gfx.resize(size.width, size.height);
+                    gfx.resize(width, height);
                 }
                 if let Some(window) = &self.window {
                     window.request_redraw();
@@ -3625,14 +3853,9 @@ impl ApplicationHandler for App {
                 self.ctrl = state.control_key();
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
-                let (width, height) = self.last_size.get().unwrap_or_else(|| {
-                    let size = self
-                        .window
-                        .as_ref()
-                        .map(|window| window.inner_size())
-                        .unwrap_or(winit::dpi::PhysicalSize::new(0, 0));
-                    (size.width, size.height)
-                });
+                let (width, height) = self.scaled_size(scale_factor);
+                self.last_size.set(Some((width, height)));
+                self.sync_canvas_backing(width, height);
                 if let Some(gfx) = self.gfx.borrow_mut().as_mut() {
                     gfx.set_scale_factor(scale_factor, width, height);
                 }
@@ -3675,154 +3898,22 @@ impl ApplicationHandler for App {
                     window.request_redraw();
                 }
             }
-            WindowEvent::CursorMoved { position, .. } => {
-                let scale = self.ui_scale();
-                let previous = self.dragging.as_ref().map(|drag| drag.last);
-                self.cursor = (position.x as f32 / scale, position.y as f32 / scale);
-                if self.shell.visible {
-                    self.shell.hover(self.cursor, self.floating.viewport());
-                }
-                self.mdi_hover = self.window_hit_modal().filter(|(_, _, hit)| {
-                    matches!(
-                        hit,
-                        QMdiSubWindowHit::Close
-                            | QMdiSubWindowHit::Maximize
-                            | QMdiSubWindowHit::Minimize
-                            | QMdiSubWindowHit::SystemMenu
-                    )
-                });
-                if self.dragging.is_none() {
-                    let hit = self.window_hit_modal().map(|(_, _, hit)| hit);
-                    self.update_resize_cursor(hit);
-                }
-                if self.left_down {
-                    let point = rqt::gui::QPointF::new(self.cursor.0, self.cursor.1);
-                    let mut moved = false;
-                    for form in self.forms.values_mut() {
-                        if form.tree.mouse_move(point) {
-                            moved = true;
-                            break;
-                        }
-                    }
-                    if moved {
-                        return;
-                    }
-                    if let Some(select) = self.line_select.clone() {
-                        if let Some(form) = self.forms.get_mut(&select.form_id) {
-                            if let Some(widget) = form.tree.find_widget(&select.name) {
-                                if let Some(rect) =
-                                    form.tree.widget(widget).map(|widget| widget.geometry)
-                                {
-                                    form.tree
-                                        .select_line_edit_to(widget, self.cursor.0 - rect.x);
-                                    self.caret_epoch = now_ms();
-                                    return;
-                                }
-                            }
-                        }
-                    }
-                }
-                if let Some((form_id, name, column, last_x)) =
-                    self.column_drag.as_ref().map(|drag| {
-                        (
-                            drag.form_id.clone(),
-                            drag.name.clone(),
-                            drag.column,
-                            drag.last_x,
-                        )
-                    })
-                {
-                    let delta = self.cursor.0 - last_x;
-                    if let Some(table) = self.table_mut_for(&form_id, &name) {
-                        let width = table.model.column_width(column) + delta;
-                        table.resize_column(column, width);
-                    }
-                    if let Some(drag) = self.column_drag.as_mut() {
-                        drag.last_x = self.cursor.0;
-                    }
-                    return;
-                }
-                if let Some(last) = previous {
-                    self.drag_card(self.cursor.0 - last.0, self.cursor.1 - last.1);
-                }
-
-                // Under mouse Enter/Leave handling (following Qt behavior)
-                // Track changes per form and generate events immediately
-                let point = rqt::gui::QPointF::new(self.cursor.0, self.cursor.1);
-
-                // Collect form_ids before iterating (since we borrow forms mutably)
-                let form_ids: Vec<String> = self.forms.keys().cloned().collect();
-
-                for form_id in form_ids {
-                    let form = self.forms.get_mut(&form_id).expect("form exists");
-                    let new_widget = form.tree.widget_at_point(point);
-                    let prev_widget = form.under_mouse_widget;
-
-                    // Generate Leave event if mouse left a widget
-                    if let Some(old) = prev_widget {
-                        // Check if mouse actually left (new_widget is different or None)
-                        if new_widget != Some(old) {
-                            if let Some(widget) = form.tree.widget(old) {
-                                if let Some(socket) = &self.socket {
-                                    socket.send(
-                                        "send_event",
-                                        serde_json::json!({
-                                            "command": "formEvent",
-                                            "form_id": form_id.clone(),
-                                            "event": "Leave",
-                                            "widget_name": widget.object_name,
-                                        }),
-                                    );
-                                }
-                            }
-                        }
-                    }
-
-                    // Generate Enter event if mouse entered a new widget
-                    if let Some(new) = new_widget {
-                        // Check if mouse actually entered (prev was different)
-                        if prev_widget != new_widget {
-                            if let Some(widget) = form.tree.widget(new) {
-                                if let Some(socket) = &self.socket {
-                                    socket.send(
-                                        "send_event",
-                                        serde_json::json!({
-                                            "command": "formEvent",
-                                            "form_id": form_id.clone(),
-                                            "event": "Enter",
-                                            "widget_name": widget.object_name,
-                                        }),
-                                    );
-                                }
-                            }
-                        }
-                    }
-
-                    // Update under_mouse_widget for this form
-                    form.under_mouse_widget = new_widget;
+            WindowEvent::CursorMoved { position, .. } => self.pointer_moved(position.x, position.y),
+            WindowEvent::Touch(touch) => {
+                // Phones/tablets: winit delivers touch contacts as `Touch` only,
+                // never as `CursorMoved`/`MouseInput`, so mirror the mouse path.
+                self.pointer_moved(touch.location.x, touch.location.y);
+                match touch.phase {
+                    TouchPhase::Started => self.dispatch_mouse_press(),
+                    TouchPhase::Ended | TouchPhase::Cancelled => self.pointer_released(),
+                    TouchPhase::Moved => {}
                 }
             }
             WindowEvent::MouseInput {
                 state: ElementState::Released,
                 button: MouseButton::Left,
                 ..
-            } => {
-                if self.scroll_click {
-                    self.scroll_click = false;
-                    self.left_down = false;
-                    self.table_press = None;
-                    let point = rqt::gui::QPointF::new(self.cursor.0, self.cursor.1);
-                    for form in self.forms.values_mut() {
-                        form.tree.mouse_release(form.root, point);
-                    }
-                    return;
-                }
-                if self.dragging.take().is_some() || self.column_drag.take().is_some() {
-                    self.left_down = false;
-                    return;
-                }
-                self.dispatch_mouse_release();
-            }
+            } => self.pointer_released(),
             WindowEvent::MouseInput {
                 state: ElementState::Pressed,
                 button: MouseButton::Left,
