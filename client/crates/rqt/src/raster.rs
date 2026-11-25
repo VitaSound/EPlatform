@@ -951,6 +951,60 @@ mod tests {
     }
 
     #[test]
+    fn form_basic_raster_compared_to_qt6() {
+        compare_grid_raster_with_qt6(
+            include_str!("../tests/fixtures/form_basic.ui"),
+            include_bytes!("../tests/fixtures/qt6_form_basic.png"),
+            "form_basic",
+        );
+    }
+
+    #[test]
+    fn form_wrap_long_raster_compared_to_qt6() {
+        compare_grid_raster_with_qt6(
+            include_str!("../tests/fixtures/form_wrap_long.ui"),
+            include_bytes!("../tests/fixtures/qt6_form_wrap_long.png"),
+            "form_wrap_long",
+        );
+    }
+
+    #[test]
+    fn form_wrap_all_raster_compared_to_qt6() {
+        compare_grid_raster_with_qt6(
+            include_str!("../tests/fixtures/form_wrap_all.ui"),
+            include_bytes!("../tests/fixtures/qt6_form_wrap_all.png"),
+            "form_wrap_all",
+        );
+    }
+
+    #[test]
+    fn form_growth_raster_compared_to_qt6() {
+        compare_grid_raster_with_qt6(
+            include_str!("../tests/fixtures/form_growth.ui"),
+            include_bytes!("../tests/fixtures/qt6_form_growth.png"),
+            "form_growth",
+        );
+    }
+
+    #[test]
+    fn form_alignment_raster_compared_to_qt6() {
+        compare_grid_raster_with_qt6(
+            include_str!("../tests/fixtures/form_alignment.ui"),
+            include_bytes!("../tests/fixtures/qt6_form_alignment.png"),
+            "form_alignment",
+        );
+    }
+
+    #[test]
+    fn form_group_raster_compared_to_qt6() {
+        compare_grid_raster_with_qt6(
+            include_str!("../tests/fixtures/form_group.ui"),
+            include_bytes!("../tests/fixtures/qt6_form_group.png"),
+            "form_group",
+        );
+    }
+
+    #[test]
     fn rasterizes_text_pixels() {
         let image = rasterize(
             &[QPaintCommand::DrawText {

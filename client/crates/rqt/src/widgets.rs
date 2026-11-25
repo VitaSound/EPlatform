@@ -112,6 +112,22 @@ pub struct QLayout {
     pub kind: QLayoutKind,
     pub spacing: f32,
     pub margins: QMargins,
+    /// `QFormLayout::fieldGrowthPolicy`; ignored by other layout kinds.
+    pub field_growth_policy: form_xml::FieldGrowthPolicy,
+    /// `QFormLayout::rowWrapPolicy`; ignored by other layout kinds.
+    pub row_wrap_policy: form_xml::RowWrapPolicy,
+    /// `QFormLayout` label alignment; `0` uses the Fusion default
+    /// (`AlignLeft`).
+    pub label_alignment: u32,
+    /// `QFormLayout` form alignment; `0` uses the Fusion default
+    /// (`AlignLeft | AlignTop`).
+    pub form_alignment: u32,
+    /// Explicit `QFormLayout::horizontalSpacing`; `None` falls back to
+    /// `spacing` and then to the style default (6).
+    pub horizontal_spacing: Option<f32>,
+    /// Explicit `QFormLayout::verticalSpacing`; `None` falls back to
+    /// `spacing` and then to the style default (6).
+    pub vertical_spacing: Option<f32>,
     pub items: Vec<QLayoutItem>,
 }
 
@@ -121,6 +137,12 @@ impl QLayout {
             kind,
             spacing: 6.0,
             margins: QMargins::default(),
+            field_growth_policy: form_xml::FieldGrowthPolicy::default(),
+            row_wrap_policy: form_xml::RowWrapPolicy::default(),
+            label_alignment: 0,
+            form_alignment: 0,
+            horizontal_spacing: None,
+            vertical_spacing: None,
             items: Vec::new(),
         }
     }
@@ -131,6 +153,26 @@ impl QLayout {
 
     pub fn is_grid(&self) -> bool {
         self.kind == QLayoutKind::Grid
+    }
+
+    pub fn is_form(&self) -> bool {
+        self.kind == QLayoutKind::Form
+    }
+
+    fn form_horizontal_spacing(&self) -> f32 {
+        match self.horizontal_spacing {
+            Some(value) if value >= 0.0 => value,
+            _ if self.spacing >= 0.0 => self.spacing,
+            _ => 6.0,
+        }
+    }
+
+    fn form_vertical_spacing(&self) -> f32 {
+        match self.vertical_spacing {
+            Some(value) if value >= 0.0 => value,
+            _ if self.spacing >= 0.0 => self.spacing,
+            _ => 6.0,
+        }
     }
 }
 
@@ -268,7 +310,7 @@ impl QWidget {
         match self.class_name.as_str() {
             "QLabel" => QSizeF::new(
                 metrics.bounding_rect(&text).width.ceil(),
-                font_height.round(),
+                font_height.ceil(),
             ),
             "QLineEdit" => QSizeF::new(
                 (17.0 * metrics.horizontal_advance("x")).ceil() + 5.0,
@@ -287,7 +329,7 @@ impl QWidget {
             }
             "QCheckBox" | "QRadioButton" => {
                 let width = metrics.bounding_rect(&text).width.ceil();
-                QSizeF::new(width + 24.0, (font_height + 7.0).round())
+                QSizeF::new(width + 26.0, (font_height + 7.0).round())
             }
             "QComboBox" => QSizeF::new(
                 if text.is_empty() {
@@ -1447,6 +1489,9 @@ impl QWidgetTree {
         if layout.is_grid() {
             return self.grid_layout_size_hint(layout);
         }
+        if layout.is_form() {
+            return self.form_size_hint(layout);
+        }
         let mut main = 0.0f32;
         let mut perp = 0.0f32;
         for item in &layout.items {
@@ -1521,10 +1566,8 @@ impl QWidgetTree {
     fn layout_engine(&mut self, layout: &QLayout, rect: QRectF) {
         match layout.kind {
             QLayoutKind::Grid => self.layout_grid(layout, rect),
-            // `Form` keeps the pre-0.13 vertical stack behaviour.
-            QLayoutKind::HBox | QLayoutKind::VBox | QLayoutKind::Form => {
-                self.layout_box(layout, rect)
-            }
+            QLayoutKind::Form => self.layout_form(layout, rect),
+            QLayoutKind::HBox | QLayoutKind::VBox => self.layout_box(layout, rect),
         }
     }
 
@@ -1681,6 +1724,444 @@ impl QWidgetTree {
             }
             cursor += main + if main > 0.0 { layout.spacing } else { 0.0 } + gap_extra_value;
         }
+    }
+
+    // ---- QFormLayout geometry (0.13.2) ----------------------------------
+    //
+    // Port of Qt's `QFormLayoutPrivate::updateSizes`, `setupVerticalLayoutData`,
+    // `setupHorizontalLayoutData` and `arrangeWidgets` for the non-height-for-
+    // width case used by the platform's forms. Row/column sizes go through the
+    // same `qGeomCalc` implementation as the grid engine.
+
+    fn layout_form(&mut self, layout: &QLayout, rect: QRectF) {
+        let inner = QRectF::new(
+            rect.x + layout.margins.left,
+            rect.y + layout.margins.top,
+            (rect.width - layout.margins.left - layout.margins.right).max(0.0),
+            (rect.height - layout.margins.top - layout.margins.bottom).max(0.0),
+        );
+        let width = inner.width.round() as i32;
+        let mut data = self.form_data(layout, width);
+        if data.tracks.is_empty() {
+            return;
+        }
+
+        // `setupHorizontalLayoutData`.
+        let wrap_all = layout.row_wrap_policy == form_xml::RowWrapPolicy::WrapAllRows;
+        let mut field_max_width = 0;
+        for row in 0..data.labels.len() {
+            let label = data.labels[row];
+            let field = data.fields[row];
+            if let Some(index) = label {
+                let item = &mut data.items[index];
+                item.layout_width = if field.is_some() && item.side_by_side {
+                    data.max_label_width
+                } else {
+                    item.hint.w
+                };
+                item.layout_pos = 0;
+            }
+            if let Some(index) = field {
+                let full_row = data.items[index].full_row;
+                let sbs_hspace = data.items[index].sbs_hspace;
+                let hint_w = data.items[index].hint.w;
+                let mut layout_width = width;
+                let mut layout_pos = 0;
+                if !data.items[index].side_by_side {
+                    let fldwidth = width - data.max_label_width - sbs_hspace;
+                    if !(wrap_all || (label.is_none() && full_row) || hint_w > fldwidth) {
+                        layout_width = fldwidth;
+                        layout_pos = width - fldwidth;
+                    }
+                } else {
+                    let fldwidth = width - data.max_label_width - sbs_hspace;
+                    layout_width = fldwidth;
+                    layout_pos = width - fldwidth;
+                }
+                let item = &mut data.items[index];
+                item.layout_width = layout_width;
+                item.layout_pos = layout_pos;
+                field_max_width = field_max_width.max(item.max.w);
+            }
+        }
+        data.form_max_width = data.max_label_width + field_max_width;
+
+        let count = data.tracks.len();
+        q_geom_calc(
+            &mut data.tracks,
+            0,
+            count,
+            inner.y.round() as i32,
+            inner.height.round() as i32,
+        );
+
+        let form_alignment = if layout.form_alignment == 0 {
+            form_xml::ALIGN_LEFT | form_xml::ALIGN_TOP
+        } else {
+            layout.form_alignment
+        };
+        let label_alignment = if layout.label_alignment == 0 {
+            form_xml::ALIGN_LEFT
+        } else {
+            layout.label_alignment
+        };
+        let delta = width - data.form_max_width;
+        let mut left_offset = 0;
+        if form_alignment & (form_xml::ALIGN_HCENTER | form_xml::ALIGN_RIGHT) != 0 && delta > 0 {
+            left_offset = if form_alignment & form_xml::ALIGN_HCENTER != 0 {
+                delta >> 1
+            } else {
+                delta
+            };
+        }
+
+        let mut targets: Vec<(usize, QRectF)> = Vec::new();
+        for row in 0..data.labels.len() {
+            if let Some(index) = data.labels[row] {
+                let item = &data.items[index];
+                let track = &data.tracks[item.v_layout_index];
+                let mut height = track.size;
+                if !item.expansive_v {
+                    height = height.min(item.hint.h * 7 / 4).min(item.max.h);
+                }
+                let w = item.layout_width.min(item.hint.w);
+                let mut x = left_offset + inner.x.round() as i32 + item.layout_pos;
+                if label_alignment & form_xml::ALIGN_RIGHT != 0 {
+                    x += item.layout_width - w;
+                } else if label_alignment & form_xml::ALIGN_HCENTER != 0 {
+                    x += item.layout_width / 2 - w / 2;
+                }
+                targets.push((
+                    item.item,
+                    QRectF::new(x as f32, track.pos as f32, w as f32, height as f32),
+                ));
+            }
+            if let Some(index) = data.fields[row] {
+                let item = &data.items[index];
+                let track = &data.tracks[item.v_layout_index];
+                let w = item.layout_width.min(item.max.w);
+                let h = track.size.min(item.max.h);
+                let x = item.layout_pos + left_offset + inner.x.round() as i32;
+                targets.push((
+                    item.item,
+                    QRectF::new(x as f32, track.pos as f32, w as f32, h as f32),
+                ));
+            }
+        }
+
+        for (index, target) in targets {
+            match &layout.items[index] {
+                QLayoutItem::Widget { id, .. } => self.layout_widget(*id, target),
+                QLayoutItem::Layout {
+                    layout: inner_layout,
+                    ..
+                } => self.layout_engine(inner_layout, target),
+                QLayoutItem::Spacer { .. } => {}
+            }
+        }
+    }
+
+    /// Item metrics for the form engine. Qt builds a `QWidgetItem` hint from
+    /// integer `QFontMetrics`; our `QLineEdit` hint uses the raw advance, so
+    /// correct the 4 px difference here without touching box-layout geometry.
+    fn form_item_metrics(&self, item: &QLayoutItem) -> QGridItemMetrics {
+        let mut metrics = self.grid_item_metrics(item);
+        if let QLayoutItem::Widget { id, .. } = item {
+            let widget = &self.widgets[*id];
+            if widget.class_name == "QLineEdit" {
+                let text_metrics = QFontMetrics::new(&widget.font);
+                let hint = 17.0 * text_metrics.horizontal_advance("x").round() + 6.0;
+                let hint = (hint.round() as i32).max(widget.minimum_size.width.round() as i32);
+                if metrics.max_w < QLAYOUTSIZE_MAX {
+                    metrics.max_w = metrics.max_w.min(hint);
+                }
+                metrics.hint_w = hint;
+            }
+        }
+        metrics
+    }
+
+    /// Shared size/row bookkeeping for a `QFormLayout`, equivalent to Qt's
+    /// `updateSizes` + `setupVerticalLayoutData(width)`.
+    fn form_data(&self, layout: &QLayout, width: i32) -> QFormData {
+        let row_count = layout
+            .items
+            .iter()
+            .map(|item| item.cell().row.max(0) as usize + 1)
+            .max()
+            .unwrap_or(0);
+        let mut labels: Vec<Option<usize>> = vec![None; row_count];
+        let mut fields: Vec<Option<usize>> = vec![None; row_count];
+        let mut full_rows: Vec<bool> = vec![false; layout.items.len()];
+        for (index, item) in layout.items.iter().enumerate() {
+            let cell = item.cell();
+            let row = cell.row.max(0) as usize;
+            if row >= row_count {
+                continue;
+            }
+            if cell.column_span >= 2 {
+                full_rows[index] = true;
+                fields[row] = Some(index);
+            } else if cell.column == 0 {
+                labels[row] = Some(index);
+            } else {
+                fields[row] = Some(index);
+            }
+        }
+
+        let wrap_all = layout.row_wrap_policy == form_xml::RowWrapPolicy::WrapAllRows;
+        let user_v_spacing = layout.form_vertical_spacing().round() as i32;
+        let user_h_spacing = if wrap_all {
+            0
+        } else {
+            layout.form_horizontal_spacing().round() as i32
+        };
+
+        let mut items: Vec<QFormItem> = layout
+            .items
+            .iter()
+            .enumerate()
+            .map(|(index, item)| {
+                let metrics = self.form_item_metrics(item);
+                let full_row = full_rows[index];
+                let effective_full_row = full_row
+                    && !labels
+                        .get(item.cell().row.max(0) as usize)
+                        .is_some_and(Option::is_some);
+                let mut max_w = metrics.max_w;
+                if !effective_full_row
+                    && (layout.field_growth_policy
+                        == form_xml::FieldGrowthPolicy::FieldsStayAtSizeHint
+                        || (layout.field_growth_policy
+                            == form_xml::FieldGrowthPolicy::ExpandingFieldsGrow
+                            && !metrics.expansive_h))
+                {
+                    max_w = metrics.hint_w;
+                }
+                QFormItem {
+                    item: index,
+                    full_row,
+                    expansive_v: metrics.expansive_v,
+                    side_by_side: false,
+                    min: QFormSize {
+                        w: metrics.min_w,
+                        h: metrics.min_h,
+                    },
+                    hint: QFormSize {
+                        w: metrics.hint_w,
+                        h: metrics.hint_h,
+                    },
+                    max: QFormSize {
+                        w: max_w,
+                        h: metrics.max_h,
+                    },
+                    sbs_hspace: if effective_full_row {
+                        0
+                    } else {
+                        user_h_spacing
+                    },
+                    v_layout_index: 0,
+                    layout_pos: 0,
+                    layout_width: 0,
+                }
+            })
+            .collect();
+
+        // `updateSizes` width accounting.
+        let (mut max_min_lbl, mut max_min_fld, mut max_min_ifld) = (0, 0, 0);
+        let (mut max_sh_lbl, mut max_sh_fld, mut max_sh_ifld) = (0, 0, 0);
+        for row in 0..row_count {
+            let label = labels[row];
+            let field = fields[row];
+            if label.is_none() && field.is_none() {
+                continue;
+            }
+            if let Some(index) = label {
+                let item = &items[index];
+                max_min_lbl = max_min_lbl.max(item.min.w);
+                max_sh_lbl = max_sh_lbl.max(item.hint.w);
+            }
+            if let Some(index) = field {
+                let item = &items[index];
+                if item.full_row {
+                    max_min_ifld = max_min_ifld.max(item.min.w);
+                    max_sh_ifld = max_sh_ifld.max(item.hint.w);
+                } else {
+                    max_min_fld = max_min_fld.max(item.min.w + item.sbs_hspace);
+                    max_sh_fld = max_sh_fld.max(item.hint.w + item.sbs_hspace);
+                }
+            }
+        }
+        let (sh_width, min_width, _thresh_width) = match layout.row_wrap_policy {
+            form_xml::RowWrapPolicy::WrapAllRows => (
+                max_sh_lbl.max(max_sh_ifld.max(max_sh_fld)),
+                max_min_lbl.max(max_min_ifld.max(max_min_fld)),
+                0,
+            ),
+            form_xml::RowWrapPolicy::WrapLongRows => (
+                (max_sh_lbl + max_sh_fld).max(max_sh_ifld),
+                max_min_lbl.max(max_min_ifld.max(max_min_fld)),
+                max_sh_lbl + max_min_fld,
+            ),
+            form_xml::RowWrapPolicy::DontWrapRows => (
+                (max_sh_lbl + max_sh_fld).max(max_sh_ifld),
+                (max_min_lbl + max_min_fld).max(max_min_ifld),
+                QLAYOUTSIZE_MAX,
+            ),
+        };
+
+        // `setupVerticalLayoutData`.
+        let mut tracks: Vec<QGridTrack> = Vec::with_capacity(2 * row_count + 2);
+        tracks.push(form_track_init(0, 0));
+        let mut max_label_width = 0;
+        if !wrap_all {
+            for row in 0..row_count {
+                let Some(index) = labels[row] else {
+                    continue;
+                };
+                let field_min = fields[row].map_or(0, |field| items[field].min.w);
+                if items[index].hint.w + field_min <= width {
+                    max_label_width = max_label_width.max(items[index].hint.w);
+                }
+            }
+        } else {
+            max_label_width = width;
+        }
+
+        let mut vidx = 1usize;
+        let mut add_top_bottom_stretch = true;
+        for row in 0..row_count {
+            let label = labels[row];
+            let field = fields[row];
+            if label.is_none() && field.is_none() {
+                continue;
+            }
+            let split_side_by_side = layout.row_wrap_policy
+                == form_xml::RowWrapPolicy::WrapLongRows
+                && match label {
+                    Some(index) => {
+                        max_label_width < items[index].hint.w
+                            || width < max_label_width + field.map_or(0, |field| items[field].min.w)
+                    }
+                    None => width < max_label_width + field.map_or(0, |field| items[field].min.w),
+                };
+
+            if wrap_all || split_side_by_side {
+                if let Some(index) = label {
+                    push_form_track(
+                        &mut tracks,
+                        &mut items[index],
+                        &mut vidx,
+                        user_v_spacing,
+                        false,
+                    );
+                    if items[index].expansive_v {
+                        add_top_bottom_stretch = false;
+                    }
+                }
+                if let Some(index) = field {
+                    push_form_track(
+                        &mut tracks,
+                        &mut items[index],
+                        &mut vidx,
+                        user_v_spacing,
+                        false,
+                    );
+                    if items[index].expansive_v {
+                        add_top_bottom_stretch = false;
+                    }
+                }
+            } else {
+                let label_data = label.map(|index| items[index]);
+                let field_data = field.map(|index| items[index]);
+                let mut track = form_track_init(
+                    0,
+                    label_data
+                        .map_or(0, |item| item.min.h)
+                        .max(field_data.map_or(0, |item| item.min.h)),
+                );
+                track.hint = label_data
+                    .map_or(0, |item| item.hint.h)
+                    .max(field_data.map_or(0, |item| item.hint.h));
+                track.maximum = label_data
+                    .map_or(QLAYOUTSIZE_MAX, |item| item.max.h)
+                    .min(field_data.map_or(QLAYOUTSIZE_MAX, |item| item.max.h));
+                track.expansive = label_data.is_some_and(|item| item.expansive_v)
+                    || field_data.is_some_and(|item| item.expansive_v);
+                track.empty = false;
+                if track.expansive {
+                    add_top_bottom_stretch = false;
+                }
+                tracks.push(track);
+                if vidx > 1 {
+                    tracks[vidx - 1].spacing = user_v_spacing;
+                }
+                if let Some(index) = label {
+                    items[index].side_by_side = field.is_some();
+                    items[index].v_layout_index = vidx;
+                }
+                if let Some(index) = field {
+                    items[index].side_by_side = label.is_some() || !items[index].full_row;
+                    items[index].v_layout_index = vidx;
+                }
+                vidx += 1;
+            }
+        }
+
+        let form_alignment = if layout.form_alignment == 0 {
+            form_xml::ALIGN_LEFT | form_xml::ALIGN_TOP
+        } else {
+            layout.form_alignment
+        };
+        if add_top_bottom_stretch {
+            if form_alignment & form_xml::ALIGN_BOTTOM == 0 {
+                let mut bottom = form_track_init(0, 0);
+                bottom.expansive = true;
+                tracks.push(bottom);
+            }
+            if form_alignment & (form_xml::ALIGN_VCENTER | form_xml::ALIGN_BOTTOM) != 0 {
+                let mut top = form_track_init(0, 0);
+                top.expansive = true;
+                tracks[0] = top;
+            }
+        }
+
+        QFormData {
+            items,
+            labels,
+            fields,
+            tracks,
+            max_label_width,
+            sh_width,
+            min_width,
+            form_max_width: 0,
+        }
+    }
+
+    fn form_size_hint(&self, layout: &QLayout) -> QSizeF {
+        let data = self.form_data(layout, QLAYOUTSIZE_MAX);
+        let height: i32 = data
+            .tracks
+            .iter()
+            .map(|track| track.hint + track.spacing)
+            .sum();
+        QSizeF::new(
+            (data.sh_width + layout.margins.left as i32 + layout.margins.right as i32) as f32,
+            (height + layout.margins.top as i32 + layout.margins.bottom as i32) as f32,
+        )
+    }
+
+    fn form_minimum_size(&self, layout: &QLayout) -> QSizeF {
+        let data = self.form_data(layout, QLAYOUTSIZE_MAX);
+        let height: i32 = data
+            .tracks
+            .iter()
+            .map(|track| track.minimum + track.spacing)
+            .sum();
+        QSizeF::new(
+            (data.min_width + layout.margins.left as i32 + layout.margins.right as i32) as f32,
+            (height + layout.margins.top as i32 + layout.margins.bottom as i32) as f32,
+        )
     }
 
     // ---- grid geometry (0.12.3/0.12.4) ----------------------------------
@@ -1940,6 +2421,9 @@ impl QWidgetTree {
                 (height + layout.margins.top as i32 + layout.margins.bottom as i32) as f32,
             );
         }
+        if layout.is_form() {
+            return self.form_minimum_size(layout);
+        }
         let mut main = 0.0f32;
         let mut perp = 0.0f32;
         for item in &layout.items {
@@ -1972,6 +2456,10 @@ impl QWidgetTree {
     /// `QLayout::maximumSize()` per axis, needed when a sub-layout sits in a
     /// grid cell: a fixed-height button row caps the cell height at its hint.
     fn layout_maximum_size(&self, layout: &QLayout) -> QSizeF {
+        // `QFormLayout` does not override `QLayout::maximumSize()`.
+        if layout.is_form() {
+            return QSizeF::new(QLAYOUTSIZE_MAX as f32, QLAYOUTSIZE_MAX as f32);
+        }
         let clamp = |value: i64| value.min(QLAYOUTSIZE_MAX as i64) as i32;
         if layout.is_grid() {
             let (rows, columns) = self.grid_tracks(layout);
@@ -2237,6 +2725,74 @@ impl QWidgetTree {
 
 /// Largest track size, same value as Qt's `QLAYOUTSIZE_MAX`.
 const QLAYOUTSIZE_MAX: i32 = 16_777_215;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct QFormSize {
+    w: i32,
+    h: i32,
+}
+
+/// One cell of a `QFormLayout`, mirroring Qt's `QFormLayoutItem`.
+#[derive(Clone, Copy, Debug)]
+struct QFormItem {
+    /// Index into `QLayout::items`.
+    item: usize,
+    /// Spanning item (`colspan >= 2`).
+    full_row: bool,
+    expansive_v: bool,
+    side_by_side: bool,
+    min: QFormSize,
+    hint: QFormSize,
+    max: QFormSize,
+    sbs_hspace: i32,
+    v_layout_index: usize,
+    layout_pos: i32,
+    layout_width: i32,
+}
+
+/// Result of joining Qt's `updateSizes` and `setupVerticalLayoutData`.
+struct QFormData {
+    items: Vec<QFormItem>,
+    /// Row → index into `items`.
+    labels: Vec<Option<usize>>,
+    fields: Vec<Option<usize>>,
+    tracks: Vec<QGridTrack>,
+    max_label_width: i32,
+    sh_width: i32,
+    min_width: i32,
+    form_max_width: i32,
+}
+
+/// `QLayoutStruct::init(stretch, minSize)` in Qt: hint starts at `minimum`.
+fn form_track_init(_stretch: i32, minimum: i32) -> QGridTrack {
+    let mut track = QGridTrack::new(0);
+    track.minimum = minimum;
+    track.hint = minimum;
+    track.maximum = QLAYOUTSIZE_MAX;
+    track.empty = true;
+    track
+}
+
+fn push_form_track(
+    tracks: &mut Vec<QGridTrack>,
+    item: &mut QFormItem,
+    vidx: &mut usize,
+    spacing: i32,
+    side_by_side: bool,
+) {
+    let mut track = form_track_init(0, item.min.h);
+    track.hint = item.hint.h;
+    track.maximum = item.max.h;
+    track.expansive = item.expansive_v;
+    track.empty = false;
+    tracks.push(track);
+    if *vidx > 1 {
+        tracks[*vidx - 1].spacing = spacing;
+    }
+    item.v_layout_index = *vidx;
+    item.side_by_side = side_by_side;
+    *vidx += 1;
+}
 
 /// One row or column of a grid layout: a port of Qt's `QLayoutStruct`.
 #[derive(Clone, Copy, Debug)]
@@ -3054,6 +3610,12 @@ fn load_layout(
         kind,
         spacing: spec.spacing.map(|value| value as f32).unwrap_or(6.0),
         margins,
+        field_growth_policy: spec.field_growth_policy,
+        row_wrap_policy: spec.row_wrap_policy,
+        label_alignment: spec.label_alignment,
+        form_alignment: spec.form_alignment,
+        horizontal_spacing: spec.horizontal_spacing.map(|value| value as f32),
+        vertical_spacing: spec.vertical_spacing.map(|value| value as f32),
         items: Vec::new(),
     };
 
@@ -3105,6 +3667,18 @@ mod tests {
     const QT6_GRID_SPANS: &str = include_str!("../tests/fixtures/qt6_grid_spans.json");
     const QT6_GRID_NESTED: &str = include_str!("../tests/fixtures/qt6_grid_nested.json");
     const QT6_GRID_POLICIES: &str = include_str!("../tests/fixtures/qt6_grid_policies.json");
+    const FORM_BASIC: &str = include_str!("../tests/fixtures/form_basic.ui");
+    const FORM_WRAP_LONG: &str = include_str!("../tests/fixtures/form_wrap_long.ui");
+    const FORM_WRAP_ALL: &str = include_str!("../tests/fixtures/form_wrap_all.ui");
+    const FORM_GROWTH: &str = include_str!("../tests/fixtures/form_growth.ui");
+    const FORM_ALIGNMENT: &str = include_str!("../tests/fixtures/form_alignment.ui");
+    const FORM_GROUP: &str = include_str!("../tests/fixtures/form_group.ui");
+    const QT6_FORM_BASIC: &str = include_str!("../tests/fixtures/qt6_form_basic.json");
+    const QT6_FORM_WRAP_LONG: &str = include_str!("../tests/fixtures/qt6_form_wrap_long.json");
+    const QT6_FORM_WRAP_ALL: &str = include_str!("../tests/fixtures/qt6_form_wrap_all.json");
+    const QT6_FORM_GROWTH: &str = include_str!("../tests/fixtures/qt6_form_growth.json");
+    const QT6_FORM_ALIGNMENT: &str = include_str!("../tests/fixtures/qt6_form_alignment.json");
+    const QT6_FORM_GROUP: &str = include_str!("../tests/fixtures/qt6_form_group.json");
 
     /// Compare every named widget against the Qt6 offscreen reference.
     fn assert_geometry_matches_qt6(ui: &str, reference: &str, tolerance: f32) {
@@ -3146,6 +3720,36 @@ mod tests {
             }
         }
         assert!(failures.is_empty(), "\n{}", failures.join("\n"));
+    }
+
+    #[test]
+    fn form_basic_geometry_matches_qt6_offscreen() {
+        assert_geometry_matches_qt6(FORM_BASIC, QT6_FORM_BASIC, 1.0);
+    }
+
+    #[test]
+    fn form_wrap_long_geometry_matches_qt6_offscreen() {
+        assert_geometry_matches_qt6(FORM_WRAP_LONG, QT6_FORM_WRAP_LONG, 1.0);
+    }
+
+    #[test]
+    fn form_wrap_all_geometry_matches_qt6_offscreen() {
+        assert_geometry_matches_qt6(FORM_WRAP_ALL, QT6_FORM_WRAP_ALL, 1.0);
+    }
+
+    #[test]
+    fn form_growth_geometry_matches_qt6_offscreen() {
+        assert_geometry_matches_qt6(FORM_GROWTH, QT6_FORM_GROWTH, 1.0);
+    }
+
+    #[test]
+    fn form_alignment_geometry_matches_qt6_offscreen() {
+        assert_geometry_matches_qt6(FORM_ALIGNMENT, QT6_FORM_ALIGNMENT, 1.0);
+    }
+
+    #[test]
+    fn form_group_geometry_matches_qt6_offscreen() {
+        assert_geometry_matches_qt6(FORM_GROUP, QT6_FORM_GROUP, 1.0);
     }
 
     #[test]

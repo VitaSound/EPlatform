@@ -2,13 +2,54 @@
 
 ## 2026-11-25
 
+### Form layout 0.13.1–0.13.3: `QFormLayout` раскладывается двумя колонками
+
+- **Парсер.** `form_xml::Layout` получил `field_growth_policy`,
+  `row_wrap_policy`, `label_alignment`, `form_alignment`,
+  `horizontal_spacing`, `vertical_spacing`; enum-ы
+  `FieldGrowthPolicy`/`RowWrapPolicy`. Читаются
+  `<enum>QFormLayout::…</enum>` и `<set>Qt::Align…|…</set>`, включая
+  Designer-синтаксис без `AlignmentFlag::`. `colspan>=2` трактуется как
+  spanning (full-row) item.
+- **Движок.** `layout_form` + `form_data` — порт Qt
+  `QFormLayoutPrivate::updateSizes`/`setupVerticalLayoutData`/
+  `setupHorizontalLayoutData`/`arrangeWidgets` для не-HFW случая:
+  колонка меток = максимум hint, поле получает остаток по
+  `fieldGrowthPolicy` (`AllNonFixedFieldsGrow`/`FieldsStayAtSizeHint`/
+  `ExpandingFieldsGrow`), работают `rowWrapPolicy`
+  (`DontWrapRows`/`WrapLongRows`/`WrapAllRows`), `labelAlignment`,
+  `formAlignment`, `horizontalSpacing`/`verticalSpacing`.
+- **Вертикаль.** Треки формы считаются тем же `qGeomCalc`, что и grid;
+  top/bottom stretch повторяет Qt при выравнивании формы.
+- **Вложенность.** `layout_size_hint`/`layout_minimum_size`/
+  `layout_maximum_size` знают про Form; форма внутри group box меряется
+  как Qt-форма. `QLineEdit` hint в form-движке приведён к целочисленной
+  `QFontMetrics`-формуле Qt (box-движок не затронут).
+- **Тесты.** 6 фикстур `form_{basic,wrap_long,wrap_all,growth,alignment,
+  group}` + Qt6 JSON/PNG; `form_*_geometry_matches_qt6_offscreen`
+  (допуск 1 px) и `form_*_raster_compared_to_qt6`; парсерные
+  `parses_form_layout_properties`,
+  `form_layout_defaults_follow_fusion`.
+- **Инструменты.** `tools/qt_reference` дополнительно выгружает
+  `layout.class` и свойства `QFormLayout`.
+- **Review.** Категория `form` в `tools/formgen/review.py` (6 форм,
+  id `form/80…85`); пак перегенерирован: mean 1.3–3.4, >30 — 1.6–3.2 %.
+- **Проверки.** `cargo test --workspace` — 161 passed (app 41,
+  form-xml 12, rqt 108); `mix test` — 29 passed. Браузер
+  (chrome-devtools MCP, WSLg Chromium :9222):
+  `?lua=test_qform.lua&ui=test_qform.ui` — правая колонка меток,
+  длинная метка не сдвигает поля, checkbox и Reset/Close в spanning-row,
+  Reset очищает text и снимает checked. Фикстуры:
+  `server/priv/qt_forms/test_qform.ui`,
+  `server/priv/lua_modules/test_qform.lua`.
+
 ### Grid layout 0.12.2–0.12.5: `QGridLayout` раскладывается сеткой
 
 - **Явный вид layout-а.** `QBoxLayoutDirection` + `class.contains('H')`
   заменены на `QLayoutKind { HBox, VBox, Grid, Form }` и
   `QLayout { kind, spacing, margins, items }`; `QLayoutKind::from_class()`
   читает класс из `.ui`. `layout_widget` диспетчеризует в
-  `layout_box`/`layout_grid` (Form пока идёт как vbox, 0.13).
+  `layout_box`/`layout_grid` (Form тогда шёл как vbox; закрыто в 0.13).
   Поведение hbox/vbox не изменилось.
 - **Движок сетки — порт Qt.** `layout_grid` + `grid_tracks` повторяют
   `QGridLayoutPrivate::setupLayoutData`/`distribute` и `qGeomCalc`

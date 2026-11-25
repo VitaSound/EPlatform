@@ -558,5 +558,47 @@
     "title": "Grid policies",
     "description": "explicit sizePolicy Expanding/Fixed in a grid",
     "path": "review/forms/grid/79_policies.ui"
+  },
+  {
+    "id": "form/80_basic",
+    "category": "form",
+    "title": "Form basic",
+    "description": "line edit, combo and checkbox in a two-column form",
+    "path": "review/forms/form/80_basic.ui"
+  },
+  {
+    "id": "form/81_long_labels",
+    "category": "form",
+    "title": "Form long labels",
+    "description": "WrapLongRows with a label wider than the label column",
+    "path": "review/forms/form/81_long_labels.ui"
+  },
+  {
+    "id": "form/82_wrap_all",
+    "category": "form",
+    "title": "Form wrap all",
+    "description": "WrapAllRows puts every field below its label",
+    "path": "review/forms/form/82_wrap_all.ui"
+  },
+  {
+    "id": "form/83_growth",
+    "category": "form",
+    "title": "Form growth policy",
+    "description": "FieldsStayAtSizeHint keeps fields at their size hint",
+    "path": "review/forms/form/83_growth.ui"
+  },
+  {
+    "id": "form/84_alignment",
+    "category": "form",
+    "title": "Form alignment",
+    "description": "right-aligned labels, centred form and custom spacing",
+    "path": "review/forms/form/84_alignment.ui"
+  },
+  {
+    "id": "form/85_group",
+    "category": "form",
+    "title": "Form in group box",
+    "description": "nested group box with a form layout inside",
+    "path": "review/forms/form/85_group.ui"
   }
 ]

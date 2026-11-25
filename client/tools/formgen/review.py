@@ -268,6 +268,34 @@ def add_grid(cases, name, title, width, height, items, description=""):
     )
 
 
+def form_layout(name, items, props=""):
+    body = "".join(items)
+    return f'<layout class="QFormLayout" name="{name}">{props}{body}</layout>'
+
+
+def form_prop_enum(name, value):
+    return f'<property name="{name}"><enum>QFormLayout::{value}</enum></property>'
+
+
+def form_prop_set(name, flags):
+    return f'<property name="{name}"><set>{flags}</set></property>'
+
+
+def add_form(cases, name, title, width, height, items, props="", description=""):
+    cases.append(
+        {
+            "id": f"form/{name}",
+            "category": "form",
+            "name": name,
+            "title": title,
+            "description": description,
+            "xml": form_grid(
+                title, width, height, form_layout("formLayout", items, props)
+            ),
+        }
+    )
+
+
 def add(
     cases,
     category,
@@ -818,6 +846,143 @@ QTableWidget { background-color: #ffffff; border: 2px solid #3f51b5; }
         description="explicit sizePolicy Expanding/Fixed in a grid",
     )
 
+    add_form(
+        cases,
+        "basic",
+        "Form basic",
+        360,
+        190,
+        [
+            grid_item(0, 0, label("label_1", "Name:")),
+            grid_item(0, 1, line("lineEdit_1")),
+            grid_item(1, 0, label("label_2", "Code:")),
+            grid_item(1, 1, combo("comboBox_1")),
+            grid_item(2, 0, label("label_3", "Enabled")),
+            grid_item(2, 1, checkbox("checkBox_1", "Check")),
+        ],
+        description="line edit, combo and checkbox in a two-column form",
+    )
+    add_form(
+        cases,
+        "long_labels",
+        "Form long labels",
+        300,
+        220,
+        [
+            grid_item(0, 0, label("label_1", "A very long label that should wrap:")),
+            grid_item(0, 1, line("lineEdit_1")),
+            grid_item(1, 0, label("label_2", "Short:")),
+            grid_item(1, 1, line("lineEdit_2")),
+            grid_item(2, 0, label("label_3", "Code:")),
+            grid_item(2, 1, combo("comboBox_1")),
+        ],
+        props=form_prop_enum("rowWrapPolicy", "WrapLongRows"),
+        description="WrapLongRows with a label wider than the label column",
+    )
+    add_form(
+        cases,
+        "wrap_all",
+        "Form wrap all",
+        320,
+        250,
+        [
+            grid_item(0, 0, label("label_1", "Name:")),
+            grid_item(0, 1, line("lineEdit_1")),
+            grid_item(1, 0, label("label_2", "Description:")),
+            grid_item(1, 1, line("lineEdit_2")),
+            grid_item(2, 0, label("label_3", "Enabled")),
+            grid_item(2, 1, checkbox("checkBox_1", "Check")),
+        ],
+        props=form_prop_enum("rowWrapPolicy", "WrapAllRows"),
+        description="WrapAllRows puts every field below its label",
+    )
+    add_form(
+        cases,
+        "growth",
+        "Form growth policy",
+        460,
+        200,
+        [
+            grid_item(0, 0, label("label_1", "Name:")),
+            grid_item(0, 1, line("lineEdit_1")),
+            grid_item(1, 0, label("label_2", "Code:")),
+            grid_item(1, 1, combo("comboBox_1")),
+            grid_item(
+                2,
+                0,
+                widget(
+                    "QLabel",
+                    "label_3",
+                    prop_text("text", "Status:")
+                    + prop_size_policy("Expanding", "Preferred"),
+                ),
+            ),
+            grid_item(2, 1, label("statusLabel", "Ready")),
+        ],
+        props=form_prop_enum("fieldGrowthPolicy", "FieldsStayAtSizeHint"),
+        description="FieldsStayAtSizeHint keeps fields at their size hint",
+    )
+    add_form(
+        cases,
+        "alignment",
+        "Form alignment",
+        420,
+        210,
+        [
+            grid_item(0, 0, label("label_1", "Name:")),
+            grid_item(
+                0,
+                1,
+                widget(
+                    "QLineEdit",
+                    "lineEdit_1",
+                    prop_size_policy("Fixed", "Fixed")
+                    + '<property name="minimumSize"><size><width>160</width><height>0</height></size></property>',
+                ),
+            ),
+            grid_item(1, 0, label("label_2", "Code:")),
+            grid_item(1, 1, combo("comboBox_1")),
+            grid_item(2, 0, label("label_3", "Enabled")),
+            grid_item(2, 1, checkbox("checkBox_1", "Check")),
+        ],
+        props=(
+            form_prop_enum("fieldGrowthPolicy", "FieldsStayAtSizeHint")
+            + form_prop_set("labelAlignment", "Qt::AlignRight|Qt::AlignVCenter")
+            + form_prop_set("formAlignment", "Qt::AlignHCenter|Qt::AlignTop")
+            + '<property name="horizontalSpacing"><number>12</number></property>'
+            + '<property name="verticalSpacing"><number>9</number></property>'
+        ),
+        description="right-aligned labels, centred form and custom spacing",
+    )
+    add(
+        cases,
+        "form",
+        "group",
+        "Form in group box",
+        [
+            widget(
+                "QGroupBox",
+                "groupBox",
+                prop_text("title", "Details"),
+                form_layout(
+                    "formLayout",
+                    [
+                        grid_item(0, 0, label("label_1", "Name:")),
+                        grid_item(0, 1, line("lineEdit_1")),
+                        grid_item(1, 0, label("label_2", "Code:")),
+                        grid_item(1, 1, combo("comboBox_1")),
+                        grid_item(2, 0, label("label_3", "Enabled")),
+                        grid_item(2, 1, checkbox("checkBox_1", "Check")),
+                    ],
+                ),
+            ),
+            spacer(False),
+        ],
+        width=380,
+        height=270,
+        description="nested group box with a form layout inside",
+    )
+
     assert len(cases) >= 70, len(cases)
     return cases
 
@@ -978,7 +1143,7 @@ nav{{background:white;border:1px solid #d8dde6;padding:10px 12px;border-radius:6
 </style></head><body>
 <h1>EPlatform Qt review</h1>
 <p class="note">Комментарии: <a href="comments.md">review/comments.md</a>. ID формы стабилен между прогонами.
-Категории <code>scroll</code>, <code>selection</code> и <code>grid</code> — в конце страницы (быстрый переход в навигации ниже).</p>
+Категории <code>scroll</code>, <code>selection</code>, <code>grid</code> и <code>form</code> — в конце страницы (быстрый переход в навигации ниже).</p>
 <p>Форм: {len(cases)}. Diff: mean по каналам 0–255.</p>
 <nav>{nav}</nav>
 {''.join(sections)}

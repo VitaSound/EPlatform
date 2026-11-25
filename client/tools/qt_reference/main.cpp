@@ -5,6 +5,7 @@
 #include <QAbstractScrollArea>
 #include <QApplication>
 #include <QFile>
+#include <QFormLayout>
 #include <QFont>
 #include <QFontMetricsF>
 #include <QJsonArray>
@@ -172,11 +173,24 @@ int main(int argc, char **argv)
     if (QLayout *layout = root->layout()) {
         const QMargins margins = layout->contentsMargins();
         QJsonObject layoutObject;
+        layoutObject["class"] = QString::fromLatin1(layout->metaObject()->className());
         layoutObject["left"] = margins.left();
         layoutObject["top"] = margins.top();
         layoutObject["right"] = margins.right();
         layoutObject["bottom"] = margins.bottom();
         layoutObject["spacing"] = layout->spacing();
+        if (auto *form = qobject_cast<QFormLayout *>(layout)) {
+            layoutObject["fieldGrowthPolicy"] = int(form->fieldGrowthPolicy());
+            layoutObject["rowWrapPolicy"] = int(form->rowWrapPolicy());
+            layoutObject["labelAlignment"] = int(form->labelAlignment());
+            layoutObject["formAlignment"] = int(form->formAlignment());
+            layoutObject["horizontalSpacing"] = form->horizontalSpacing();
+            layoutObject["verticalSpacing"] = form->verticalSpacing();
+            layoutObject["styleFormAlignment"] = QApplication::style()->styleHint(QStyle::SH_FormLayoutFormAlignment);
+            layoutObject["styleLabelAlignment"] = QApplication::style()->styleHint(QStyle::SH_FormLayoutLabelAlignment);
+            layoutObject["styleFieldGrowth"] = QApplication::style()->styleHint(QStyle::SH_FormLayoutFieldGrowthPolicy);
+            layoutObject["styleRowWrap"] = QApplication::style()->styleHint(QStyle::SH_FormLayoutWrapPolicy);
+        }
         output["layout"] = layoutObject;
     }
 

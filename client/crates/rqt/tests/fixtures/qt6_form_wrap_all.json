@@ -1,0 +1,208 @@
+{
+    "font": {
+        "ascent": 13,
+        "descent": 3.296875,
+        "family": "DejaVu Sans",
+        "height": 16.296875,
+        "m_advance": 12.078125,
+        "pixel_size": 14,
+        "textlabel_advance": 66.015625,
+        "x_advance": 8.28125
+    },
+    "form_class": "QDialog",
+    "form_name": "Dialog",
+    "geometry": {
+        "h": 240,
+        "w": 320,
+        "x": 238,
+        "y": 178
+    },
+    "layout": {
+        "bottom": 11,
+        "class": "QFormLayout",
+        "fieldGrowthPolicy": 2,
+        "formAlignment": 33,
+        "horizontalSpacing": 6,
+        "labelAlignment": 1,
+        "left": 11,
+        "right": 11,
+        "rowWrapPolicy": 2,
+        "spacing": 6,
+        "styleFieldGrowth": 2,
+        "styleFormAlignment": 33,
+        "styleLabelAlignment": 1,
+        "styleRowWrap": 0,
+        "top": 11,
+        "verticalSpacing": 6
+    },
+    "root_layout_items": [
+        {
+            "class": "QLabel",
+            "h": 17,
+            "hint_h": 17,
+            "hint_w": 46,
+            "i": 0,
+            "w": 46,
+            "widget": "label_1",
+            "x": 11,
+            "y": 11
+        },
+        {
+            "class": "QLineEdit",
+            "h": 24,
+            "hint_h": 24,
+            "hint_w": 142,
+            "i": 1,
+            "w": 298,
+            "widget": "lineEdit_1",
+            "x": 11,
+            "y": 34
+        },
+        {
+            "class": "QLabel",
+            "h": 17,
+            "hint_h": 17,
+            "hint_w": 85,
+            "i": 2,
+            "w": 85,
+            "widget": "label_2",
+            "x": 11,
+            "y": 64
+        },
+        {
+            "class": "QLineEdit",
+            "h": 24,
+            "hint_h": 24,
+            "hint_w": 142,
+            "i": 3,
+            "w": 298,
+            "widget": "lineEdit_2",
+            "x": 11,
+            "y": 87
+        },
+        {
+            "class": "QLabel",
+            "h": 17,
+            "hint_h": 17,
+            "hint_w": 57,
+            "i": 4,
+            "w": 57,
+            "widget": "label_3",
+            "x": 11,
+            "y": 117
+        },
+        {
+            "class": "QCheckBox",
+            "h": 23,
+            "hint_h": 23,
+            "hint_w": 70,
+            "i": 5,
+            "w": 298,
+            "widget": "checkBox_1",
+            "x": 11,
+            "y": 140
+        }
+    ],
+    "scroll_areas": [
+    ],
+    "widgets": [
+        {
+            "class": "QDialog",
+            "h": 240,
+            "hint_h": 174,
+            "hint_w": 164,
+            "min_h": 174,
+            "min_w": 107,
+            "name": "Dialog",
+            "policy_h": 5,
+            "policy_v": 5,
+            "w": 320,
+            "x": 0,
+            "y": 0
+        },
+        {
+            "class": "QLabel",
+            "h": 17,
+            "hint_h": 17,
+            "hint_w": 46,
+            "min_h": 17,
+            "min_w": 46,
+            "name": "label_1",
+            "policy_h": 5,
+            "policy_v": 5,
+            "w": 46,
+            "x": 11,
+            "y": 11
+        },
+        {
+            "class": "QLineEdit",
+            "h": 24,
+            "hint_h": 24,
+            "hint_w": 142,
+            "min_h": 24,
+            "min_w": 32,
+            "name": "lineEdit_1",
+            "policy_h": 7,
+            "policy_v": 0,
+            "w": 298,
+            "x": 11,
+            "y": 34
+        },
+        {
+            "class": "QLabel",
+            "h": 17,
+            "hint_h": 17,
+            "hint_w": 85,
+            "min_h": 17,
+            "min_w": 85,
+            "name": "label_2",
+            "policy_h": 5,
+            "policy_v": 5,
+            "w": 85,
+            "x": 11,
+            "y": 64
+        },
+        {
+            "class": "QLineEdit",
+            "h": 24,
+            "hint_h": 24,
+            "hint_w": 142,
+            "min_h": 24,
+            "min_w": 32,
+            "name": "lineEdit_2",
+            "policy_h": 7,
+            "policy_v": 0,
+            "w": 298,
+            "x": 11,
+            "y": 87
+        },
+        {
+            "class": "QLabel",
+            "h": 17,
+            "hint_h": 17,
+            "hint_w": 57,
+            "min_h": 17,
+            "min_w": 57,
+            "name": "label_3",
+            "policy_h": 5,
+            "policy_v": 5,
+            "w": 57,
+            "x": 11,
+            "y": 117
+        },
+        {
+            "class": "QCheckBox",
+            "h": 23,
+            "hint_h": 23,
+            "hint_w": 70,
+            "min_h": 23,
+            "min_w": 70,
+            "name": "checkBox_1",
+            "policy_h": 1,
+            "policy_v": 0,
+            "w": 298,
+            "x": 11,
+            "y": 140
+        }
+    ]
+}

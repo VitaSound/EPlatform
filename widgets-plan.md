@@ -2,14 +2,14 @@
 
 Обновлено: 2026-11-25 (актуализация по коду и прогонам тестов).
 Статус: события волны 0 закрыты; **0.12 (`QGridLayout`) закрыт**
-(0.12.1–0.12.5); `QFormLayout` ещё раскладывается как vbox,
-следующий шаг — 0.13.
+(0.12.1–0.12.5); **0.13 (`QFormLayout`) закрыт** (0.13.1–0.13.3).
 Отдельный этап **0.14 (Application shell / главное окно)** реализован
 в объёме 0.14.1–0.14.7; 0.14.8 (`.ui` main window) отложен, 0.14.9
 (integration/golden) проверен в браузере, golden-снимки ещё нет.
 Этап **0.15 PaintBatch / display list** закрыт: painter order сохранён на
 всех слоях, маскировка текста под popup удалена.
-Следующий архитектурный фронт — **0.13 (QFormLayout)**.
+Следующий шаг — рост в `QBoxLayout` (см. известный дефект 0.12);
+0.13 больше не блокирует layout-фронт.
 Источники: каталог Qt Widgets (<https://doc.qt.io/qt-6/qtwidgets-module.html>),
 код `client/crates/{form-xml,rqt,app}`, `client/QT_PORT_PLAN.md`.
 
@@ -18,11 +18,11 @@
 
 ---
 
-## Baseline (проверено 2026-11-25, после 0.12.5)
+## Baseline (проверено 2026-11-25, после 0.13.3)
 
 ```
-cargo test --workspace   → 147 passed
-  app 41 · form-xml 10 · rqt 96
+cargo test --workspace   → 161 passed
+  app 41 · form-xml 12 · rqt 108
 mix test (server/)       → 29 passed
 ```
 
@@ -47,11 +47,12 @@ mix test (server/)       → 29 passed
 | «`QLayoutItem::Widget` хранит `position`/`span`» | было ⚠️ (не читались); **0.12.1**: заменены на `LayoutCell` из парсера |
 | «`parse_value` понимает `formLayout`/`labelAlignment`/`fieldGrowthPolicy`/`horizontalSpacing`» | ❌ таких строк в `form-xml` нет вообще |
 | «QGridLayout деградирует в vbox» | ❌ в hbox; **0.12.2**: вид layout-а теперь явный (`QLayoutKind`), grid раскладывается сеткой |
-| «QFormLayout деградирует в vbox» | ✅ да, `TopToBottom` без какой-либо спец-логики |
+| «QFormLayout деградирует в vbox» | было ✅; **0.13.2**: двухколоночный движок, wrap и growth-политики |
 | «инфраструктура готова» | ❌ готова только модель данных-заглушка; ни парсинга, ни геометрии |
 
-Дополнительно: в фикстурах и review-паке **нет ни одной формы** с
-`QGridLayout`/`QFormLayout`, поэтому эти layout-ы ничем не покрыты.
+Дополнительно: до 0.12 в фикстурах не было ни одной формы с
+`QGridLayout`/`QFormLayout`; сетка закрыта в 0.12.5, форма — в 0.13.3
+(6 фикстур + категория `form` в review).
 
 ---
 
@@ -203,35 +204,55 @@ Reset/Close и ввод в ячейку проверены в WSLg-Chromium (:92
 
 ---
 
-## 0.13 QFormLayout — ❌ (сложность L)
+## 0.13 QFormLayout — ✅ сделано (2026-11-25)
 
 Цель: label-field пары в две колонки с Qt-политиками роста и выравнивания.
 
-### 0.13.1 Парсер и свойства (S)
+### 0.13.1 Парсер и свойства — ✅
 
-- распознавать `class="QFormLayout"`;
-- читать свойства: `fieldGrowthPolicy`, `rowWrapPolicy`, `labelAlignment`,
-  `formAlignment`, `horizontalSpacing`, `verticalSpacing`;
-- координаты строк/колонок брать из тех же атрибутов `<item>` (0.12.1):
-  Designer выдаёт label и field как два элемента одной строки (column 0/1).
+- `form_xml::Layout` несёт `field_growth_policy`, `row_wrap_policy`,
+  `label_alignment`, `form_alignment`, `horizontal_spacing`,
+  `vertical_spacing`; enum-ы `FieldGrowthPolicy`/`RowWrapPolicy`.
+- Читаются `<enum>QFormLayout::…</enum>` и `<set>Qt::Align…|…</set>`
+  (Fusion-дефолты: `AllNonFixedFieldsGrow`, `DontWrapRows`, labels left,
+  form left/top). Поддержан Designer-синтаксис без `AlignmentFlag::`.
+- Строки/колонки берутся из `<item row= column= colspan=>` (0.12.1);
+  `colspan>=2` → spanning (full-row) item.
 
-### 0.13.2 Двухколоночный движок (M)
+### 0.13.2 Двухколоночный движок — ✅
 
-- ширина колонки меток = максимум hint меток;
-- поле занимает остаток по `fieldGrowthPolicy`:
-  `AllNonFixedFieldsGrow` (default) / `FieldsStayAtSizeHint` /
-  `ExpandingFieldsGrow`;
-- `rowWrapPolicy`: `DontWrapRows` (default) / `WrapLongRows` / `WrapAllRows`;
-- `labelAlignment` (Left/Center/Right) и `verticalSpacing`.
+- `layout_form` + `form_data` — порт `QFormLayoutPrivate::updateSizes`,
+  `setupVerticalLayoutData`, `setupHorizontalLayoutData` и
+  `arrangeWidgets` для не-HFW случая.
+- Колонка меток = максимум hint (с учётом wrap); поле получает остаток
+  по `fieldGrowthPolicy` (`AllNonFixedFieldsGrow` /
+  `FieldsStayAtSizeHint` / `ExpandingFieldsGrow`).
+- `rowWrapPolicy` (`DontWrapRows`/`WrapLongRows`/`WrapAllRows`),
+  `labelAlignment` (left/center/right), `formAlignment` (left/center/right,
+  top/center/bottom), `horizontalSpacing`/`verticalSpacing`.
+- Вертикальные треки считаются тем же `qGeomCalc`, что и grid; top/bottom
+  stretch повторяет Qt при `formAlignment`.
+- `layout_size_hint`/`layout_minimum_size`/`layout_maximum_size` знают про
+  Form; вложенный form внутри group box/vbox меряется как Qt-форма.
+- `QLineEdit` hint для form-движка приведён к целочисленной
+  `QFontMetrics`-формуле Qt (4 px), box-движок не затронут.
 
-### 0.13.3 Стенд и покрытие (M)
+### 0.13.3 Стенд и покрытие — ✅
 
-- фикстуры: короткие/длинные метки, line edit + combo + checkbox, вложенные
-  group box;
-- Qt6 golden JSON/PNG, тесты с допуском 1 px;
-- категория `form` в `tools/formgen` и review-пак.
+- Фикстуры `form_basic`, `form_wrap_long`, `form_wrap_all`, `form_growth`,
+  `form_alignment`, `form_group` + Qt6 JSON/PNG.
+- Тесты `form_*_geometry_matches_qt6_offscreen` (допуск 1 px) и
+  `form_*_raster_compared_to_qt6`; парсерные тесты
+  `parses_form_layout_properties`, `form_layout_defaults_follow_fusion`.
+- Категория `form` в `tools/formgen/review.py` (6 форм, id `form/80…85`);
+  review перегенерирован: mean diff 1.3–3.4, >30 — 1.6–3.2 %.
+- Браузер (chrome-devtools MCP, WSLg Chromium :9222):
+  `?lua=test_qform.lua&ui=test_qform.ui` — правая колонка меток, длинная
+  метка, checkbox, Reset/Close в spanning-row; Reset очищает text и
+  снимает checked. Фикстуры: `server/priv/qt_forms/test_qform.ui`,
+  `server/priv/lua_modules/test_qform.lua`.
 
-**Definition of done 0.13:** две колонки, выравнивание и growth-политика
+**Definition of done 0.13:** ✅ две колонки, выравнивание и growth-политика
 совпадают с Qt6; формы в review.
 
 ---
@@ -440,3 +461,4 @@ chrome-devtools MCP на `127.0.0.1:9222`, скриншоты до/после с
 
 Меню/тулбар/главное окно вынесены в отдельный этап 0.14
 (`docs/application-shell-plan.md`), а не в волну 0.
+

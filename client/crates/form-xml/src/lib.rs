@@ -99,6 +99,46 @@ impl Widget {
     }
 }
 
+/// `QFormLayout::FieldGrowthPolicy` (0.13.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FieldGrowthPolicy {
+    #[default]
+    AllNonFixedFieldsGrow,
+    FieldsStayAtSizeHint,
+    ExpandingFieldsGrow,
+}
+
+impl FieldGrowthPolicy {
+    fn from_name(name: &str) -> Option<Self> {
+        match name.rsplit("::").next().unwrap_or(name) {
+            "AllNonFixedFieldsGrow" => Some(Self::AllNonFixedFieldsGrow),
+            "FieldsStayAtSizeHint" => Some(Self::FieldsStayAtSizeHint),
+            "ExpandingFieldsGrow" => Some(Self::ExpandingFieldsGrow),
+            _ => None,
+        }
+    }
+}
+
+/// `QFormLayout::RowWrapPolicy` (0.13.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RowWrapPolicy {
+    #[default]
+    DontWrapRows,
+    WrapLongRows,
+    WrapAllRows,
+}
+
+impl RowWrapPolicy {
+    fn from_name(name: &str) -> Option<Self> {
+        match name.rsplit("::").next().unwrap_or(name) {
+            "DontWrapRows" => Some(Self::DontWrapRows),
+            "WrapLongRows" => Some(Self::WrapLongRows),
+            "WrapAllRows" => Some(Self::WrapAllRows),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Layout {
     /// `QVBoxLayout` / `QHBoxLayout` / ...
@@ -108,6 +148,19 @@ pub struct Layout {
     pub spacing: Option<i64>,
     /// `(left, top, right, bottom)` if set explicitly.
     pub margins: Option<(i64, i64, i64, i64)>,
+    /// `QFormLayout` growth policy (default `AllNonFixedFieldsGrow`).
+    pub field_growth_policy: FieldGrowthPolicy,
+    /// `QFormLayout` row wrap policy (default `DontWrapRows`).
+    pub row_wrap_policy: RowWrapPolicy,
+    /// `labelAlignment` bitmask; `0` → Qt style default (`AlignLeft`).
+    pub label_alignment: u32,
+    /// `formAlignment` bitmask; `0` → Qt style default
+    /// (`AlignLeft | AlignTop`).
+    pub form_alignment: u32,
+    /// `horizontalSpacing` if set explicitly; `None` → style default.
+    pub horizontal_spacing: Option<i64>,
+    /// `verticalSpacing` if set explicitly; `None` → style default.
+    pub vertical_spacing: Option<i64>,
     pub items: Vec<LayoutItem>,
 }
 
@@ -254,6 +307,12 @@ fn parse_layout(node: Node<'_, '_>) -> Result<Layout, ParseError> {
 
     let mut spacing = None;
     let mut margins = None;
+    let mut field_growth_policy = FieldGrowthPolicy::default();
+    let mut row_wrap_policy = RowWrapPolicy::default();
+    let mut label_alignment = 0;
+    let mut form_alignment = 0;
+    let mut horizontal_spacing = None;
+    let mut vertical_spacing = None;
     let mut items = Vec::new();
 
     for child in node.children().filter(|n| n.is_element()) {
@@ -264,10 +323,24 @@ fn parse_layout(node: Node<'_, '_>) -> Result<Layout, ParseError> {
                 };
                 match (key.as_str(), &value) {
                     ("spacing", PropValue::Int(n)) => spacing = Some(*n),
+                    ("horizontalSpacing", PropValue::Int(v)) => horizontal_spacing = Some(*v),
+                    ("verticalSpacing", PropValue::Int(v)) => vertical_spacing = Some(*v),
                     ("leftMargin", PropValue::Int(v)) => set_margin(&mut margins, 0, *v),
                     ("topMargin", PropValue::Int(v)) => set_margin(&mut margins, 1, *v),
                     ("rightMargin", PropValue::Int(v)) => set_margin(&mut margins, 2, *v),
                     ("bottomMargin", PropValue::Int(v)) => set_margin(&mut margins, 3, *v),
+                    ("fieldGrowthPolicy", value) => {
+                        if let Some(name) = value.as_str().and_then(FieldGrowthPolicy::from_name) {
+                            field_growth_policy = name;
+                        }
+                    }
+                    ("rowWrapPolicy", value) => {
+                        if let Some(name) = value.as_str().and_then(RowWrapPolicy::from_name) {
+                            row_wrap_policy = name;
+                        }
+                    }
+                    ("labelAlignment", value) => label_alignment = alignment_value(value),
+                    ("formAlignment", value) => form_alignment = alignment_value(value),
                     _ => {}
                 }
             }
@@ -293,8 +366,27 @@ fn parse_layout(node: Node<'_, '_>) -> Result<Layout, ParseError> {
         name,
         spacing,
         margins,
+        field_growth_policy,
+        row_wrap_policy,
+        label_alignment,
+        form_alignment,
+        horizontal_spacing,
+        vertical_spacing,
         items,
     })
+}
+
+/// Alignment property written either as `<set>Qt::AlignLeft|...</set>`, as a
+/// set of child `<enum>` elements, or (tolerantly) as plain text.
+fn alignment_value(value: &PropValue) -> u32 {
+    match value {
+        PropValue::Str(text) | PropValue::Enum(text) => parse_alignment(text),
+        PropValue::List(items) => items
+            .iter()
+            .filter_map(PropValue::as_str)
+            .fold(0, |mask, flag| mask | parse_alignment(flag)),
+        _ => 0,
+    }
 }
 
 /// Read grid cell attributes from `<item>`; box layouts leave them unset.
@@ -326,8 +418,8 @@ fn parse_alignment(value: &str) -> u32 {
         .fold(0, |mask, flag| {
             let tail = flag.rsplit("::").next().unwrap_or(flag);
             mask | match tail {
-                "AlignLeft" => ALIGN_LEFT,
-                "AlignRight" => ALIGN_RIGHT,
+                "AlignLeft" | "AlignLeading" => ALIGN_LEFT,
+                "AlignRight" | "AlignTrailing" => ALIGN_RIGHT,
                 "AlignHCenter" => ALIGN_HCENTER,
                 "AlignTop" => ALIGN_TOP,
                 "AlignBottom" => ALIGN_BOTTOM,
@@ -702,6 +794,60 @@ mod tests {
             }
             other => panic!("expected spacer, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn parses_form_layout_properties() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0"><class>Dialog</class>
+ <widget class="QDialog" name="Dialog">
+  <layout class="QFormLayout" name="form">
+   <property name="fieldGrowthPolicy"><enum>QFormLayout::ExpandingFieldsGrow</enum></property>
+   <property name="rowWrapPolicy"><enum>QFormLayout::WrapLongRows</enum></property>
+   <property name="labelAlignment"><set>Qt::AlignmentFlag::AlignRight|Qt::AlignmentFlag::AlignVCenter</set></property>
+   <property name="formAlignment"><set><enum>Qt::AlignHCenter</enum><enum>Qt::AlignTop</enum></set></property>
+   <property name="horizontalSpacing"><number>9</number></property>
+   <property name="verticalSpacing"><number>4</number></property>
+   <item row="0" column="0"><widget class="QLabel" name="label"/></item>
+   <item row="0" column="1"><widget class="QLineEdit" name="edit"/></item>
+  </layout>
+ </widget>
+</ui>"#;
+        let form = parse(xml).expect("form parses");
+        let layout = form.root.layout.as_ref().expect("root layout");
+        assert_eq!(layout.class, "QFormLayout");
+        assert_eq!(
+            layout.field_growth_policy,
+            FieldGrowthPolicy::ExpandingFieldsGrow
+        );
+        assert_eq!(layout.row_wrap_policy, RowWrapPolicy::WrapLongRows);
+        assert_eq!(layout.label_alignment, ALIGN_RIGHT | ALIGN_VCENTER);
+        assert_eq!(layout.form_alignment, ALIGN_HCENTER | ALIGN_TOP);
+        assert_eq!(layout.horizontal_spacing, Some(9));
+        assert_eq!(layout.vertical_spacing, Some(4));
+    }
+
+    #[test]
+    fn form_layout_defaults_follow_fusion() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0"><class>Dialog</class>
+ <widget class="QDialog" name="Dialog">
+  <layout class="QFormLayout" name="form">
+   <item row="0" column="0"><widget class="QLabel" name="label"/></item>
+  </layout>
+ </widget>
+</ui>"#;
+        let form = parse(xml).expect("form parses");
+        let layout = form.root.layout.as_ref().expect("root layout");
+        assert_eq!(
+            layout.field_growth_policy,
+            FieldGrowthPolicy::AllNonFixedFieldsGrow
+        );
+        assert_eq!(layout.row_wrap_policy, RowWrapPolicy::DontWrapRows);
+        assert_eq!(layout.label_alignment, 0);
+        assert_eq!(layout.form_alignment, 0);
+        assert_eq!(layout.horizontal_spacing, None);
+        assert_eq!(layout.vertical_spacing, None);
     }
 
     #[test]

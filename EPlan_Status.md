@@ -6,8 +6,8 @@
 ## Baseline
 
 ```
-cargo test --workspace   → 147 passed; 0 failed
-  app 41 · form-xml 10 · rqt 96
+cargo test --workspace   → 161 passed; 0 failed
+  app 41 · form-xml 12 · rqt 108
 mix test (server/)       → 29 passed; 0 failed
 ```
 
@@ -27,7 +27,7 @@ mix test (server/)       → 29 passed; 0 failed
 | 0.10 Enter/Leave | ✅ | `under_mouse_widget` + `widget_at_point`, Qt-переходы |
 | 0.11 FocusIn/FocusOut | ✅ | `focused_widget_id`, Tab/Shift+Tab |
 
-## Layout-ы 0.12/0.13 — 0.12 ✅, дальше 0.13
+## Layout-ы 0.12/0.13 — ✅ закрыто
 
 ### 0.12.2–0.12.5 QGridLayout — ✅ сделано (2026-11-25)
 
@@ -57,6 +57,32 @@ mix test (server/)       → 29 passed; 0 failed
   (ряд кнопок без spacer-а). Grid уже считает по Qt-алгоритму;
   box — следующий отдельный шаг (см. TODO в `widgets-plan.md`).
 
+### 0.13.1–0.13.3 QFormLayout — ✅ сделано (2026-11-25)
+
+- **Парсер.** `form_xml::Layout` получил `field_growth_policy`,
+  `row_wrap_policy`, `label_alignment`, `form_alignment`,
+  `horizontal_spacing`, `vertical_spacing`; enum-ы
+  `FieldGrowthPolicy`/`RowWrapPolicy`, разбор `<set>Qt::Align…</set>`
+  (и Designer-варианта без `AlignmentFlag::`).
+- **Движок.** `layout_form` + `form_data` — порт
+  `QFormLayoutPrivate::updateSizes`/`setupVerticalLayoutData`/
+  `setupHorizontalLayoutData`/`arrangeWidgets`: колонка меток по hint,
+  остаток поля по `fieldGrowthPolicy`, `rowWrapPolicy`
+  (`DontWrapRows`/`WrapLongRows`/`WrapAllRows`), label/form alignment,
+  h/v spacing, top/bottom stretch через общий `qGeomCalc`.
+- **Вложенность.** `layout_size_hint`/`layout_minimum_size`/
+  `layout_maximum_size` учитывают Form; форма внутри group box меряется
+  как Qt-форма. `QLineEdit` hint в form-движке приведён к целочисленной
+  `QFontMetrics`-формуле Qt.
+- **Тесты.** 6 фикстур (`form_basic`, `form_wrap_long`, `form_wrap_all`,
+  `form_growth`, `form_alignment`, `form_group`) + Qt6 JSON/PNG;
+  геометрия 1 px и raster-diff; парсерные тесты свойств.
+- **Review.** Категория `form` (6 форм, id `form/80…85`),
+  mean diff 1.3–3.4, >30 — 1.6–3.2 %.
+- **Браузер.** `?lua=test_qform.lua&ui=test_qform.ui` — выравнивание
+  меток, длинная метка, checkbox, Reset/Close в spanning-row; Reset
+  очищает text и снимает checked.
+
 ### 0.12.1 Парсер ячеек — ✅ сделано
 
 - `form_xml::LayoutCell { row, column, row_span, column_span }` с дефолтом
@@ -80,16 +106,14 @@ mix test (server/)       → 29 passed; 0 failed
 | `position`/`span` в `QLayoutItem::Widget` | поля никем не читались |
 | `formLayout`/`labelAlignment`/`fieldGrowthPolicy` в `parse_value` | отсутствуют |
 | QGridLayout деградирует в vbox | в hbox |
-| QFormLayout деградирует в vbox | да, без спец-логики |
+| QFormLayout деградирует в vbox | было да; закрыто в 0.13.2 |
 
 ### Осталось
 
-1. **0.13.1–0.13.3** `QFormLayout`: свойства, двухколоночный движок,
-   политики роста/выравнивания, фикстуры + golden. Пока `QLayoutKind::Form`
-   раскладывается как vbox.
-2. **Box-layout рост:** `QBoxLayout` должен делить избыток между
+1. **Box-layout рост:** `QBoxLayout` должен делить избыток между
    виджетами с `maximumSize > hint` (как `qGeomCalc`), а не только
    отдавать его в зазоры; отдельный шаг с golden-тестом.
+2. **0.14.8/0.14.9:** `QMainWindow` из `.ui` и golden-снимки shell.
 
 ### Попутно исправлено
 

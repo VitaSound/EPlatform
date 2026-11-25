@@ -1,0 +1,208 @@
+{
+    "font": {
+        "ascent": 13,
+        "descent": 3.296875,
+        "family": "DejaVu Sans",
+        "height": 16.296875,
+        "m_advance": 12.078125,
+        "pixel_size": 14,
+        "textlabel_advance": 66.015625,
+        "x_advance": 8.28125
+    },
+    "form_class": "QDialog",
+    "form_name": "Dialog",
+    "geometry": {
+        "h": 200,
+        "w": 420,
+        "x": 188,
+        "y": 198
+    },
+    "layout": {
+        "bottom": 11,
+        "class": "QFormLayout",
+        "fieldGrowthPolicy": 0,
+        "formAlignment": 36,
+        "horizontalSpacing": 12,
+        "labelAlignment": 130,
+        "left": 11,
+        "right": 11,
+        "rowWrapPolicy": 0,
+        "spacing": -1,
+        "styleFieldGrowth": 2,
+        "styleFormAlignment": 33,
+        "styleLabelAlignment": 1,
+        "styleRowWrap": 0,
+        "top": 11,
+        "verticalSpacing": 9
+    },
+    "root_layout_items": [
+        {
+            "class": "QLabel",
+            "h": 24,
+            "hint_h": 17,
+            "hint_w": 46,
+            "i": 0,
+            "w": 46,
+            "widget": "label_1",
+            "x": 112,
+            "y": 11
+        },
+        {
+            "class": "QLineEdit",
+            "h": 24,
+            "hint_h": 24,
+            "hint_w": 160,
+            "i": 1,
+            "w": 160,
+            "widget": "lineEdit_1",
+            "x": 170,
+            "y": 11
+        },
+        {
+            "class": "QLabel",
+            "h": 25,
+            "hint_h": 17,
+            "hint_w": 41,
+            "i": 2,
+            "w": 41,
+            "widget": "label_2",
+            "x": 117,
+            "y": 44
+        },
+        {
+            "class": "QComboBox",
+            "h": 25,
+            "hint_h": 25,
+            "hint_w": 86,
+            "i": 3,
+            "w": 86,
+            "widget": "comboBox_1",
+            "x": 170,
+            "y": 44
+        },
+        {
+            "class": "QLabel",
+            "h": 23,
+            "hint_h": 17,
+            "hint_w": 57,
+            "i": 4,
+            "w": 57,
+            "widget": "label_3",
+            "x": 101,
+            "y": 78
+        },
+        {
+            "class": "QCheckBox",
+            "h": 23,
+            "hint_h": 23,
+            "hint_w": 70,
+            "i": 5,
+            "w": 70,
+            "widget": "checkBox_1",
+            "x": 170,
+            "y": 78
+        }
+    ],
+    "scroll_areas": [
+    ],
+    "widgets": [
+        {
+            "class": "QDialog",
+            "h": 200,
+            "hint_h": 112,
+            "hint_w": 251,
+            "min_h": 112,
+            "min_w": 251,
+            "name": "Dialog",
+            "policy_h": 5,
+            "policy_v": 5,
+            "w": 420,
+            "x": 0,
+            "y": 0
+        },
+        {
+            "class": "QLabel",
+            "h": 24,
+            "hint_h": 17,
+            "hint_w": 46,
+            "min_h": 17,
+            "min_w": 46,
+            "name": "label_1",
+            "policy_h": 5,
+            "policy_v": 5,
+            "w": 46,
+            "x": 112,
+            "y": 11
+        },
+        {
+            "class": "QLineEdit",
+            "h": 24,
+            "hint_h": 24,
+            "hint_w": 142,
+            "min_h": 24,
+            "min_w": 32,
+            "name": "lineEdit_1",
+            "policy_h": 0,
+            "policy_v": 0,
+            "w": 160,
+            "x": 170,
+            "y": 11
+        },
+        {
+            "class": "QLabel",
+            "h": 25,
+            "hint_h": 17,
+            "hint_w": 41,
+            "min_h": 17,
+            "min_w": 41,
+            "name": "label_2",
+            "policy_h": 5,
+            "policy_v": 5,
+            "w": 41,
+            "x": 117,
+            "y": 44
+        },
+        {
+            "class": "QComboBox",
+            "h": 25,
+            "hint_h": 25,
+            "hint_w": 86,
+            "min_h": 25,
+            "min_w": 86,
+            "name": "comboBox_1",
+            "policy_h": 5,
+            "policy_v": 0,
+            "w": 86,
+            "x": 170,
+            "y": 44
+        },
+        {
+            "class": "QLabel",
+            "h": 23,
+            "hint_h": 17,
+            "hint_w": 57,
+            "min_h": 17,
+            "min_w": 57,
+            "name": "label_3",
+            "policy_h": 5,
+            "policy_v": 5,
+            "w": 57,
+            "x": 101,
+            "y": 78
+        },
+        {
+            "class": "QCheckBox",
+            "h": 23,
+            "hint_h": 23,
+            "hint_w": 70,
+            "min_h": 23,
+            "min_w": 70,
+            "name": "checkBox_1",
+            "policy_h": 1,
+            "policy_v": 0,
+            "w": 70,
+            "x": 170,
+            "y": 78
+        }
+    ]
+}
