@@ -14,6 +14,14 @@
 - **IME/раскладка.** `compositionend` коммитит строку в `text`;
   следующий `input` подавляется, чтобы не было дубля. Проверены
   «тест»/русский текст, Backspace, Tab, Ctrl+A и Enter.
+- **Enter/ReturnPressed.** Enter на `QLineEdit` теперь шлёт
+  `formEvent "ReturnPressed"`; на мобильном это тот же путь, что на
+  десктопе.
+- **Safari backend URL.** `backend` декодирует `%3A/%2F/%3F/%3D` и сам
+  добавляет `?vsn=2.0.0`, если query нет. Ссылка для телефона больше не
+  содержит вложенный `?`:
+  `...&backend=ws://10.0.0.7:4010/socket/websocket`. Старый вариант с
+  `?vsn=2.0.0` и percent-encoding тоже работает.
 - **Touch-состояния.** После `TouchPhase::Ended/Cancelled` сбрасываются
   `under_mouse` и `under_mouse_widget`; `CursorLeft` тоже очищает hover.
   `under_mouse` теперь реально выставляется при движении указателя, так

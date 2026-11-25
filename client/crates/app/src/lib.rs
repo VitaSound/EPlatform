@@ -134,7 +134,7 @@ impl Params {
                     let value = value.to_string();
                     match key {
                         "backend" => {
-                            params.backend = value;
+                            params.backend = percent_decode(&value);
                         }
                         "app" => {
                             params.app = value;
@@ -179,8 +179,43 @@ impl Params {
                     }
                 }
             }
+            params.backend = backend_with_version(params.backend);
         }
         params
+    }
+}
+
+/// Decode `%3A`, `%2F`, `%3F`, … in a URL parameter. Safari may percent-encode
+/// characters in `location.search` that Chrome leaves raw.
+fn percent_decode(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            let high = (bytes[index + 1] as char).to_digit(16);
+            let low = (bytes[index + 2] as char).to_digit(16);
+            if let (Some(high), Some(low)) = (high, low) {
+                out.push((high * 16 + low) as u8);
+                index += 3;
+                continue;
+            }
+        }
+        out.push(bytes[index]);
+        index += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Phoenix needs the JSON serializer version in the WebSocket query. Add it
+/// ourselves when the URL has no query: `?backend=.../websocket?...` inside a
+/// page URL is fragile in mobile Safari, which may percent-encode the second
+/// `?` before handing `location.search` to wasm.
+fn backend_with_version(backend: String) -> String {
+    if (backend.starts_with("ws://") || backend.starts_with("wss://")) && !backend.contains('?') {
+        format!("{backend}?vsn=2.0.0")
+    } else {
+        backend
     }
 }
 
@@ -4506,9 +4541,10 @@ pub fn run_native(params: Params) {
 #[cfg(test)]
 mod tests {
     use super::{
-        append_paint_commands, base64_encode, cursor_icon_for_hit, gfx, icon_url, key_edit, now_ms,
-        png_data_url, resized_frame, shell, text_input_action, App, AppChrome, AppChromeAction,
-        KeyEdit, Params, QtForm, WindowLayer, QMDI_TITLE_H,
+        append_paint_commands, backend_with_version, base64_encode, cursor_icon_for_hit, gfx,
+        icon_url, key_edit, now_ms, percent_decode, png_data_url, resized_frame, shell,
+        text_input_action, App, AppChrome, AppChromeAction, KeyEdit, Params, QtForm, WindowLayer,
+        QMDI_TITLE_H,
     };
     use rqt::core::QVariant;
     use rqt::gui::QRectF;
@@ -6079,6 +6115,31 @@ mod tests {
         assert_eq!(
             key_edit(None, &Key::Named(NamedKey::Shift)),
             KeyEdit::Ignore
+        );
+    }
+
+    #[test]
+    fn backend_url_decodes_safari_percent_escapes_and_adds_version() {
+        let encoded = "ws%3A%2F%2F10.0.0.7%3A4010%2Fsocket%2Fwebsocket%3Fvsn%3D2.0.0";
+        assert_eq!(
+            backend_with_version(percent_decode(encoded)),
+            "ws://10.0.0.7:4010/socket/websocket?vsn=2.0.0"
+        );
+    }
+
+    #[test]
+    fn backend_url_gets_phoenix_version_when_query_is_missing() {
+        assert_eq!(
+            backend_with_version("ws://10.0.0.7:4010/socket/websocket".into()),
+            "ws://10.0.0.7:4010/socket/websocket?vsn=2.0.0"
+        );
+        assert_eq!(
+            backend_with_version("ws://10.0.0.7:4010/socket/websocket?vsn=2.0.0".into()),
+            "ws://10.0.0.7:4010/socket/websocket?vsn=2.0.0"
+        );
+        assert_eq!(
+            backend_with_version("http://example".into()),
+            "http://example"
         );
     }
 
