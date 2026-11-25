@@ -15,8 +15,16 @@ pub const TOOLBAR_H: f32 = 39.0;
 pub const STATUS_H: f32 = 22.0;
 const ITEM_H: f32 = 24.0;
 const SEPARATOR_H: f32 = 2.0;
-const ICON: f32 = 18.0;
 const TOOL_ICON: f32 = 24.0;
+/// Menubar top-level icon column — our extension over Qt, which renders
+/// icon-only menubar items (probed: Qt drops the title entirely).
+const MENU_ICON: f32 = 16.0;
+/// QMenu popup icon size; Qt draws a 16 px icon inside the item.
+const POPUP_ICON: f32 = 16.0;
+/// Qt reserves the popup text column unconditionally: probed text starts
+/// at `item.x + 28` whether or not the menu has icons (iconless popup
+/// width = advance + 51, with icons = + 59 — see `menu_width`).
+const POPUP_TEXT_X: f32 = 28.0;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct MenuItem {
@@ -400,6 +408,9 @@ pub struct Shell {
     pub(crate) status_until: Option<f64>,
     pub(crate) status_info: Option<String>,
     pub(crate) open_path: Option<Vec<usize>>,
+    /// Item under the pointer inside an open popup. Qt draws it with the
+    /// selected look: highlight fill, darkened-highlight border, white text.
+    pub(crate) hovered_path: Option<Vec<usize>>,
 }
 
 impl Shell {
@@ -410,6 +421,7 @@ impl Shell {
     pub fn set_menu_items(&mut self, items: Vec<MenuItem>) {
         self.menu = items;
         self.open_path = None;
+        self.hovered_path = None;
     }
 
     pub fn set_toolbar(&mut self, value: &PropValue) {
@@ -453,6 +465,7 @@ impl Shell {
 
     pub fn close_menu(&mut self) {
         self.open_path = None;
+        self.hovered_path = None;
     }
 
     pub fn central(&self, viewport: QRectF) -> QRectF {
@@ -491,7 +504,12 @@ impl Shell {
             if item.separator {
                 continue;
             }
-            let width = metrics.horizontal_advance(&item.title).ceil() + 8.0;
+            // Qt menubar item = title advance + 8 px (probe: "Файл" = 47 px
+            // at advance 39). Top-level icons widen only their own item.
+            let mut width = metrics.horizontal_advance(&item.title).ceil() + 8.0;
+            if item.icon.is_some() {
+                width += MENU_ICON + 4.0;
+            }
             out.push(QRectF::new(x, viewport.y, width, MENU_H));
             x += width + 6.0;
         }
@@ -638,6 +656,7 @@ impl Shell {
                 };
                 if item.children.is_empty() {
                     self.open_path = None;
+                    self.hovered_path = None;
                     return Some(item);
                 }
                 if self.open_path.as_ref().and_then(|p| p.first()) == Some(&index) {
@@ -645,6 +664,7 @@ impl Shell {
                 } else {
                     self.open_path = Some(vec![index]);
                 }
+                self.hovered_path = None;
                 None
             }
             ShellHit::MenuItem(path) => {
@@ -656,9 +676,11 @@ impl Shell {
                 }
                 if item.children.is_empty() {
                     self.open_path = None;
+                    self.hovered_path = None;
                     return Some(item);
                 }
                 self.open_path = Some(path);
+                self.hovered_path = None;
                 None
             }
             ShellHit::Toolbar(index) => self
@@ -669,19 +691,35 @@ impl Shell {
         }
     }
 
-    /// Open a submenu when the cursor hovers over it (Qt-like menu tracking).
+    /// Qt menu tracking: with a menu open, moving the pointer over another
+    /// menubar item switches the active item; popup items get the selected
+    /// look. Without an open menu the menubar hover is deliberately inert
+    /// — Qt6 Fusion does not highlight plain hover (probed: `menubar_hover`
+    /// is pixel-identical to `menubar_normal`).
     pub fn hover(&mut self, point: (f32, f32), viewport: QRectF) {
-        if !self.menu_open() {
-            return;
-        }
-        let Some(ShellHit::MenuItem(path)) = self.hit(point, viewport) else {
-            return;
-        };
-        let Some(item) = self.item_at(&path) else {
-            return;
-        };
-        if !item.children.is_empty() && item.enabled {
-            self.open_path = Some(path);
+        match self.hit(point, viewport) {
+            Some(ShellHit::MenuTop(index)) => {
+                if self.menu_open() {
+                    let active = self.open_path.as_ref().and_then(|p| p.first()).copied();
+                    if active != Some(index)
+                        && self.menu.get(index).is_some_and(|item| !item.children.is_empty())
+                    {
+                        self.open_path = Some(vec![index]);
+                    }
+                }
+                self.hovered_path = None;
+            }
+            Some(ShellHit::MenuItem(path)) => {
+                if self.menu_open() {
+                    if let Some(item) = self.item_at(&path) {
+                        if !item.children.is_empty() && item.enabled {
+                            self.open_path = Some(path.clone());
+                        }
+                    }
+                }
+                self.hovered_path = Some(path);
+            }
+            _ => self.hovered_path = None,
         }
     }
 
@@ -735,7 +773,11 @@ impl Shell {
         let text = palette.color(rqt::gui::QPaletteRole::WindowText);
         let disabled = palette.color(rqt::gui::QPaletteRole::PlaceholderText);
         let border = QColor::rgba8(160, 160, 160, 255);
+        // Qt menubar bottom line (`menubar_normal.png`, row y=21).
+        let menu_border = QColor::rgba8(214, 214, 214, 255);
         let highlight = QColor::rgba8(48, 140, 198, 255);
+        // Qt active menubar item: 1 px border = highlight darkened to 80 %.
+        let highlight_border = QColor::rgba8(38, 112, 158, 255);
 
         // Menu bar.
         if !self.menu.is_empty() {
@@ -745,7 +787,7 @@ impl Shell {
             );
             painter.fill_rect(
                 QRectF::new(viewport.x, viewport.y + MENU_H - 1.0, viewport.width, 1.0),
-                border,
+                menu_border,
             );
             let open_root = self.open_path.as_ref().and_then(|p| p.first()).copied();
             for (index, rect) in self.top_rects(viewport).into_iter().enumerate() {
@@ -764,17 +806,50 @@ impl Shell {
                 let Some(item) = self.menu.get(menu_index) else {
                     continue;
                 };
-                if open_root == Some(menu_index) {
-                    painter.fill_rect(rect, highlight);
+                let active = open_root == Some(menu_index);
+                if active {
+                    // Qt6 `menubar_active.png`: darkened-highlight frame
+                    // around the whole item, highlight fill inside.
+                    painter.fill_rect(rect, highlight_border);
+                    painter.fill_rect(
+                        QRectF::new(
+                            rect.x + 1.0,
+                            rect.y + 1.0,
+                            rect.width - 2.0,
+                            rect.height - 2.0,
+                        ),
+                        highlight,
+                    );
                 }
-                let color = if open_root == Some(menu_index) {
+                // Qt text column: rect.x + 4 (probed: glyph starts at 10 in
+                // the item at x=6), vertically 2 px above our old offset.
+                let mut text_x = rect.x + 4.0;
+                if let Some(icon) = item.icon.as_deref().and_then(icons::pixmap) {
+                    painter.draw_pixmap(
+                        QRectF::new(
+                            rect.x + 4.0,
+                            rect.y + (MENU_H - MENU_ICON) / 2.0,
+                            MENU_ICON,
+                            MENU_ICON,
+                        ),
+                        icon,
+                        1.0,
+                    );
+                    text_x = rect.x + 4.0 + MENU_ICON + 4.0;
+                }
+                let color = if active {
                     QColor::rgba8(255, 255, 255, 255)
                 } else if item.enabled {
                     text
                 } else {
                     disabled
                 };
-                let text_rect = QRectF::new(rect.x + 8.0, rect.y + 3.0, rect.width - 12.0, ITEM_H);
+                let text_rect = QRectF::new(
+                    text_x,
+                    rect.y + 1.0,
+                    (rect.right() - text_x - 4.0).max(0.0),
+                    MENU_H,
+                );
                 painter.draw_text(text_rect, item.title.clone(), color);
             }
         }
@@ -877,75 +952,126 @@ impl Shell {
         if entries.is_empty() {
             return;
         }
-        let font = QFont::default();
-        let window = QColor::rgba8(250, 250, 250, 255);
+        // Qt6 popup ground truth (`menu_popup.png`): white background,
+        // 1 px (149) frame per menu column, selected item = highlight fill
+        // with a darkened-highlight border, separator = single 1 px (195)
+        // line inset 5 px at the top row of its 2 px band.
+        let background = QColor::rgba8(255, 255, 255, 255);
         let text = QColor::rgba8(28, 28, 32, 255);
         let disabled = QColor::rgba8(130, 130, 134, 255);
-        let border = QColor::rgba8(140, 140, 140, 255);
+        let frame = QColor::rgba8(149, 149, 149, 255);
         let highlight = QColor::rgba8(48, 140, 198, 255);
-        let metrics = QFontMetrics::new(&font);
+        let highlight_border = QColor::rgba8(38, 112, 158, 255);
+        let separator_line = QColor::rgba8(195, 195, 195, 255);
         let open = self.open_path.as_deref();
-        for entry in entries {
-            if entry.item.separator {
-                painter.fill_rect(entry.rect, window);
-                painter.fill_rect(
-                    QRectF::new(
-                        entry.rect.x + 4.0,
-                        entry.rect.y + 0.5,
-                        entry.rect.width - 8.0,
-                        1.0,
-                    ),
-                    border,
-                );
-                continue;
+        let hovered = self.hovered_path.as_deref();
+
+        // One frame per menu column: each depth level is a single popup
+        // window in Qt (root menu first, then each open submenu). The old
+        // per-entry stroke drew a grid across the popup.
+        let mut start = 0usize;
+        while start < entries.len() {
+            let depth = entries[start].path.len();
+            let mut end = start;
+            while end < entries.len() && entries[end].path.len() == depth {
+                end += 1;
             }
-            painter.fill_rect(entry.rect, window);
-            let selected = open.is_some_and(|path| path == entry.path.as_slice());
-            if selected && entry.item.enabled {
-                painter.fill_rect(entry.rect, highlight);
-            }
-            let mut x = entry.rect.x + 6.0;
-            if let Some(icon) = entry.item.icon.as_deref().and_then(icons::pixmap) {
-                painter.draw_pixmap(QRectF::new(x, entry.rect.y + 3.0, ICON, ICON), icon, 1.0);
-                x += ICON + 4.0;
-            }
-            let color = if selected {
-                QColor::rgba8(255, 255, 255, 255)
-            } else if entry.item.enabled {
-                text
-            } else {
-                disabled
-            };
-            let label = if entry.item.checkable {
-                format!(
-                    "{} {}",
-                    if entry.item.checked { "✓" } else { " " },
-                    entry.item.title
-                )
-            } else {
-                entry.item.title.clone()
-            };
-            painter.draw_text(
-                QRectF::new(
-                    x,
-                    entry.rect.y + 3.0,
-                    entry.rect.width - (x - entry.rect.x) - 20.0,
-                    ITEM_H,
-                ),
-                label,
-                color,
+            let column = &entries[start..end];
+            let first = column.first().expect("non-empty column");
+            let last = column.last().expect("non-empty column");
+            let union = QRectF::new(
+                first.rect.x,
+                first.rect.y,
+                first.rect.width,
+                last.rect.bottom() - first.rect.y,
             );
-            if !entry.item.children.is_empty() {
+
+            for entry in column {
+                painter.fill_rect(entry.rect, background);
+            }
+            painter.stroke_rect(union, 1.0, frame);
+
+            for entry in column {
+                if entry.item.separator {
+                    painter.fill_rect(
+                        QRectF::new(
+                            entry.rect.x + 5.0,
+                            entry.rect.y,
+                            entry.rect.width - 10.0,
+                            1.0,
+                        ),
+                        separator_line,
+                    );
+                    continue;
+                }
+                let selected = entry.item.enabled
+                    && (hovered.is_some_and(|path| path == entry.path.as_slice())
+                        || open.is_some_and(|path| path == entry.path.as_slice()));
+                if selected {
+                    painter.fill_rect(entry.rect, highlight_border);
+                    painter.fill_rect(
+                        QRectF::new(
+                            entry.rect.x + 1.0,
+                            entry.rect.y + 1.0,
+                            entry.rect.width - 2.0,
+                            entry.rect.height - 2.0,
+                        ),
+                        highlight,
+                    );
+                }
+                let color = if selected {
+                    QColor::rgba8(255, 255, 255, 255)
+                } else if entry.item.enabled {
+                    text
+                } else {
+                    disabled
+                };
+                if let Some(icon) = entry.item.icon.as_deref().and_then(icons::pixmap) {
+                    painter.draw_pixmap(
+                        QRectF::new(
+                            entry.rect.x + 6.0,
+                            entry.rect.y + 4.0,
+                            POPUP_ICON,
+                            POPUP_ICON,
+                        ),
+                        icon,
+                        1.0,
+                    );
+                }
+                if entry.item.checkable {
+                    // Qt keeps the check mark inside the icon column, so
+                    // titles stay aligned across rows.
+                    painter.draw_text(
+                        QRectF::new(entry.rect.x + 6.0, entry.rect.y + 4.0, 16.0, ITEM_H),
+                        if entry.item.checked { "✓" } else { " " }.to_string(),
+                        color,
+                    );
+                }
+                let text_x = entry.rect.x + POPUP_TEXT_X;
                 painter.draw_text(
-                    QRectF::new(entry.rect.right() - 18.0, entry.rect.y + 3.0, 14.0, ITEM_H),
-                    "›".to_string(),
+                    QRectF::new(
+                        text_x,
+                        entry.rect.y + 4.0,
+                        (entry.rect.right() - text_x - 6.0).max(0.0),
+                        ITEM_H,
+                    ),
+                    entry.item.title.clone(),
                     color,
                 );
+                if !entry.item.children.is_empty() {
+                    painter.draw_text(
+                        QRectF::new(
+                            entry.rect.right() - 18.0,
+                            entry.rect.y + 4.0,
+                            14.0,
+                            ITEM_H,
+                        ),
+                        "›".to_string(),
+                        color,
+                    );
+                }
             }
-            // The popup background is painted before its entries. Doing it
-            // per entry would hide the text; draw only the outer border here.
-            painter.stroke_rect(entry.rect, 1.0, border);
-            let _ = metrics;
+            start = end;
         }
     }
 }
@@ -1389,5 +1515,173 @@ mod tests {
             )
         });
         assert!(!solid, "separator must not be filled as one block");
+    }
+
+    const QT6_MENUBAR_NORMAL: &[u8] =
+        include_bytes!("../tests/fixtures/qt6_chrome/menubar_normal.png");
+    const QT6_MENUBAR_ACTIVE: &[u8] =
+        include_bytes!("../tests/fixtures/qt6_chrome/menubar_active.png");
+    const QT6_POPUP_NOICON: &[u8] =
+        include_bytes!("../tests/fixtures/qt6_chrome/menu_popup_noicon.png");
+
+    /// Compare our raster against a Qt6 offscreen PNG. `offset` is the
+    /// position of the compared region inside our image.
+    fn compare_region_to_qt(
+        name: &str,
+        image: &rqt::raster::QRasterImage,
+        offset: (u32, u32),
+        fixture: &[u8],
+        mean_limit: f64,
+        diff_limit: u64,
+    ) {
+        let reference = rqt::raster::QRasterImage::from_png_bytes(fixture)
+            .unwrap_or_else(|error| panic!("{name}: reference png: {error}"));
+        let mut total = 0u64;
+        let mut count = 0u64;
+        let mut different = 0u64;
+        for y in 0..reference.height {
+            for x in 0..reference.width {
+                let left = image.pixel(x + offset.0, y + offset.1);
+                let right = reference.pixel(x, y);
+                let mut pixel_diff = 0u32;
+                for channel in 0..3 {
+                    let diff = u32::from(left[channel].abs_diff(right[channel]));
+                    total += u64::from(diff);
+                    pixel_diff = pixel_diff.max(diff);
+                    count += 1;
+                }
+                if pixel_diff > 30 {
+                    different += 1;
+                }
+            }
+        }
+        let mean = total as f64 / count as f64;
+        eprintln!(
+            "{name}: mean channel diff {mean:.3}, pixels >30: {different} / {}",
+            reference.width * reference.height
+        );
+        assert!(mean < mean_limit, "{name}: mean diff {mean}");
+        assert!(
+            different < diff_limit,
+            "{name}: pixels >30 {different} >= {diff_limit}"
+        );
+    }
+
+    fn menubar_shell() -> Shell {
+        let spec = parse_main_window(MAIN_WINDOW_UI).expect("main window parses");
+        let mut shell = Shell::default();
+        shell.visible = true;
+        shell.apply_main_window(spec);
+        shell
+    }
+
+    fn strip_menu_icons(items: &mut [MenuItem]) {
+        for item in items.iter_mut() {
+            item.icon = None;
+            strip_menu_icons(&mut item.children);
+        }
+    }
+
+    #[test]
+    fn menubar_normal_raster_matches_qt6_offscreen() {
+        let shell = menubar_shell();
+        let viewport = QRectF::new(0.0, 0.0, 800.0, 600.0);
+        let mut painter = QPainter::new();
+        shell.paint_base(&mut painter, viewport, 0.0, None);
+        let image = rqt::raster::rasterize(
+            painter.commands(),
+            800,
+            MENU_H as u32,
+            QColor::rgb(0xef, 0xef, 0xef),
+        );
+        compare_region_to_qt("menubar_normal", &image, (0, 0), QT6_MENUBAR_NORMAL, 4.0, 900);
+    }
+
+    #[test]
+    fn menubar_active_raster_matches_qt6_offscreen() {
+        let mut shell = menubar_shell();
+        shell.open_path = Some(vec![0]);
+        let viewport = QRectF::new(0.0, 0.0, 800.0, 600.0);
+        let mut painter = QPainter::new();
+        shell.paint_base(&mut painter, viewport, 0.0, None);
+        let image = rqt::raster::rasterize(
+            painter.commands(),
+            800,
+            MENU_H as u32,
+            QColor::rgb(0xef, 0xef, 0xef),
+        );
+        compare_region_to_qt("menubar_active", &image, (0, 0), QT6_MENUBAR_ACTIVE, 4.0, 900);
+    }
+
+    #[test]
+    fn popup_without_icons_raster_matches_qt6_offscreen() {
+        // Qt fixture: the same three rows ("Тестовая форма", separator,
+        // "Выход") without resolvable icons, first action highlighted.
+        let mut shell = menubar_shell();
+        strip_menu_icons(&mut shell.menu);
+        shell.open_path = Some(vec![0]);
+        shell.hovered_path = Some(vec![0, 0]);
+        let viewport = QRectF::new(0.0, 0.0, 800.0, 600.0);
+
+        let entries = shell.menu_entries(viewport);
+        assert_eq!(entries.len(), 3);
+        assert!((entries[0].rect.width - 171.0).abs() <= 1.0, "popup w");
+        let origin = shell.top_rect(viewport, 0).expect("top rect");
+        assert!((origin.x - 6.0).abs() < 0.01);
+
+        let mut painter = QPainter::new();
+        shell.paint_overlay(&mut painter, viewport);
+        let image = rqt::raster::rasterize(
+            painter.commands(),
+            800,
+            400,
+            QColor::rgb(0xef, 0xef, 0xef),
+        );
+        compare_region_to_qt(
+            "popup_noicon",
+            &image,
+            (origin.x as u32, MENU_H as u32),
+            QT6_POPUP_NOICON,
+            6.0,
+            700,
+        );
+    }
+
+    #[test]
+    fn menubar_hover_tracks_open_menu_like_qt() {
+        let mut shell = Shell::default();
+        shell.visible = true;
+        shell.set_menu(&menu_value());
+        let viewport = QRectF::new(0.0, 0.0, 800.0, 600.0);
+
+        // Menu closed: hovering the menubar must not open anything (Qt6
+        // Fusion parity — no highlight, no auto-open).
+        let file = shell.top_rect(viewport, 0).expect("file rect");
+        shell.hover((file.x + 2.0, 5.0), viewport);
+        assert_eq!(shell.open_path, None);
+        assert_eq!(shell.hovered_path, None);
+
+        // Menu open on "File": moving over "View" switches the active menu.
+        shell.open_path = Some(vec![0]);
+        let view = shell.top_rect(viewport, 1).expect("view rect");
+        shell.hover((view.x + 2.0, 5.0), viewport);
+        assert_eq!(shell.open_path, Some(vec![1]));
+
+        // A popup leaf under the pointer becomes the selected item.
+        shell.open_path = Some(vec![0]);
+        let (open_path, open_rect) = shell
+            .menu_entries(viewport)
+            .into_iter()
+            .find(|entry| entry.item.title == "Open")
+            .map(|entry| (entry.path, entry.rect))
+            .expect("open entry");
+        shell.hover((open_rect.x + 4.0, open_rect.y + 4.0), viewport);
+        assert_eq!(shell.hovered_path, Some(open_path));
+        assert_eq!(shell.open_path, Some(vec![0]), "leaf hover keeps the menu");
+
+        // Moving out of the popup clears the selection but keeps the menu.
+        shell.hover((400.0, 300.0), viewport);
+        assert_eq!(shell.hovered_path, None);
+        assert_eq!(shell.open_path, Some(vec![0]), "menu stays open");
     }
 }

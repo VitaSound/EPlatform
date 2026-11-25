@@ -20,6 +20,8 @@
 #include <QJsonObject>
 #include <QStyleFactory>
 #include <QStyleOptionSlider>
+#include <QStyleOptionMenuItem>
+#include <QDir>
 #include <QUiLoader>
 #include <QWidget>
 
@@ -237,6 +239,174 @@ static QJsonObject dumpMainWindow(QMainWindow *window, QWidget *root)
     return object;
 }
 
+static QImage renderWidgetToImage(QWidget *widget)
+{
+    QImage image(widget->size(), QImage::Format_RGBA8888);
+    image.fill(Qt::transparent);
+    QPainter painter(&image);
+    widget->render(&painter, QPoint(), QRegion(),
+                   QWidget::DrawWindowBackground | QWidget::DrawChildren);
+    return image;
+}
+
+// Chrome probe: renders menubar item states (normal / active-open /
+// hovered) and an open popup menu, so the app shell can be matched
+// against real Qt pixels instead of guesswork.
+static int chromeProbe(QApplication &app, const QString &uiPath,
+                       const QString &outDir)
+{
+    QFile file(uiPath);
+    if (!file.open(QIODevice::ReadOnly)) {
+        qCritical("cannot open %s", qPrintable(uiPath));
+        return 2;
+    }
+    QUiLoader loader;
+    QWidget *root = loader.load(&file, nullptr);
+    file.close();
+    if (!root) {
+        qCritical("cannot load form");
+        return 2;
+    }
+    root->show();
+    app.processEvents();
+
+    QMainWindow *window = qobject_cast<QMainWindow *>(root);
+    if (!window) {
+        qCritical("chrome probe needs a QMainWindow");
+        return 2;
+    }
+    QDir dir(outDir);
+    if (!dir.mkpath(".")) {
+        qCritical("cannot create %s", qPrintable(outDir));
+        return 2;
+    }
+
+    QMenuBar *bar = window->menuBar();
+    QJsonObject output;
+    QJsonArray barActions;
+    for (QAction *action : bar->actions()) {
+        barActions.append(actionInfo(action, [bar](QAction *a) {
+            return bar->actionGeometry(a);
+        }));
+    }
+    output["menubar"] = widgetChrome(bar, root);
+    output["menubar_actions"] = barActions;
+
+    // 1. Normal menubar.
+    renderWidgetToImage(bar).save(outDir + "/menubar_normal.png");
+
+    // 2. Active item (its menu is open).
+    QAction *first = bar->actions().value(0);
+    if (first) {
+        bar->setActiveAction(first);
+        app.processEvents();
+        renderWidgetToImage(bar).save(outDir + "/menubar_active.png");
+        bar->setActiveAction(nullptr);
+        app.processEvents();
+    }
+
+    // 3. Hover on the second item (menu closed) — styled exactly the way
+    //    QMenuBar paints State_MouseOver.
+    QImage hover = renderWidgetToImage(bar);
+    if (bar->actions().size() > 1) {
+        QAction *hovered = bar->actions().at(1);
+        QStyleOptionMenuItem option;
+        option.initFrom(bar);
+        option.state |= QStyle::State_Enabled | QStyle::State_MouseOver;
+        option.menuItemType = QStyleOptionMenuItem::Normal;
+        option.checkType = QStyleOptionMenuItem::NotCheckable;
+        option.text = hovered->text();
+        option.icon = hovered->icon();
+        option.rect = bar->actionGeometry(hovered);
+        {
+            QPainter painter(&hover);
+            painter.fillRect(option.rect,
+                             bar->palette().color(QPalette::Window));
+            QApplication::style()->drawControl(QStyle::CE_MenuBarItem,
+                                               &option, &painter, bar);
+        }
+    }
+    hover.save(outDir + "/menubar_hover.png");
+
+    // 3b. Menubar with icons on the top-level items (our shell draws
+    //     icons there; this pins down Qt's icon/text column layout).
+    const QList<QAction *> tops = bar->actions();
+    for (QAction *action : tops)
+        action->setIcon(QApplication::style()->standardIcon(QStyle::SP_FileIcon));
+    app.processEvents();
+    qInfo("after icons: menubar %dx%d sizeHint %dx%d", bar->width(), bar->height(),
+          bar->sizeHint().width(), bar->sizeHint().height());
+    for (QAction *action : tops) {
+        const QRect r = bar->actionGeometry(action);
+        qInfo("  action '%s' geometry %d,%d %dx%d", qPrintable(action->text()),
+              r.x(), r.y(), r.width(), r.height());
+    }
+    renderWidgetToImage(bar).save(outDir + "/menubar_icons.png");
+    QJsonArray iconBarActions;
+    for (QAction *action : bar->actions()) {
+        iconBarActions.append(actionInfo(action, [bar](QAction *a) {
+            return bar->actionGeometry(a);
+        }));
+    }
+    output["menubar_actions_with_icon"] = iconBarActions;
+    for (QAction *action : tops)
+        action->setIcon(QIcon());
+    app.processEvents();
+
+    // 4. Open popup menu with the first action highlighted.
+    QMenu *menu = first ? first->menu() : nullptr;
+    if (menu) {
+        menu->ensurePolished();
+        const QSize hint = menu->sizeHint();
+        output["popup_hint"] = QJsonObject{{"w", hint.width()},
+                                           {"h", hint.height()}};
+        QJsonArray actions;
+        for (QAction *action : menu->actions()) {
+            actions.append(actionInfo(action, [menu](QAction *a) {
+                return menu->actionGeometry(a);
+            }));
+        }
+        output["popup_actions"] = actions;
+
+        QAction *activeAction = nullptr;
+        for (QAction *action : menu->actions()) {
+            if (!action->isSeparator()) {
+                activeAction = action;
+                break;
+            }
+        }
+        if (activeAction)
+            menu->setActiveAction(activeAction);
+        menu->popup(QPoint(24, 40));
+        app.processEvents();
+        renderWidgetToImage(menu).save(outDir + "/menu_popup.png");
+
+        // 5. Same popup with a real icon to expose the icon column width.
+        if (activeAction) {
+            activeAction->setIcon(
+                QApplication::style()->standardIcon(QStyle::SP_DirOpenIcon));
+            app.processEvents();
+        }
+        QJsonArray iconActions;
+        for (QAction *action : menu->actions()) {
+            iconActions.append(actionInfo(action, [menu](QAction *a) {
+                return menu->actionGeometry(a);
+            }));
+        }
+        output["popup_actions_with_icon"] = iconActions;
+        renderWidgetToImage(menu).save(outDir + "/menu_popup_icon.png");
+        menu->hide();
+    }
+
+    QJsonDocument document(output);
+    QFile out;
+    out.open(stdout, QIODevice::WriteOnly);
+    out.write(document.toJson(QJsonDocument::Indented));
+
+    root->deleteLater();
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     QApplication app(argc, argv);
@@ -246,8 +416,18 @@ int main(int argc, char **argv)
     app.setFont(font);
 
     if (argc < 2) {
-        qCritical("usage: qt_reference <form.ui>");
+        qCritical("usage: qt_reference <form.ui> [out.png]\n"
+                  "       qt_reference --chrome <form.ui> <outdir>");
         return 2;
+    }
+
+    if (qstrcmp(argv[1], "--chrome") == 0) {
+        if (argc < 4) {
+            qCritical("usage: qt_reference --chrome <form.ui> <outdir>");
+            return 2;
+        }
+        return chromeProbe(app, QString::fromLocal8Bit(argv[2]),
+                           QString::fromLocal8Bit(argv[3]));
     }
 
     QFile file(QString::fromLocal8Bit(argv[1]));

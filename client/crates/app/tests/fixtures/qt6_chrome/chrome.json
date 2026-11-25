@@ -1,0 +1,155 @@
+{
+    "menubar": {
+        "class": "QMenuBar",
+        "h": 22,
+        "hint_h": 22,
+        "hint_w": 96,
+        "name": "menubar",
+        "present": true,
+        "w": 800,
+        "x": 0,
+        "y": 0
+    },
+    "menubar_actions": [
+        {
+            "checkable": false,
+            "checked": false,
+            "enabled": true,
+            "h": 22,
+            "name": "",
+            "separator": false,
+            "text": "Файл",
+            "visible": true,
+            "w": 47,
+            "x": 6,
+            "y": 0
+        },
+        {
+            "checkable": false,
+            "checked": false,
+            "enabled": true,
+            "h": 22,
+            "name": "",
+            "separator": false,
+            "text": "Вид",
+            "visible": true,
+            "w": 37,
+            "x": 59,
+            "y": 0
+        }
+    ],
+    "menubar_actions_with_icon": [
+        {
+            "checkable": false,
+            "checked": false,
+            "enabled": true,
+            "h": 21,
+            "name": "",
+            "separator": false,
+            "text": "Файл",
+            "visible": true,
+            "w": 24,
+            "x": 6,
+            "y": 0
+        },
+        {
+            "checkable": false,
+            "checked": false,
+            "enabled": true,
+            "h": 21,
+            "name": "",
+            "separator": false,
+            "text": "Вид",
+            "visible": true,
+            "w": 24,
+            "x": 36,
+            "y": 0
+        }
+    ],
+    "popup_actions": [
+        {
+            "checkable": false,
+            "checked": false,
+            "enabled": true,
+            "h": 24,
+            "name": "actionOpen",
+            "separator": false,
+            "text": "Тестовая форма",
+            "visible": true,
+            "w": 179,
+            "x": 0,
+            "y": 0
+        },
+        {
+            "checkable": false,
+            "checked": false,
+            "enabled": true,
+            "h": 2,
+            "name": "",
+            "separator": true,
+            "text": "",
+            "visible": true,
+            "w": 179,
+            "x": 0,
+            "y": 24
+        },
+        {
+            "checkable": false,
+            "checked": false,
+            "enabled": true,
+            "h": 24,
+            "name": "actionExit",
+            "separator": false,
+            "text": "Выход",
+            "visible": true,
+            "w": 179,
+            "x": 0,
+            "y": 26
+        }
+    ],
+    "popup_actions_with_icon": [
+        {
+            "checkable": false,
+            "checked": false,
+            "enabled": true,
+            "h": 24,
+            "name": "actionOpen",
+            "separator": false,
+            "text": "Тестовая форма",
+            "visible": true,
+            "w": 179,
+            "x": 0,
+            "y": 0
+        },
+        {
+            "checkable": false,
+            "checked": false,
+            "enabled": true,
+            "h": 2,
+            "name": "",
+            "separator": true,
+            "text": "",
+            "visible": true,
+            "w": 179,
+            "x": 0,
+            "y": 24
+        },
+        {
+            "checkable": false,
+            "checked": false,
+            "enabled": true,
+            "h": 24,
+            "name": "actionExit",
+            "separator": false,
+            "text": "Выход",
+            "visible": true,
+            "w": 179,
+            "x": 0,
+            "y": 26
+        }
+    ],
+    "popup_hint": {
+        "h": 50,
+        "w": 179
+    }
+}

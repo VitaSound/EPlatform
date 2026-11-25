@@ -5714,9 +5714,9 @@ mod tests {
             .take(popup.saturating_sub(toolbar + 1))
             .any(|(_, batch)| match batch {
                 gfx::PaintBatch::Rects(rects) => rects.iter().any(|rect| {
-                    (rect.color[0] - 250.0 / 255.0).abs() < 0.01
-                        && (rect.color[1] - 250.0 / 255.0).abs() < 0.01
-                        && (rect.color[2] - 250.0 / 255.0).abs() < 0.01
+                    (rect.color[0] - 1.0).abs() < 0.01
+                        && (rect.color[1] - 1.0).abs() < 0.01
+                        && (rect.color[2] - 1.0).abs() < 0.01
                         && rect.color[3] > 0.99
                 }),
                 gfx::PaintBatch::Text(_) => false,
