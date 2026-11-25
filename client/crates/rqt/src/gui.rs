@@ -108,6 +108,19 @@ impl QRectF {
     pub fn translated(&self, dx: f32, dy: f32) -> Self {
         Self::new(self.x + dx, self.y + dy, self.width, self.height)
     }
+
+    /// Overlap of two rectangles, `None` when they do not touch.
+    pub fn intersected(&self, other: &Self) -> Option<Self> {
+        let left = self.left().max(other.left());
+        let top = self.top().max(other.top());
+        let right = self.right().min(other.right());
+        let bottom = self.bottom().min(other.bottom());
+        if right <= left || bottom <= top {
+            None
+        } else {
+            Some(Self::new(left, top, right - left, bottom - top))
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -168,14 +181,16 @@ impl QColor {
                     let value = parse(index..index + 1)?;
                     Some(value * 16 + value)
                 };
-                Some(Self::rgba8(expand(0)?, expand(1)?, expand(2)?, expand(3)?))
+                Some(Self::rgba8(expand(1)?, expand(2)?, expand(3)?, expand(0)?))
             }
             6 => Some(Self::rgb(parse(0..2)?, parse(2..4)?, parse(4..6)?)),
+            // Qt style sheets interpret 4/8 digit values as ARGB, unlike
+            // CSS (#RRGGBBAA).
             8 => Some(Self::rgba8(
-                parse(0..2)?,
                 parse(2..4)?,
                 parse(4..6)?,
                 parse(6..8)?,
+                parse(0..2)?,
             )),
             _ => None,
         }
@@ -789,6 +804,17 @@ impl QPainter {
     }
 
     pub fn set_clip_rect(&mut self, rect: Option<QRectF>) {
+        // Qt clips children to their parent. Our widget painter relies on
+        // `set_clip_rect` to restrict painting, so intersect with the clip
+        // inherited from the enclosing `save()` instead of replacing it.
+        let rect = match (rect, self.current.clip) {
+            (Some(rect), Some(parent)) => Some(
+                rect.intersected(&parent)
+                    .unwrap_or(QRectF::new(rect.x, rect.y, 0.0, 0.0)),
+            ),
+            (Some(rect), None) => Some(rect),
+            (None, _) => None,
+        };
         self.current.clip = rect;
         self.commands.push(QPaintCommand::SetClip { rect });
     }

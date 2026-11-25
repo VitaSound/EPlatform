@@ -1,0 +1,361 @@
+{
+    "font": {
+        "ascent": 13,
+        "descent": 3.296875,
+        "family": "DejaVu Sans",
+        "height": 16.296875,
+        "m_advance": 12.078125,
+        "pixel_size": 14,
+        "textlabel_advance": 66.015625,
+        "x_advance": 8.28125
+    },
+    "form_class": "QDialog",
+    "form_name": "SplitterVDialog",
+    "geometry": {
+        "h": 300,
+        "w": 360,
+        "x": 218,
+        "y": 148
+    },
+    "layout": {
+        "bottom": 11,
+        "class": "QVBoxLayout",
+        "left": 11,
+        "right": 11,
+        "spacing": 6,
+        "top": 11
+    },
+    "root_layout_items": [
+        {
+            "class": "QSplitter",
+            "h": 278,
+            "hint_h": 384,
+            "hint_w": 256,
+            "i": 0,
+            "w": 338,
+            "widget": "splitter",
+            "x": 11,
+            "y": 11
+        }
+    ],
+    "scroll_areas": [
+        {
+            "class": "QListWidget",
+            "hbar": {
+                "add_line": {
+                    "h": 30,
+                    "w": 14,
+                    "x": 86,
+                    "y": 0
+                },
+                "max": 0,
+                "min": 0,
+                "page": 10,
+                "rect": {
+                    "h": 30,
+                    "w": 100,
+                    "x": 11,
+                    "y": 152
+                },
+                "single": 1,
+                "slider": {
+                    "h": 30,
+                    "w": 72,
+                    "x": 14,
+                    "y": 0
+                },
+                "sub_line": {
+                    "h": 30,
+                    "w": 14,
+                    "x": 0,
+                    "y": 0
+                },
+                "value": 0,
+                "visible": false
+            },
+            "name": "bottomList",
+            "vbar": {
+                "add_line": {
+                    "h": 14,
+                    "w": 100,
+                    "x": 0,
+                    "y": 16
+                },
+                "max": 0,
+                "min": 0,
+                "page": 10,
+                "rect": {
+                    "h": 30,
+                    "w": 100,
+                    "x": 11,
+                    "y": 152
+                },
+                "single": 1,
+                "slider": {
+                    "h": 2,
+                    "w": 100,
+                    "x": 0,
+                    "y": 14
+                },
+                "sub_line": {
+                    "h": 14,
+                    "w": 100,
+                    "x": 0,
+                    "y": 0
+                },
+                "value": 0,
+                "visible": false
+            },
+            "viewport": {
+                "h": 135,
+                "w": 336,
+                "x": 12,
+                "y": 153
+            }
+        },
+        {
+            "class": "QListWidget",
+            "hbar": {
+                "add_line": {
+                    "h": 30,
+                    "w": 14,
+                    "x": 86,
+                    "y": 0
+                },
+                "max": 0,
+                "min": 0,
+                "page": 10,
+                "rect": {
+                    "h": 30,
+                    "w": 100,
+                    "x": 11,
+                    "y": 11
+                },
+                "single": 1,
+                "slider": {
+                    "h": 30,
+                    "w": 72,
+                    "x": 14,
+                    "y": 0
+                },
+                "sub_line": {
+                    "h": 30,
+                    "w": 14,
+                    "x": 0,
+                    "y": 0
+                },
+                "value": 0,
+                "visible": false
+            },
+            "name": "topList",
+            "vbar": {
+                "add_line": {
+                    "h": 14,
+                    "w": 100,
+                    "x": 0,
+                    "y": 16
+                },
+                "max": 0,
+                "min": 0,
+                "page": 10,
+                "rect": {
+                    "h": 30,
+                    "w": 100,
+                    "x": 11,
+                    "y": 11
+                },
+                "single": 1,
+                "slider": {
+                    "h": 2,
+                    "w": 100,
+                    "x": 0,
+                    "y": 14
+                },
+                "sub_line": {
+                    "h": 14,
+                    "w": 100,
+                    "x": 0,
+                    "y": 0
+                },
+                "value": 0,
+                "visible": false
+            },
+            "viewport": {
+                "h": 135,
+                "w": 336,
+                "x": 12,
+                "y": 12
+            }
+        }
+    ],
+    "widgets": [
+        {
+            "class": "QDialog",
+            "h": 300,
+            "hint_h": 406,
+            "hint_w": 278,
+            "min_h": 166,
+            "min_w": 92,
+            "name": "SplitterVDialog",
+            "policy_h": 5,
+            "policy_v": 5,
+            "w": 360,
+            "x": 0,
+            "y": 0
+        },
+        {
+            "class": "QSplitter",
+            "h": 278,
+            "hint_h": 384,
+            "hint_w": 256,
+            "min_h": 144,
+            "min_w": 70,
+            "name": "splitter",
+            "policy_h": 5,
+            "policy_v": 7,
+            "w": 338,
+            "x": 11,
+            "y": 11
+        },
+        {
+            "class": "QListWidget",
+            "h": 137,
+            "hint_h": 192,
+            "hint_w": 256,
+            "min_h": 70,
+            "min_w": 70,
+            "name": "bottomList",
+            "policy_h": 7,
+            "policy_v": 7,
+            "w": 338,
+            "x": 11,
+            "y": 152
+        },
+        {
+            "class": "QWidget",
+            "h": 135,
+            "hint_h": -1,
+            "hint_w": -1,
+            "min_h": -1,
+            "min_w": -1,
+            "name": "qt_scrollarea_viewport",
+            "policy_h": 5,
+            "policy_v": 5,
+            "w": 336,
+            "x": 12,
+            "y": 153
+        },
+        {
+            "class": "QWidget",
+            "h": 30,
+            "hint_h": 14,
+            "hint_w": 54,
+            "min_h": 14,
+            "min_w": 54,
+            "name": "qt_scrollarea_hcontainer",
+            "policy_h": 5,
+            "policy_v": 5,
+            "w": 100,
+            "x": 11,
+            "y": 152
+        },
+        {
+            "class": "QWidget",
+            "h": 30,
+            "hint_h": 54,
+            "hint_w": 14,
+            "min_h": 54,
+            "min_w": 14,
+            "name": "qt_scrollarea_vcontainer",
+            "policy_h": 5,
+            "policy_v": 5,
+            "w": 100,
+            "x": 11,
+            "y": 152
+        },
+        {
+            "class": "QListWidget",
+            "h": 137,
+            "hint_h": 192,
+            "hint_w": 256,
+            "min_h": 70,
+            "min_w": 70,
+            "name": "topList",
+            "policy_h": 7,
+            "policy_v": 7,
+            "w": 338,
+            "x": 11,
+            "y": 11
+        },
+        {
+            "class": "QWidget",
+            "h": 135,
+            "hint_h": -1,
+            "hint_w": -1,
+            "min_h": -1,
+            "min_w": -1,
+            "name": "qt_scrollarea_viewport",
+            "policy_h": 5,
+            "policy_v": 5,
+            "w": 336,
+            "x": 12,
+            "y": 12
+        },
+        {
+            "class": "QWidget",
+            "h": 30,
+            "hint_h": 14,
+            "hint_w": 54,
+            "min_h": 14,
+            "min_w": 54,
+            "name": "qt_scrollarea_hcontainer",
+            "policy_h": 5,
+            "policy_v": 5,
+            "w": 100,
+            "x": 11,
+            "y": 11
+        },
+        {
+            "class": "QWidget",
+            "h": 30,
+            "hint_h": 54,
+            "hint_w": 14,
+            "min_h": 54,
+            "min_w": 14,
+            "name": "qt_scrollarea_vcontainer",
+            "policy_h": 5,
+            "policy_v": 5,
+            "w": 100,
+            "x": 11,
+            "y": 11
+        },
+        {
+            "class": "QSplitterHandle",
+            "h": 30,
+            "hint_h": 4,
+            "hint_w": 4,
+            "min_h": -1,
+            "min_w": -1,
+            "name": "qt_splithandle_",
+            "policy_h": 5,
+            "policy_v": 5,
+            "w": 100,
+            "x": 11,
+            "y": 11
+        },
+        {
+            "class": "QSplitterHandle",
+            "h": 4,
+            "hint_h": 4,
+            "hint_w": 4,
+            "min_h": -1,
+            "min_w": -1,
+            "name": "qt_splithandle_",
+            "policy_h": 5,
+            "policy_v": 5,
+            "w": 338,
+            "x": 11,
+            "y": 148
+        }
+    ]
+}

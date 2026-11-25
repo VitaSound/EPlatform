@@ -2,6 +2,146 @@
 
 ## 2026-11-25
 
+### Волна 0.17.1: мобильный ввод и touch-сценарии
+
+- **Скрытое поле ввода.** `index.html` содержит off-screen `<textarea>`;
+  JS перехватывает `beforeinput`/`input`/`composition*`/`keydown` и
+  отправляет в Rust семантические действия (`insert`, `backspace`,
+  `left`, `tab`, `selectAll`, …). Rust переиспользует общий
+  `apply_key_action`, поэтому десктоп и мобильный ввод идут одним путём.
+  `keydown` в capture-фазе блокирует winit, иначе текст вставлялся бы
+  дважды. Фокус hidden-поля синхронизирован с `QLineEdit`.
+- **IME/раскладка.** `compositionend` коммитит строку в `text`;
+  следующий `input` подавляется, чтобы не было дубля. Проверены
+  «тест»/русский текст, Backspace, Tab, Ctrl+A и Enter.
+- **Touch-состояния.** После `TouchPhase::Ended/Cancelled` сбрасываются
+  `under_mouse` и `under_mouse_widget`; `CursorLeft` тоже очищает hover.
+  `under_mouse` теперь реально выставляется при движении указателя, так
+  что `:hover` QSS работает и на десктопе.
+- **Долгий тап.** 500 мс → `formEvent "ContextMenu"` для виджета под
+  пальцем; release после long tap не превращается в click.
+- **Двойной тап.** В `QLineEdit` выделяет слово под курсором
+  (`select_word_at`, Unicode alphanumeric + `_`).
+- **Multi-touch.** Основной контакт владеет указателем; второй палец
+  отменяет tap/click/long-press и переводит жест в two-finger scroll.
+  Pinch отложен: в клиенте пока нет модели масштаба сцены.
+- **Тесты.** `cargo test --workspace` — 192 passed, 1 ignored
+  (app 52+1 ignored, form-xml 13, rqt 127); был добавлен тест
+  `select_word_at`, `clear_hover`, маппинг web-действий. Браузер:
+  touch-тап, IME, Backspace/Tab/Ctrl+A, double tap, long tap.
+
+### Волна 0.17.2–0.17.4: QSS box model, `Form:center`, splitter/tree API, review
+
+- **QSS box model.** `margin` и `margin-top/right/bottom/left` сдвигают
+  frame (фон/рамку), `padding` и per-side `padding-*` — content-rect.
+  Padding теперь учитывают текст, selection, caret, кнопки и заголовок
+  `QGroupBox`; `QGroupBox { margin-top }` из `52_checks.ui` работает.
+- **QSS-градиенты.** `background`/`background-image` понимают
+  `qlineargradient(x1:…, y1:…, x2:…, y2:…, stop:…)`; painter рисует по
+  крайним стопам вертикально через `FillLinearGradientRect`. `none`/
+  `transparent` и наследование style sheet сохранены. `border-image`/
+  `url()` не поддерживаются: нужен asset pipeline.
+- **Item-view QSS.** `QTreeWidget::item`, `QListWidget::item`,
+  `QTableWidget::item`, `QHeaderView::section` и
+  `QComboBox QAbstractItemView`: фон/цвет/selection для строк, ячеек,
+  заголовков и popup. `QTreeWidget::item` больше не применяется ко всему
+  дереву как обычный виджет.
+- **`Form:center`.** Свойство `centered` центрирует `QMdiSubWindow` в
+  MDI-области (top-level — во viewport), не меняя размер.
+- **`QSplitter`/`QTreeWidget` API.** `sizes` через `setProperty`,
+  `expandAll`/`collapseAll`; `childrenCollapsible` не добавляли.
+- **Review.** `scripts/review.sh` пересобран: `qss/52_checks` 4.88 → 4.07,
+  `qss/55_disabled` 11.44 → 4.41; браузерный скриншот QSS-формы проверен.
+- **Тесты.** `cargo test --workspace` — 199 passed, 1 ignored
+  (app 53+1 ignored, form-xml 13, rqt 133); wasm-check и `cargo fmt
+  --check` зелёные.
+
+### Волна 0.16: combo popup, collapse/expand tree, `QSplitter`, QSS
+
+- **Popup `QComboBox`.** Добавлено transient-состояние `QComboBoxPopup`
+  (`highlight`, `scroll`) в `QWidget`; `QWidgetTree` умеет
+  `open/close_combo_popup`, считать `combo_popup_rect` (под комбобоксом,
+  при нехватке места — над ним), hit-test-ить строки и коммитить выбор.
+  Popup рисуется после дерева/рамок окон отдельным слоем, поэтому не
+  обрезается геометрией комбобокса. Мышь: press открывает список,
+  press по строке подсвечивает, release выбирает и шлёт
+  `CurrentIndexChanged`; клик вне/по комбобоксу закрывает. Клавиатура:
+  Up/Down/Page/Home/End меняют `currentIndex` или highlight, Enter
+  открывает/коммитит, Space открывает, Escape закрывает. Строка popup —
+  24 px, как `QListView::sizeHintForRow` в Fusion для DejaVu Sans 14.
+- **Collapse/expand `QTreeWidget`.** `QTreeItem.expanded` (по умолчанию
+  `false`, как в Qt), flatten показывает только детей раскрытых узлов;
+  `set_row_expanded`/`toggle_row_expanded`/`expand_all`/`collapse_all`,
+  сохранение current по path при перестройке. В paint появились
+  треугольные branch-индикаторы; клик по индикатору переключает узел,
+  Left/Right в приложении сворачивают/раскрывают и ходят к родителю/
+  первому ребёнку.
+- **`QSplitter`.** Новый класс в дереве: ориентация из `.ui`,
+  `handleWidth` (Fusion 4 px), пропорциональное распределение панелей от
+  hint-ов с учётом `minimumSizeHint`, ручка тянется мышью, min панелей
+  соблюдается. Геометрия сверена с Qt6 (`splitter_h`/`splitter_v`,
+  допуск 1 px), минимум формы считается из минимумов панелей
+  (166×92 / 92×166).
+- **QSS-расширения.** Цвета: named, `rgb()`/`rgba()`, 4/8-значные
+  `#ARGB`/`#AARRGGBB` (Qt-порядок), `transparent`/`none`. Селекторы:
+  `[property="value"]`, `:pressed`, `:default`, `:selected`, `:on`,
+  `:open` (popup combo), отрицание `:!state`. Свойства:
+  `font-family`, `font-style`, `font` shorthand, per-side
+  `border-*`/`border-*-width`/`border-*-color`, `border-style`,
+  `text-align`; QSS-шрифт применяется к тексту, per-side рамки
+  рисуются отдельными полосами.
+- **Тесты.** `cargo test --workspace` — 189 passed, 1 ignored
+  (app 50+1 ignored, form-xml 13, rqt 126); `cargo check -p app
+  --target wasm32-unknown-unknown` проходит. Новые тесты: combo
+  popup open/hit/commit/outside/above, paint popup, splitter layout/drag/
+  min + Qt6 golden, tree collapse/current и keyboard Left/Right, QSS
+  цвета/шрифты/стороны/атрибуты/состояния.
+- **Планы.** Закрытый план 0.0–0.16 перенесён в
+  `docs/archive/completed-plans/widgets-plan-0.0-0.16.md`; активный
+  план волны 0.17 (мобильный ввод, QSS v2, `Form:center`, review) —
+  `widgets-plan.md`.
+
+## 2026-11-25
+
+### Минимальный размер формы и клиппинг содержимого
+
+- **Минимум из layout-а.** `QWidgetTree::minimum_size_hint` возвращает
+  `max(minimumSize, layout minimum)`; `createForm` и обновление
+  `minimumSize`/`maximumSize` используют его для ограничений
+  MDI-подокна. Форма больше не сжимается до fallback `80×64`, если
+  нижний ряд кнопок требует больше места.
+- **Клиппинг как в Qt.** `paint_widget` держит clip родителя активным
+  при отрисовке детей, а `QPainter::set_clip_rect` пересекает новый clip
+  с текущим. Дети, вылезающие за форму, больше не рисуются поверх
+  рамки/соседних окон.
+- **Hit-test.** `widget_at_inner` сначала проверяет геометрию родителя:
+  переполненный ребёнок не получает клик вне формы.
+- **Тесты.** `layout_minimum_raises_form_minimum_size`,
+  `overflowing_child_is_clipped_and_not_hit_outside_root` и app-тест
+  `shrinking_form_stops_at_root_layout_minimum` (geometry + hit-test);
+  `cargo test --workspace` — 173 passed, 1 ignored
+  (app 48, form-xml 13, rqt 112).
+
+### `QBoxLayout`: рост виджетов по `qGeomCalc`
+
+- **Рост.** При избытке места `layout_box` теперь, как `qGeomCalc`, даёт
+  всем элементам с `maximumSize > hint` равную долю свободной ширины
+  (а не `hint + доля`), уступая элементам, упёршимся в hint или
+  максимум. Раньше кнопки/combo исключались, и весь избыток уходил в
+  зазоры. Остаток после всех максимумов по-прежнему попадает в зазоры.
+- **Геометрия элемента.** Box-движок применяет
+  `QWidgetItem::setGeometry`: ширина/высота клампятся к максимуму и
+  выравниваются (по вертикали — по центру), как в grid.
+- **Golden.** `box_buttons.ui` — четыре `QPushButton` в `QHBoxLayout`
+  без spacer-а (520×120), одна кнопка с длинной подписью: Qt6 даёт
+  hint 80/176/80/80, а ширину 101/176/102/101, y=47 — то есть делит
+  свободное место поровну, а не `hint + доля`; `qt6_box_buttons.json`/
+  `.png` сняты `tools/qt_reference`.
+- **Тесты.** Geometry- и raster-сравнения с Qt6; `cargo test
+  --workspace` — 170 passed, 1 ignored (app 47, form-xml 13, rqt 110).
+
+## 2026-11-25
+
 ### Paint order 0.15.5: golden PNG для shell и окон
 
 - **Rasterizer батчей.** В app-тестах `rasterize_batches` проигрывает

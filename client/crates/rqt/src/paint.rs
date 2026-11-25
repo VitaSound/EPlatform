@@ -1,19 +1,48 @@
 use crate::core::QVariant;
-use crate::gui::{QColor, QFontMetrics, QPainter, QPalette, QPaletteRole, QPointF, QRectF, QSizeF};
+use crate::gui::{
+    QColor, QFont, QFontMetrics, QPainter, QPalette, QPaletteRole, QPointF, QRectF, QSizeF,
+};
 use crate::item_model::{QSortOrder, QTABLE_HEADER_H, QTABLE_ROW_H};
-use crate::item_view::{QVIEW_HEADER_H, QVIEW_ROW_H};
-use crate::qss::{QStyleDeclarations, QStyleSheet};
+use crate::item_view::{QVIEW_BRANCH_W, QVIEW_HEADER_H, QVIEW_ROW_H};
+use crate::qss::{QBorderSide, QStyleDeclarations, QStyleSheet, QTextAlign};
 use crate::scroll::{QOrientation, QScrollBar, QScrollBarSubControl};
 use crate::style::{QControlElement, QPrimitiveElement, QStyle, QStyleOption, QStyleState};
-use crate::widgets::{QWidget, QWidgetId, QWidgetTree};
+use crate::widgets::{QWidget, QWidgetId, QWidgetTree, QCOMBO_POPUP_ROW_H};
 
+/// Paint a form and its open combo popups. Popups are a top-level layer in
+/// Qt, so they are replayed after the whole widget tree instead of being
+/// clipped by the combo's own geometry.
 pub fn paint_widget_tree(
     tree: &QWidgetTree,
     root: QWidgetId,
     style: &dyn QStyle,
     painter: &mut QPainter,
 ) {
+    paint_widget_tree_content(tree, root, style, painter);
+    paint_combo_popups(tree, style, painter);
+}
+
+/// Paint only the widget tree, without top-level combo popups. The app paints
+/// those after MDI/top-level chrome so they stay above the window frame.
+pub fn paint_widget_tree_content(
+    tree: &QWidgetTree,
+    root: QWidgetId,
+    style: &dyn QStyle,
+    painter: &mut QPainter,
+) {
     paint_widget(tree, root, style, painter);
+}
+
+pub fn paint_combo_popups(tree: &QWidgetTree, _style: &dyn QStyle, painter: &mut QPainter) {
+    for (id, widget) in tree.iter_widgets() {
+        if widget.combo_popup.is_none() {
+            continue;
+        }
+        let Some(rect) = tree.combo_popup_rect(id) else {
+            continue;
+        };
+        paint_combo_popup(tree, id, widget, rect, painter);
+    }
 }
 
 fn paint_widget(
@@ -57,19 +86,92 @@ fn paint_widget(
         QStyleOption::new(widget.geometry, widget.palette.clone(), widget.font.clone());
     option.state = state;
     let qss = resolved_style(tree, widget_id);
+    let item_qss = resolved_style_part(tree, widget_id, "item");
+    let header_qss = resolved_style_part(tree, widget_id, "section");
 
     paint_widget_background(widget, style, &option, painter, &qss);
-    paint_table(widget, painter);
-    paint_item_views(widget, painter);
+    if widget.class_name == "QSplitter" {
+        paint_splitter_handles(tree, widget, painter);
+    }
+    paint_table(widget, painter, &item_qss, &header_qss);
+    paint_item_views(widget, painter, &item_qss, &header_qss);
     paint_control_indicator(widget, painter);
     paint_line_edit_selection(widget, painter, &qss);
     paint_widget_text(widget, painter, &qss);
     paint_line_edit_caret(widget, painter, &qss);
-    painter.restore();
 
+    // Keep the widget's clip active while painting children: Qt clips a
+    // child to every ancestor, so content that overflows a small form does
+    // not paint over the frame or neighbouring windows.
     for child in &widget.children {
         paint_widget(tree, *child, style, painter);
     }
+    painter.restore();
+}
+
+fn qss_font(widget: &QWidget, qss: &QStyleDeclarations) -> QFont {
+    let mut font = widget.font.clone();
+    if let Some(family) = &qss.font_family {
+        font.family = family.clone();
+    }
+    if let Some(size) = qss.font_size {
+        font.pixel_size = size;
+    }
+    if let Some(weight) = qss.font_weight {
+        font.weight = weight;
+    }
+    if let Some(italic) = qss.font_italic {
+        font.italic = italic;
+    }
+    font
+}
+
+fn resolved_style_part(tree: &QWidgetTree, widget_id: QWidgetId, part: &str) -> QStyleDeclarations {
+    let mut sheets: Vec<&QStyleSheet> = Vec::new();
+    let mut current = Some(widget_id);
+    while let Some(id) = current {
+        let Some(widget) = tree.widget(id) else {
+            break;
+        };
+        if let Some(sheet) = &widget.style_sheet {
+            sheets.push(sheet);
+        }
+        current = widget.parent;
+    }
+    sheets.reverse();
+    let Some(widget) = tree.widget(widget_id) else {
+        return QStyleDeclarations::default();
+    };
+    let mut declarations = QStyleDeclarations::default();
+    for sheet in sheets {
+        declarations.merge(&sheet.resolve_part(widget, part));
+    }
+    declarations
+}
+
+fn qss_frame_rect(widget: &QWidget, qss: &QStyleDeclarations) -> QRectF {
+    let (left, top, right, bottom) = qss.margin.unwrap_or((0.0, 0.0, 0.0, 0.0));
+    QRectF::new(
+        widget.geometry.x + left,
+        widget.geometry.y + top,
+        (widget.geometry.width - left - right).max(0.0),
+        (widget.geometry.height - top - bottom).max(0.0),
+    )
+}
+
+fn qss_content_rect(
+    widget: &QWidget,
+    qss: &QStyleDeclarations,
+    fallback: (f32, f32, f32, f32),
+) -> QRectF {
+    let frame = qss_frame_rect(widget, qss);
+    let (left, top, right, bottom) = qss.padding.unwrap_or(fallback);
+    QRectF::new(
+        frame.x + left,
+        frame.y + top,
+        (frame.width - left - right).max(1.0),
+        (frame.height - top - bottom).max(1.0),
+    )
 }
 
 fn resolved_style(tree: &QWidgetTree, widget_id: QWidgetId) -> QStyleDeclarations {
@@ -102,47 +204,64 @@ fn paint_widget_background(
     painter: &mut QPainter,
     qss: &QStyleDeclarations,
 ) {
+    let frame = qss_frame_rect(widget, qss);
+    let mut frame_option = option.clone();
+    frame_option.rect = frame;
     match widget.class_name.as_str() {
         "QDialog" | "QWidget" => {
-            painter.draw_commands(&style.draw_primitive(QPrimitiveElement::Panel, option));
+            painter.draw_commands(&style.draw_primitive(QPrimitiveElement::Panel, &frame_option));
         }
         "QGroupBox" => {
-            let metrics = QFontMetrics::new(&widget.font);
+            let metrics = QFontMetrics::new(&qss_font(widget, qss));
             let top_margin = metrics.height().max(14.0) + 3.0;
-            let mut frame_option = option.clone();
             frame_option.rect = QRectF::new(
-                widget.geometry.x,
-                widget.geometry.y + top_margin,
-                widget.geometry.width,
-                (widget.geometry.height - top_margin).max(0.0),
+                frame.x,
+                frame.y + top_margin,
+                frame.width,
+                (frame.height - top_margin).max(0.0),
             );
             painter.draw_commands(&style.draw_primitive(QPrimitiveElement::Frame, &frame_option));
         }
         "QLabel" => {}
         "QLineEdit" => {
-            painter.draw_commands(&style.draw_control(QControlElement::LineEdit, option));
+            painter.draw_commands(&style.draw_control(QControlElement::LineEdit, &frame_option));
         }
         "QPushButton" | "QToolButton" => {
-            painter.draw_commands(&style.draw_control(QControlElement::PushButton, option));
+            painter.draw_commands(&style.draw_control(QControlElement::PushButton, &frame_option));
         }
         "QCheckBox" => {
-            painter.draw_commands(&style.draw_control(QControlElement::CheckBox, option));
+            painter.draw_commands(&style.draw_control(QControlElement::CheckBox, &frame_option));
         }
         "QRadioButton" => {}
         "QComboBox" => {
-            painter.draw_commands(&style.draw_control(QControlElement::ComboBox, option));
+            painter.draw_commands(&style.draw_control(QControlElement::ComboBox, &frame_option));
         }
         "QTableWidget" | "QListWidget" | "QTreeWidget" => {
-            painter.draw_commands(&style.draw_control(QControlElement::TableView, option));
+            painter.draw_commands(&style.draw_control(QControlElement::TableView, &frame_option));
+        }
+        "QSplitter" => {
+            painter.fill_rect(frame, widget.palette.color(QPaletteRole::Window));
         }
         _ => {}
     }
-    if let Some(background) = qss.background {
+    if let Some(gradient) = &qss.background_gradient {
+        let start = gradient
+            .stops
+            .first()
+            .map(|(_, color)| *color)
+            .unwrap_or_else(|| QColor::rgba8(0, 0, 0, 0));
+        let end = gradient
+            .stops
+            .last()
+            .map(|(_, color)| *color)
+            .unwrap_or(start);
+        painter.fill_linear_gradient_rect(frame, qss.border_radius.unwrap_or(0.0), start, end);
+    } else if let Some(background) = qss.background {
         let radius = qss.border_radius.unwrap_or(0.0);
         if radius > 0.0 {
-            painter.fill_rounded_rect(widget.geometry, radius, background);
+            painter.fill_rounded_rect(frame, radius, background);
         } else {
-            painter.fill_rect(widget.geometry, background);
+            painter.fill_rect(frame, background);
         }
     }
     if let Some(width) = qss.border_width {
@@ -151,10 +270,173 @@ fn paint_widget_background(
                 .border_color
                 .unwrap_or_else(|| widget.palette.color(QPaletteRole::WindowText));
             if let Some(radius) = qss.border_radius {
-                painter.stroke_rounded_rect(widget.geometry, radius, width, color);
+                painter.stroke_rounded_rect(frame, radius, width, color);
             } else {
-                painter.stroke_rect(widget.geometry, width, color);
+                painter.stroke_rect(frame, width, color);
             }
+        }
+    }
+    paint_qss_side_borders(widget, painter, qss);
+}
+
+fn paint_qss_side_borders(widget: &QWidget, painter: &mut QPainter, qss: &QStyleDeclarations) {
+    if !qss.has_side_borders() {
+        return;
+    }
+    let rect = qss_frame_rect(widget, qss);
+    let fallback = qss
+        .border_color
+        .unwrap_or_else(|| widget.palette.color(QPaletteRole::WindowText));
+    let base = qss.border_width.unwrap_or(0.0);
+    for side in [
+        QBorderSide::Top,
+        QBorderSide::Right,
+        QBorderSide::Bottom,
+        QBorderSide::Left,
+    ] {
+        let declared = qss.side_border(side);
+        let width = declared.and_then(|side| side.width).unwrap_or(base);
+        if width <= 0.0 {
+            continue;
+        }
+        let color = declared.and_then(|side| side.color).unwrap_or(fallback);
+        let line = match side {
+            QBorderSide::Top => QRectF::new(rect.x, rect.y, rect.width, width),
+            QBorderSide::Bottom => QRectF::new(rect.x, rect.bottom() - width, rect.width, width),
+            QBorderSide::Left => QRectF::new(rect.x, rect.y, width, rect.height),
+            QBorderSide::Right => QRectF::new(rect.right() - width, rect.y, width, rect.height),
+        };
+        painter.fill_rect(line, color);
+    }
+}
+
+fn paint_combo_popup(
+    tree: &QWidgetTree,
+    widget_id: QWidgetId,
+    widget: &QWidget,
+    rect: QRectF,
+    painter: &mut QPainter,
+) {
+    let Some(popup) = widget.combo_popup.as_ref() else {
+        return;
+    };
+    let items = property_texts(widget, "items");
+    if items.is_empty() {
+        return;
+    }
+    let qss = resolved_style(tree, widget_id);
+    let view_qss = resolved_style_part(tree, widget_id, "view");
+    let item_qss = resolved_style_part(tree, widget_id, "item");
+    let font = qss_font(widget, &qss);
+    let metrics = QFontMetrics::new(&font);
+    let line_height = metrics.height();
+    let palette = &widget.palette;
+    let highlight = palette.color(QPaletteRole::Highlight);
+    let highlighted_text = item_qss
+        .selection_color
+        .or(view_qss.selection_color)
+        .unwrap_or_else(|| palette.color(QPaletteRole::HighlightedText));
+    let text_color = item_qss
+        .color
+        .or(view_qss.color)
+        .unwrap_or_else(|| palette.color(QPaletteRole::Text));
+    let visible = ((rect.height - 2.0) / QCOMBO_POPUP_ROW_H).floor().max(1.0) as usize;
+
+    painter.fill_rect(
+        rect,
+        view_qss
+            .background
+            .unwrap_or_else(|| palette.color(QPaletteRole::Base)),
+    );
+    painter.save();
+    painter.set_clip_rect(Some(QRectF::new(
+        rect.x + 1.0,
+        rect.y + 1.0,
+        (rect.width - 2.0).max(0.0),
+        (rect.height - 2.0).max(0.0),
+    )));
+    for row in popup.scroll..(popup.scroll + visible).min(items.len()) {
+        let y = rect.y + 1.0 + (row - popup.scroll) as f32 * QCOMBO_POPUP_ROW_H;
+        let selected = row == popup.highlight;
+        let row_rect = QRectF::new(
+            rect.x + 1.0,
+            y,
+            (rect.width - 2.0).max(0.0),
+            QCOMBO_POPUP_ROW_H,
+        );
+        if selected {
+            painter.fill_rect(
+                row_rect,
+                item_qss
+                    .selection_background
+                    .or(view_qss.selection_background)
+                    .unwrap_or(highlight),
+            );
+        } else if let Some(background) = item_qss.background {
+            painter.fill_rect(row_rect, background);
+        }
+        painter.set_font(font.clone());
+        painter.draw_text(
+            QRectF::new(
+                rect.x + 5.0,
+                y + ((QCOMBO_POPUP_ROW_H - line_height) / 2.0).max(0.0),
+                (rect.width - 10.0).max(1.0),
+                line_height,
+            ),
+            &items[row],
+            if selected {
+                highlighted_text
+            } else {
+                text_color
+            },
+        );
+    }
+    painter.restore();
+    painter.stroke_rect(rect, 1.0, palette.color(QPaletteRole::Mid));
+}
+
+fn paint_splitter_handles(tree: &QWidgetTree, widget: &QWidget, painter: &mut QPainter) {
+    let Some(splitter) = widget.splitter.as_deref() else {
+        return;
+    };
+    let horizontal = splitter.is_horizontal();
+    let palette = &widget.palette;
+    for pair in widget.children.windows(2) {
+        let (Some(a), Some(b)) = (tree.widget(pair[0]), tree.widget(pair[1])) else {
+            continue;
+        };
+        let rect = if horizontal {
+            let start = a.geometry.right();
+            let width = (b.geometry.x - start).max(0.0);
+            QRectF::new(start, widget.geometry.y, width, widget.geometry.height)
+        } else {
+            let start = a.geometry.bottom();
+            let height = (b.geometry.y - start).max(0.0);
+            QRectF::new(widget.geometry.x, start, widget.geometry.width, height)
+        };
+        if rect.is_empty() {
+            continue;
+        }
+        let base = fusion_button_color(palette);
+        painter.fill_linear_gradient_rect(rect, 0.0, base.lighter(104), base.darker(102));
+        if horizontal {
+            painter.fill_rect(
+                QRectF::new(rect.x, rect.y, 1.0, rect.height),
+                palette.color(QPaletteRole::Window).darker(140),
+            );
+            painter.fill_rect(
+                QRectF::new(rect.right() - 1.0, rect.y, 1.0, rect.height),
+                palette.color(QPaletteRole::Window).lighter(115),
+            );
+        } else {
+            painter.fill_rect(
+                QRectF::new(rect.x, rect.y, rect.width, 1.0),
+                palette.color(QPaletteRole::Window).darker(140),
+            );
+            painter.fill_rect(
+                QRectF::new(rect.x, rect.bottom() - 1.0, rect.width, 1.0),
+                palette.color(QPaletteRole::Window).lighter(115),
+            );
         }
     }
 }
@@ -197,15 +479,20 @@ fn combo_text(widget: &QWidget) -> Option<String> {
     widget_text(widget)
 }
 
-fn paint_item_views(widget: &QWidget, painter: &mut QPainter) {
+fn paint_item_views(
+    widget: &QWidget,
+    painter: &mut QPainter,
+    item_qss: &QStyleDeclarations,
+    header_qss: &QStyleDeclarations,
+) {
     match widget.class_name.as_str() {
-        "QListWidget" => paint_list_widget(widget, painter),
-        "QTreeWidget" => paint_tree_widget(widget, painter),
+        "QListWidget" => paint_list_widget(widget, painter, item_qss),
+        "QTreeWidget" => paint_tree_widget(widget, painter, item_qss, header_qss),
         _ => {}
     }
 }
 
-fn paint_list_widget(widget: &QWidget, painter: &mut QPainter) {
+fn paint_list_widget(widget: &QWidget, painter: &mut QPainter, item_qss: &QStyleDeclarations) {
     let Some(list) = widget.list.as_deref() else {
         return;
     };
@@ -218,18 +505,27 @@ fn paint_list_widget(widget: &QWidget, painter: &mut QPainter) {
 
     let metrics = QFontMetrics::new(&widget.font);
     let line_height = metrics.height();
-    let text_color = palette.color(QPaletteRole::Text);
-    let selected_text = palette.color(QPaletteRole::HighlightedText);
+    let text_color = item_qss
+        .color
+        .unwrap_or_else(|| palette.color(QPaletteRole::Text));
+    let selected_text = item_qss
+        .selection_color
+        .unwrap_or_else(|| palette.color(QPaletteRole::HighlightedText));
     painter.save();
     painter.set_clip_rect(Some(viewport));
     for index in visible_rows(list.scroll, viewport.height, list.items.len()) {
         let y = viewport.y + list.row_y(index);
         let selected = list.selected.contains(&index);
+        let row_rect = QRectF::new(viewport.x, y, viewport.width, QVIEW_ROW_H);
         if selected {
             painter.fill_rect(
-                QRectF::new(viewport.x, y, viewport.width, QVIEW_ROW_H),
-                palette.color(QPaletteRole::Highlight),
+                row_rect,
+                item_qss
+                    .selection_background
+                    .unwrap_or_else(|| palette.color(QPaletteRole::Highlight)),
             );
+        } else if let Some(background) = item_qss.background {
+            painter.fill_rect(row_rect, background);
         }
         painter.draw_text(
             QRectF::new(
@@ -408,7 +704,12 @@ fn paint_header_section(widget: &QWidget, painter: &mut QPainter, rect: QRectF) 
     }
 }
 
-fn paint_tree_widget(widget: &QWidget, painter: &mut QPainter) {
+fn paint_tree_widget(
+    widget: &QWidget,
+    painter: &mut QPainter,
+    item_qss: &QStyleDeclarations,
+    header_qss: &QStyleDeclarations,
+) {
     let Some(tree) = widget.tree.as_deref() else {
         return;
     };
@@ -432,10 +733,15 @@ fn paint_tree_widget(widget: &QWidget, painter: &mut QPainter) {
     painter.fill_rect(rect, palette.color(QPaletteRole::Base));
     let metrics = QFontMetrics::new(&widget.font);
     let line_height = metrics.height();
-    let header_color = palette.color(QPaletteRole::ButtonText);
+    let header_color = header_qss
+        .color
+        .unwrap_or_else(|| palette.color(QPaletteRole::ButtonText));
     painter.save();
     painter.set_clip_rect(Some(viewport));
     paint_header_section(widget, painter, header);
+    if let Some(background) = header_qss.background {
+        painter.fill_rect(header, background);
+    }
     let headers = if tree.headers.is_empty() {
         vec!["1".to_string()]
     } else {
@@ -453,23 +759,68 @@ fn paint_tree_widget(widget: &QWidget, painter: &mut QPainter) {
     );
     painter.restore();
 
-    let text_color = palette.color(QPaletteRole::Text);
-    let selected_text = palette.color(QPaletteRole::HighlightedText);
+    let text_color = item_qss
+        .color
+        .unwrap_or_else(|| palette.color(QPaletteRole::Text));
+    let selected_text = item_qss
+        .selection_color
+        .unwrap_or_else(|| palette.color(QPaletteRole::HighlightedText));
     painter.save();
     painter.set_clip_rect(Some(body));
     for index in visible_rows(tree.scroll, body.height, tree.rows.len()) {
         let row = &tree.rows[index];
         let y = body.y + tree.row_y(index);
         let selected = tree.selected.contains(&index);
+        let row_rect = QRectF::new(body.x, y, body.width, QVIEW_ROW_H);
         if selected {
             painter.fill_rect(
-                QRectF::new(body.x, y, body.width, QVIEW_ROW_H),
-                palette.color(QPaletteRole::Highlight),
+                row_rect,
+                item_qss
+                    .selection_background
+                    .unwrap_or_else(|| palette.color(QPaletteRole::Highlight)),
             );
+        } else if let Some(background) = item_qss.background {
+            painter.fill_rect(row_rect, background);
+        }
+        let text_x = body.x + 4.0 + row.indent() + QVIEW_BRANCH_W - tree.horizontal;
+        if row.has_children {
+            let expanded = tree
+                .items
+                .get(row.path[0])
+                .and_then(|_| {
+                    // Walk the path to read the item's expanded flag.
+                    let mut items = &tree.items;
+                    let mut item = None;
+                    for index in &row.path {
+                        item = items.get(*index);
+                        items = &item?.children;
+                    }
+                    item
+                })
+                .is_some_and(|item| item.expanded);
+            let center_x = body.x + 2.0 + row.indent() + 4.0 - tree.horizontal;
+            let center_y = y + QVIEW_ROW_H / 2.0;
+            let half = 3.0;
+            let color = text_color.with_alpha(0.75);
+            if expanded {
+                painter.fill_triangle(
+                    QPointF::new(center_x - half, center_y - half / 2.0),
+                    QPointF::new(center_x + half, center_y - half / 2.0),
+                    QPointF::new(center_x, center_y + half / 2.0 + 1.0),
+                    color,
+                );
+            } else {
+                painter.fill_triangle(
+                    QPointF::new(center_x - half / 2.0, center_y - half),
+                    QPointF::new(center_x - half / 2.0, center_y + half),
+                    QPointF::new(center_x + half / 2.0 + 1.0, center_y),
+                    color,
+                );
+            }
         }
         painter.draw_text(
             QRectF::new(
-                body.x + 4.0 + row.indent() - tree.horizontal,
+                text_x,
                 y + ((QVIEW_ROW_H - line_height) / 2.0).max(0.0),
                 (tree.content_width + 8.0).max(1.0),
                 line_height,
@@ -569,7 +920,12 @@ fn paint_control_indicator(widget: &QWidget, painter: &mut QPainter) {
     painter.draw_line(second, third, pen_width, color);
 }
 
-fn paint_table(widget: &QWidget, painter: &mut QPainter) {
+fn paint_table(
+    widget: &QWidget,
+    painter: &mut QPainter,
+    item_qss: &QStyleDeclarations,
+    header_qss: &QStyleDeclarations,
+) {
     if widget.class_name != "QTableWidget" {
         return;
     }
@@ -604,11 +960,11 @@ fn paint_table(widget: &QWidget, painter: &mut QPainter) {
         (right - left).max(0.0),
         header_h,
     )));
-    paint_header_section(
-        widget,
-        painter,
-        QRectF::new(left, top, row_header_w, header_h),
-    );
+    let row_header_rect = QRectF::new(left, top, row_header_w, header_h);
+    paint_header_section(widget, painter, row_header_rect);
+    if let Some(background) = header_qss.background {
+        painter.fill_rect(row_header_rect, background);
+    }
     let mut header_x = body_x;
     for column in 0..table.model.column_count() {
         if table.model.is_column_hidden(column) {
@@ -616,7 +972,11 @@ fn paint_table(widget: &QWidget, painter: &mut QPainter) {
         }
         let width = table.model.column_width(column);
         let x = column_left(column);
-        paint_header_section(widget, painter, QRectF::new(x, top, width, header_h));
+        let section = QRectF::new(x, top, width, header_h);
+        paint_header_section(widget, painter, section);
+        if let Some(background) = header_qss.background {
+            painter.fill_rect(section, background);
+        }
         header_x = x + width;
     }
     if header_x < right {
@@ -644,11 +1004,11 @@ fn paint_table(widget: &QWidget, painter: &mut QPainter) {
             let row_top = y.max(body_top);
             let row_bottom = (y + QTABLE_ROW_H).min(bottom);
             if row_bottom > row_top {
-                paint_header_gradient(
-                    widget,
-                    painter,
-                    QRectF::new(left, row_top, row_header_w, row_bottom - row_top),
-                );
+                let section = QRectF::new(left, row_top, row_header_w, row_bottom - row_top);
+                paint_header_gradient(widget, painter, section);
+                if let Some(background) = header_qss.background {
+                    painter.fill_rect(section, background);
+                }
             }
         }
         painter.restore();
@@ -662,6 +1022,29 @@ fn paint_table(widget: &QWidget, painter: &mut QPainter) {
         (right - body_x).max(0.0),
         (bottom - body_top).max(0.0),
     )));
+    if let Some(background) = item_qss.background {
+        for row in rows.clone() {
+            let top_y = (viewport.y + table.row_y(row)).max(body_top);
+            let bottom_y = (viewport.y + table.row_y(row) + QTABLE_ROW_H).min(content_bottom);
+            if bottom_y <= top_y {
+                continue;
+            }
+            for column in 0..table.model.column_count() {
+                if table.model.is_column_hidden(column) {
+                    continue;
+                }
+                painter.fill_rect(
+                    QRectF::new(
+                        column_left(column),
+                        top_y,
+                        table.model.column_width(column),
+                        bottom_y - top_y,
+                    ),
+                    background,
+                );
+            }
+        }
+    }
     for (row, column) in table.selection.selected_cells() {
         if row < rows.start
             || row >= rows.end
@@ -811,7 +1194,9 @@ fn paint_table(widget: &QWidget, painter: &mut QPainter) {
     };
     painter.fill_rect(QRectF::new(last_x, top, 1.0, header_h), header_grid);
 
-    let header_color = palette.color(QPaletteRole::ButtonText);
+    let header_color = header_qss
+        .color
+        .unwrap_or_else(|| palette.color(QPaletteRole::ButtonText));
     for column in 0..table.model.column_count() {
         if table.model.is_column_hidden(column) {
             continue;
@@ -856,8 +1241,12 @@ fn paint_table(widget: &QWidget, painter: &mut QPainter) {
     }
     painter.restore();
 
-    let text_color = palette.color(QPaletteRole::Text);
-    let selected_text = palette.color(QPaletteRole::HighlightedText);
+    let text_color = item_qss
+        .color
+        .unwrap_or_else(|| palette.color(QPaletteRole::Text));
+    let selected_text = item_qss
+        .selection_color
+        .unwrap_or_else(|| palette.color(QPaletteRole::HighlightedText));
     painter.save();
     painter.set_clip_rect(Some(QRectF::new(
         left,
@@ -964,14 +1353,15 @@ fn paint_line_edit_selection(widget: &QWidget, painter: &mut QPainter, qss: &QSt
     if start >= end {
         return;
     }
-    let metrics = QFontMetrics::new(&widget.font);
+    let font = qss_font(widget, qss);
+    let metrics = QFontMetrics::new(&font);
     let prefix: String = text.chars().take(start).collect();
     let selected: String = text.chars().take(end).skip(start).collect();
-    let padding = qss.padding.map(|padding| padding.0).unwrap_or(4.0);
-    let x = widget.geometry.x + padding + metrics.horizontal_advance(&prefix);
+    let content = qss_content_rect(widget, qss, (4.0, 2.0, 4.0, 2.0));
+    let x = content.x + metrics.horizontal_advance(&prefix);
     let width = metrics.horizontal_advance(&selected);
-    let y = widget.geometry.y + 2.0;
-    let height = (widget.geometry.height - 4.0).max(0.0);
+    let y = content.y;
+    let height = content.height;
     if width > 0.0 && height > 0.0 {
         painter.fill_rect(
             QRectF::new(x, y, width, height),
@@ -991,13 +1381,13 @@ fn paint_line_edit_caret(widget: &QWidget, painter: &mut QPainter, qss: &QStyleD
     }
     let text = widget_text(widget).unwrap_or_default();
     let prefix: String = text.chars().take(widget.cursor_position).collect();
-    let metrics = QFontMetrics::new(&widget.font);
-    let padding = qss.padding.map(|padding| padding.0).unwrap_or(4.0);
+    let font = qss_font(widget, qss);
+    let metrics = QFontMetrics::new(&font);
+    let content = qss_content_rect(widget, qss, (4.0, 2.0, 4.0, 2.0));
     let gap = if widget.cursor_position > 0 { 1.0 } else { 0.0 };
-    let caret_x = (widget.geometry.x + padding + metrics.horizontal_advance(&prefix) + gap)
-        .min(widget.geometry.right() - 2.0);
-    let caret_y = widget.geometry.y + 3.0;
-    let caret_h = (widget.geometry.height - 6.0).max(0.0);
+    let caret_x = (content.x + metrics.horizontal_advance(&prefix) + gap).min(content.right());
+    let caret_y = content.y + 1.0;
+    let caret_h = (content.height - 2.0).max(0.0);
     if caret_h > 0.0 {
         painter.fill_rect(
             QRectF::new(caret_x, caret_y, 1.0, caret_h),
@@ -1013,12 +1403,14 @@ fn paint_line_edit_text(widget: &QWidget, painter: &mut QPainter, qss: &QStyleDe
     if text.is_empty() {
         return;
     }
-    let metrics = QFontMetrics::new(&widget.font);
+    let font = qss_font(widget, qss);
+    let metrics = QFontMetrics::new(&font);
     let line_height = metrics.height();
-    let y = widget.geometry.y + ((widget.geometry.height - line_height) / 2.0).max(0.0);
-    let padding = qss.padding.map(|padding| padding.0).unwrap_or(4.0);
-    let base_x = widget.geometry.x + padding;
+    let content = qss_content_rect(widget, qss, (4.0, 2.0, 4.0, 2.0));
+    let y = content.y + ((content.height - line_height) / 2.0).max(0.0);
+    let base_x = content.x;
     let color = text_color(widget, qss);
+    painter.set_font(font);
     let (start, end) = match widget.selection_anchor {
         Some(anchor) => {
             let length = text.chars().count();
@@ -1030,12 +1422,7 @@ fn paint_line_edit_text(widget: &QWidget, painter: &mut QPainter, qss: &QStyleDe
     };
     if start >= end {
         painter.draw_text(
-            QRectF::new(
-                base_x,
-                y,
-                (widget.geometry.width - 8.0).max(1.0),
-                line_height,
-            ),
+            QRectF::new(base_x, y, content.width, line_height),
             text,
             color,
         );
@@ -1071,7 +1458,7 @@ fn paint_line_edit_text(widget: &QWidget, painter: &mut QPainter, qss: &QStyleDe
             QRectF::new(
                 base_x + prefix_width + selected_width,
                 y,
-                (widget.geometry.width - 8.0 - prefix_width - selected_width).max(1.0),
+                (content.width - prefix_width - selected_width).max(1.0),
                 line_height,
             ),
             suffix,
@@ -1088,13 +1475,18 @@ fn paint_widget_text(widget: &QWidget, painter: &mut QPainter, qss: &QStyleDecla
     if widget.class_name == "QGroupBox" {
         if let Some(title) = widget_text(widget) {
             if !title.is_empty() {
-                let metrics = QFontMetrics::new(&widget.font);
+                let font = qss_font(widget, qss);
+                let metrics = QFontMetrics::new(&font);
                 let line_height = metrics.height();
+                painter.set_font(font);
+                let frame = qss_frame_rect(widget, qss);
+                let pad_left = qss.padding.map(|padding| padding.0).unwrap_or(8.0);
+                let pad_right = qss.padding.map(|padding| padding.2).unwrap_or(8.0);
                 painter.draw_text(
                     QRectF::new(
-                        widget.geometry.x + 8.0,
-                        widget.geometry.y + 2.0,
-                        (widget.geometry.width - 16.0).max(1.0),
+                        frame.x + pad_left,
+                        frame.y + 2.0,
+                        (frame.width - pad_left - pad_right).max(1.0),
                         line_height,
                     ),
                     title,
@@ -1109,14 +1501,17 @@ fn paint_widget_text(widget: &QWidget, painter: &mut QPainter, qss: &QStyleDecla
         return;
     }
     if widget.class_name == "QComboBox" {
-        let metrics = QFontMetrics::new(&widget.font);
+        let font = qss_font(widget, qss);
+        let metrics = QFontMetrics::new(&font);
         let line_height = metrics.height();
+        painter.set_font(font);
         if let Some(text) = combo_text(widget) {
+            let content = qss_content_rect(widget, qss, (3.0, 0.0, 26.0, 0.0));
             painter.draw_text(
                 QRectF::new(
-                    widget.geometry.x + 3.0,
-                    widget.geometry.y + ((widget.geometry.height - line_height) / 2.0).max(0.0),
-                    (widget.geometry.width - 26.0).max(1.0),
+                    content.x,
+                    content.y + ((content.height - line_height) / 2.0).max(0.0),
+                    content.width.max(1.0),
                     line_height,
                 ),
                 text,
@@ -1153,28 +1548,35 @@ fn paint_widget_text(widget: &QWidget, painter: &mut QPainter, qss: &QStyleDecla
     if widget.class_name == "QTableWidget" {
         return;
     }
-    let metrics = QFontMetrics::new(&widget.font);
+    let font = qss_font(widget, qss);
+    let metrics = QFontMetrics::new(&font);
     let text_width = metrics.horizontal_advance(&text);
     let line_height = metrics.height();
+    painter.set_font(font);
+    let content = qss_content_rect(widget, qss, (0.0, 0.0, 0.0, 0.0));
     let mut rect = QRectF::new(
-        widget.geometry.x,
-        widget.geometry.y + ((widget.geometry.height - line_height) / 2.0).max(0.0),
+        content.x,
+        content.y + ((content.height - line_height) / 2.0).max(0.0),
         text_width,
         line_height,
     );
     match widget.class_name.as_str() {
         "QPushButton" | "QToolButton" => {
-            rect.x += ((widget.geometry.width - text_width) / 2.0).max(0.0);
+            rect.x += ((content.width - text_width) / 2.0).max(0.0);
         }
-        "QLineEdit" => {
-            rect.x += 4.0;
-        }
+        "QLineEdit" => {}
         "QCheckBox" | "QRadioButton" => {
             rect.x += widget.font.pixel_size + 6.0;
         }
-        "QLabel" => {}
+        "QLabel" => match qss.text_align {
+            Some(QTextAlign::Center) => rect.x += ((content.width - text_width) / 2.0).max(0.0),
+            Some(QTextAlign::Right) => rect.x += (content.width - text_width).max(0.0),
+            _ => {}
+        },
         _ => {
-            rect.x += qss.padding.map(|padding| padding.0).unwrap_or(4.0);
+            if qss.padding.is_none() {
+                rect.x += 4.0;
+            }
         }
     }
     let color = text_color(widget, qss);
@@ -1183,16 +1585,20 @@ fn paint_widget_text(widget: &QWidget, painter: &mut QPainter, qss: &QStyleDecla
 
 fn paint_button_label(widget: &QWidget, painter: &mut QPainter, qss: &QStyleDeclarations) {
     let text = widget_text(widget).unwrap_or_default();
-    let metrics = QFontMetrics::new(&widget.font);
+    let font = qss_font(widget, qss);
+    let metrics = QFontMetrics::new(&font);
     let line_height = metrics.height();
+    painter.set_font(font);
     let down = widget.pressed || property_bool(widget, "checked");
     let shift = if down { 1.0 } else { 0.0 };
     let color = text_color(widget, qss);
+    let frame = qss_frame_rect(widget, qss);
+    let (pad_left, pad_top, pad_right, pad_bottom) = qss.padding.unwrap_or((0.0, 0.0, 0.0, 0.0));
     let contents = QRectF::new(
-        widget.geometry.x + 1.0,
-        widget.geometry.y + 1.0,
-        (widget.geometry.width - 2.0).max(1.0),
-        (widget.geometry.height - 2.0).max(1.0),
+        frame.x + pad_left + 1.0,
+        frame.y + pad_top + 1.0,
+        (frame.width - pad_left - pad_right - 2.0).max(1.0),
+        (frame.height - pad_top - pad_bottom - 2.0).max(1.0),
     );
     let icon = if widget.enabled {
         widget.icon.as_ref()
@@ -1253,11 +1659,10 @@ fn paint_button_label(widget: &QWidget, painter: &mut QPainter, qss: &QStyleDecl
         return;
     }
     let text_width = metrics.horizontal_advance(&text);
-    let text_y =
-        widget.geometry.y + ((widget.geometry.height - line_height) / 2.0).max(0.0) + shift;
+    let text_y = contents.y + ((contents.height - line_height) / 2.0).max(0.0) + shift;
     painter.draw_text(
         QRectF::new(
-            widget.geometry.x + ((widget.geometry.width - text_width) / 2.0).max(0.0) + shift,
+            contents.x + ((contents.width - text_width) / 2.0).max(0.0) + shift,
             text_y,
             text_width.max(1.0),
             line_height,
@@ -1360,6 +1765,78 @@ mod tests {
     }
 
     #[test]
+    fn qss_margin_padding_and_gradient_affect_the_painted_rects() {
+        let ui = r#"<ui version="4.0"><class>Dialog</class>
+ <widget class="QDialog" name="Dialog">
+  <property name="geometry"><rect><x>0</x><y>0</y><width>220</width><height>100</height></rect></property>
+  <widget class="QPushButton" name="button">
+   <property name="geometry"><rect><x>0</x><y>0</y><width>100</width><height>40</height></rect></property>
+   <property name="text"><string>OK</string></property>
+   <property name="styleSheet"><string>QPushButton { margin: 5px; background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #ffffff, stop:1 #204020); border: 1px solid #000000; }</string></property>
+  </widget>
+  <widget class="QLineEdit" name="edit">
+   <property name="geometry"><rect><x>0</x><y>50</y><width>100</width><height>30</height></rect></property>
+   <property name="text"><string>abc</string></property>
+   <property name="styleSheet"><string>QLineEdit { margin: 5px; padding-left: 8px; }</string></property>
+  </widget>
+ </widget></ui>"#;
+        let (tree, root) = load_ui(ui).expect("loads ui");
+        let style = QFusionStyle::default();
+        let mut painter = QPainter::new();
+        paint_widget_tree(&tree, root, &style, &mut painter);
+
+        let gradient = painter.commands().iter().find_map(|command| match command {
+            QPaintCommand::FillLinearGradientRect { rect, .. } => Some(*rect),
+            _ => None,
+        });
+        assert_eq!(gradient, Some(QRectF::new(5.0, 5.0, 90.0, 30.0)));
+
+        let edit_text = painter.commands().iter().find_map(|command| match command {
+            QPaintCommand::DrawText { rect, text, .. } if text == "abc" => Some(*rect),
+            _ => None,
+        });
+        let edit_text = edit_text.expect("line edit text");
+        assert_eq!(edit_text.x, 13.0);
+    }
+
+    #[test]
+    fn qss_item_selector_paints_tree_rows() {
+        let ui = r#"<ui version="4.0"><class>Dialog</class>
+ <widget class="QDialog" name="Dialog">
+  <property name="geometry"><rect><x>0</x><y>0</y><width>240</width><height>120</height></rect></property>
+  <widget class="QTreeWidget" name="tree">
+   <property name="geometry"><rect><x>0</x><y>0</y><width>240</width><height>120</height></rect></property>
+   <property name="styleSheet"><string>QTreeWidget::item { background: #ff0000; color: #00ff00; }</string></property>
+   <column><property name="text"><string>Name</string></property></column>
+  </widget>
+ </widget></ui>"#;
+        let (mut tree, root) = load_ui(ui).expect("loads ui");
+        let list = tree.find_widget("tree").expect("tree");
+        tree.set_property(
+            list,
+            "data",
+            crate::core::QVariant::List(vec![crate::core::QVariant::Map(vec![(
+                "text".into(),
+                crate::core::QVariant::String("Root".into()),
+            )])]),
+        );
+        tree.layout(root, tree.widget(root).unwrap().geometry);
+        let style = QFusionStyle::default();
+        let mut painter = QPainter::new();
+        paint_widget_tree(&tree, root, &style, &mut painter);
+
+        assert!(painter.commands().iter().any(|command| matches!(
+            command,
+            QPaintCommand::FillRect { color, .. } if *color == QColor::rgb(255, 0, 0)
+        )));
+        assert!(painter.commands().iter().any(|command| matches!(
+            command,
+            QPaintCommand::DrawText { text, color, .. }
+                if text == "Root" && *color == QColor::rgb(0, 255, 0)
+        )));
+    }
+
+    #[test]
     fn paints_table_headers_and_cells() {
         let (mut tree, root) = load_ui(TABLE_UI).expect("loads ui");
         let table = tree.find_widget("tableWidget").expect("table");
@@ -1404,6 +1881,56 @@ mod tests {
         assert!(texts.contains(&"Col 2"));
         assert!(texts.contains(&"A"));
         assert!(texts.contains(&"D"));
+    }
+
+    #[test]
+    fn paints_open_combo_popup_items_after_the_form() {
+        let mut tree = crate::widgets::QWidgetTree::new();
+        let root = tree.create_widget("QDialog", "Dialog");
+        tree.set_geometry(root, QRectF::new(0.0, 0.0, 320.0, 220.0));
+        let combo = tree.create_widget("QComboBox", "combo");
+        tree.add_child(root, combo);
+        tree.set_geometry(combo, QRectF::new(10.0, 10.0, 140.0, 25.0));
+        tree.set_property(
+            combo,
+            "items",
+            QVariant::List(vec![
+                QVariant::String("Alpha".into()),
+                QVariant::String("Beta".into()),
+                QVariant::String("Gamma".into()),
+            ]),
+        );
+        tree.open_combo_popup(combo);
+        let style = QFusionStyle::default();
+        let mut painter = QPainter::new();
+        paint_widget_tree(&tree, root, &style, &mut painter);
+        let texts: Vec<&str> = painter
+            .commands()
+            .iter()
+            .filter_map(|command| match command {
+                QPaintCommand::DrawText { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        for item in ["Alpha", "Beta", "Gamma"] {
+            assert!(
+                texts.contains(&item),
+                "popup item {item} missing: {texts:?}"
+            );
+        }
+        let rect = tree.combo_popup_rect(combo).expect("popup rect");
+        // The popup is painted after the tree, so the last row's text is not
+        // clipped by the 25 px combo rectangle.
+        let last = painter
+            .commands()
+            .iter()
+            .rev()
+            .find_map(|command| match command {
+                QPaintCommand::DrawText { rect, text, .. } if text == "Gamma" => Some(*rect),
+                _ => None,
+            })
+            .expect("Gamma text");
+        assert!(last.y >= rect.y);
     }
 
     #[test]

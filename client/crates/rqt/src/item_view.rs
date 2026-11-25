@@ -9,6 +9,7 @@ use crate::scroll::{
 pub const QVIEW_ROW_H: f32 = 30.0;
 pub const QVIEW_HEADER_H: f32 = 21.0;
 pub const QVIEW_INDENT: f32 = 14.0;
+pub const QVIEW_BRANCH_W: f32 = 10.0;
 
 fn variant_text(value: &QVariant) -> Option<String> {
     match value {
@@ -199,11 +200,25 @@ impl QListWidget {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct QTreeItem {
     pub text: String,
     pub columns: Vec<String>,
     pub children: Vec<QTreeItem>,
+    /// `QTreeWidgetItem::isExpanded()`. Qt keeps items collapsed when they
+    /// are inserted; children become visible only after `setExpanded(true)`.
+    pub expanded: bool,
+}
+
+impl Default for QTreeItem {
+    fn default() -> Self {
+        Self {
+            text: String::new(),
+            columns: Vec::new(),
+            children: Vec::new(),
+            expanded: false,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -392,10 +407,127 @@ impl QTreeWidget {
     }
 
     pub fn rebuild_rows(&mut self) {
+        let current_path = self
+            .current
+            .and_then(|row| self.rows.get(row))
+            .map(|row| row.path.clone());
+        let selected_paths: Vec<Vec<usize>> = self
+            .selected
+            .iter()
+            .filter_map(|row| self.rows.get(*row))
+            .map(|row| row.path.clone())
+            .collect();
         self.rows.clear();
         for (index, item) in self.items.iter().enumerate() {
             push_tree_row(item, &mut vec![index], 0, &mut self.rows);
         }
+        self.current = current_path
+            .as_ref()
+            .and_then(|path| self.rows.iter().position(|row| &row.path == path))
+            .or_else(|| {
+                // The current item may now live under a collapsed parent.
+                // Qt keeps the item current but hidden; for keyboard and
+                // hit-test purposes fall back to the nearest visible row.
+                current_path
+                    .as_ref()
+                    .and_then(|path| self.rows.iter().position(|row| path.starts_with(&row.path)))
+            });
+        self.selected = selected_paths
+            .iter()
+            .filter_map(|path| self.rows.iter().position(|row| row.path == *path))
+            .collect();
+    }
+
+    /// Expand or collapse the item at a flattened row. Returns `false`
+    /// when the row has no children or does not exist.
+    pub fn set_row_expanded(&mut self, row: usize, expanded: bool) -> bool {
+        let Some(path) = self.rows.get(row).map(|row| row.path.clone()) else {
+            return false;
+        };
+        let Some(item) = tree_item_mut(&mut self.items, &path) else {
+            return false;
+        };
+        if item.children.is_empty() || item.expanded == expanded {
+            return false;
+        }
+        item.expanded = expanded;
+        self.rebuild_rows();
+        true
+    }
+
+    pub fn toggle_row_expanded(&mut self, row: usize) -> bool {
+        let Some(path) = self.rows.get(row).map(|row| row.path.clone()) else {
+            return false;
+        };
+        let Some(item) = tree_item_mut(&mut self.items, &path) else {
+            return false;
+        };
+        if item.children.is_empty() {
+            return false;
+        }
+        let expanded = !item.expanded;
+        self.set_row_expanded(row, expanded)
+    }
+
+    pub fn expand_all(&mut self) {
+        set_all_expanded(&mut self.items, true);
+        self.rebuild_rows();
+    }
+
+    pub fn collapse_all(&mut self) {
+        set_all_expanded(&mut self.items, false);
+        self.rebuild_rows();
+    }
+
+    /// Move current to the parent row, as QTreeView does on Left.
+    pub fn current_to_parent(&mut self) -> bool {
+        let Some(row) = self.current else {
+            return false;
+        };
+        let path = self.rows[row].path.clone();
+        if path.len() < 2 {
+            return false;
+        }
+        let parent = &path[..path.len() - 1];
+        if let Some(index) = self.rows.iter().position(|row| row.path == parent) {
+            self.set_current(Some(index));
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Move current to the first child, as QTreeView does on Right after
+    /// expanding.
+    pub fn current_to_first_child(&mut self) -> bool {
+        let Some(row) = self.current else {
+            return false;
+        };
+        let path = self.rows[row].path.clone();
+        let child_path = {
+            let mut path = path;
+            path.push(0);
+            path
+        };
+        if let Some(index) = self.rows.iter().position(|row| row.path == child_path) {
+            self.set_current(Some(index));
+            true
+        } else {
+            false
+        }
+    }
+
+    /// `QTreeWidgetItem::isExpanded()` for the flattened current row.
+    pub fn current_expanded(&self) -> Option<bool> {
+        let row = self.current?;
+        let path = &self.rows.get(row)?.path;
+        tree_item(&self.items, path).map(|item| item.expanded)
+    }
+
+    pub fn current_has_children(&self) -> bool {
+        self.current
+            .and_then(|row| self.rows.get(row))
+            .is_some_and(|row| row.has_children)
     }
 
     fn update_content_width(&mut self, font: &QFont) {
@@ -408,7 +540,9 @@ impl QTreeWidget {
         let rows_width = self
             .rows
             .iter()
-            .map(|row| row.indent() + metrics.horizontal_advance(&row.display) + 8.0)
+            .map(|row| {
+                row.indent() + QVIEW_BRANCH_W + metrics.horizontal_advance(&row.display) + 8.0
+            })
             .fold(0.0_f32, f32::max);
         self.content_width = headers_width.max(rows_width);
     }
@@ -427,10 +561,12 @@ fn parse_tree_item(value: &QVariant) -> Option<QTreeItem> {
             _ => Vec::new(),
         })
         .unwrap_or_default();
+    let expanded = matches!(map_get(value, "expanded"), Some(QVariant::Bool(true)));
     Some(QTreeItem {
         text,
         columns,
         children,
+        expanded,
     })
 }
 
@@ -452,10 +588,40 @@ fn push_tree_row(item: &QTreeItem, path: &mut Vec<usize>, depth: usize, out: &mu
         display,
         has_children: !item.children.is_empty(),
     });
+    if !item.expanded {
+        return;
+    }
     for (index, child) in item.children.iter().enumerate() {
         path.push(index);
         push_tree_row(child, path, depth + 1, out);
         path.pop();
+    }
+}
+
+fn tree_item<'a>(items: &'a [QTreeItem], path: &[usize]) -> Option<&'a QTreeItem> {
+    let (first, rest) = path.split_first()?;
+    let item = items.get(*first)?;
+    if rest.is_empty() {
+        Some(item)
+    } else {
+        tree_item(&item.children, rest)
+    }
+}
+
+fn tree_item_mut<'a>(items: &'a mut [QTreeItem], path: &[usize]) -> Option<&'a mut QTreeItem> {
+    let (first, rest) = path.split_first()?;
+    let item = items.get_mut(*first)?;
+    if rest.is_empty() {
+        Some(item)
+    } else {
+        tree_item_mut(&mut item.children, rest)
+    }
+}
+
+fn set_all_expanded(items: &mut [QTreeItem], expanded: bool) {
+    for item in items {
+        item.expanded = expanded;
+        set_all_expanded(&mut item.children, expanded);
     }
 }
 
@@ -556,6 +722,12 @@ mod tests {
         let mut tree = QTreeWidget::new();
         tree.set_headers(vec!["Column 1".into(), "Column 2".into()], &font);
         tree.set_data(&tree_data(), &font);
+        // Qt inserts items collapsed; expanding a parent reveals its children.
+        assert_eq!(tree.row_count(), 2);
+        assert_eq!(tree.rows[0].text, "Root 1");
+        assert_eq!(tree.rows[1].text, "Root 2");
+        assert!(tree.toggle_row_expanded(0));
+        assert!(tree.toggle_row_expanded(3));
         assert_eq!(tree.row_count(), 5);
         assert_eq!(tree.rows[0].text, "Root 1");
         assert_eq!(tree.rows[0].depth, 0);
@@ -575,6 +747,7 @@ mod tests {
         let font = QFont::default();
         let mut tree = QTreeWidget::new();
         tree.set_data(&tree_data(), &font);
+        tree.expand_all();
         tree.set_current_index(4);
         assert_eq!(tree.current_text(), QVariant::String("Child 2.1".into()));
         tree.sync_bars(QSizeF::new(100.0, 60.0));
@@ -583,6 +756,25 @@ mod tests {
         tree.set_data(&QVariant::List(Vec::new()), &font);
         assert_eq!(tree.current, None);
         assert!(tree.selected.is_empty());
+    }
+
+    #[test]
+    fn tree_collapse_keeps_current_on_the_visible_parent() {
+        let font = QFont::default();
+        let mut tree = QTreeWidget::new();
+        tree.set_data(&tree_data(), &font);
+        tree.expand_all();
+        tree.set_current_index(2);
+        assert_eq!(tree.current_text(), QVariant::String("Child 1.2".into()));
+        assert!(tree.current_has_children() == false);
+        // Collapse "Root 1" from its child row: the current item becomes the
+        // nearest visible ancestor instead of an invalid row index.
+        assert!(tree.set_row_expanded(0, false));
+        // Root 2 is still expanded, so only Root 1's children disappear.
+        assert_eq!(tree.row_count(), 3);
+        assert_eq!(tree.current_text(), QVariant::String("Root 1".into()));
+        assert_eq!(tree.current, Some(0));
+        assert!(!tree.current_expanded().unwrap());
     }
 
     #[test]

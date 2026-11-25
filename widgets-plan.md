@@ -1,573 +1,306 @@
-# EPlatform — план волны 0: события и layout-ы (rqt)
+# EPlatform — план волны 0.17: мобильный ввод и QSS v2
 
-Обновлено: 2026-11-25 (актуализация по коду и прогонам тестов).
-Статус: события волны 0 закрыты; **0.12 (`QGridLayout`) закрыт**
-(0.12.1–0.12.5); **0.13 (`QFormLayout`) закрыт** (0.13.1–0.13.3).
-Отдельный этап **0.14 (Application shell / главное окно)** закрыт:
-0.14.1–0.14.9 (включая `QMainWindow.ui` и Qt6 golden shell).
-Этап **0.15 PaintBatch / display list** закрыт (включая golden-diff):
-painter order сохранён на
-всех слоях, маскировка текста под popup удалена.
-Следующий шаг — рост в `QBoxLayout` (см. известный дефект 0.12);
-0.13 больше не блокирует layout-фронт.
-Источники: каталог Qt Widgets (<https://doc.qt.io/qt-6/qtwidgets-module.html>),
-код `client/crates/{form-xml,rqt,app}`, `client/QT_PORT_PLAN.md`.
+Обновлено: 2026-11-25.
+Статус: активный план. Волна 0.16 закрыта, предыдущий план перенесён в
+архив: `docs/archive/completed-plans/widgets-plan-0.0-0.16.md`.
+**0.17.1 закрыт (2026-11-25):** скрытое поле ввода, IME, touch-hover,
+long tap, double tap, multi-touch и two-finger scroll проверены в
+браузере. Pinch отложен до решения по семантике.
+**0.17.2 закрыт с ограничениями:** box model, вертикальные
+`qlineargradient` и item-view-селекторы работают; `border-image`/`url()`
+не поддерживаются (нет asset pipeline).
+**0.17.3 закрыт:** `Form:center`, `QSplitter.sizes`, `QTreeWidget`
+`expandAll`/`collapseAll`.
+**0.17.4:** review-пак пересобран; комментарии заполняет пользователь.
+
+Связанные документы: `EPlan_Status.md`, `questions.md`,
+`docs/application-shell-plan.md` (закрытый stage 0.14),
+`client/QT_PORT_PLAN.md`, `docs/architecture-ru.md`.
 
 Обозначения: ✅ работает · ⚠️ частично · ❌ нет.
 Сложность: **S** <1 дня · **M** 1–3 дня · **L** 3–7 дней · **XL** недели.
 
 ---
 
-## Baseline (проверено 2026-11-25, после 0.15.5)
+## Baseline (проверено 2026-11-25, после волны 0.17.4)
 
 ```
-cargo test --workspace   → 168 passed; 1 ignored
-  app 47 (1 ignored) · form-xml 13 · rqt 108
+cargo test --workspace   → 199 passed; 0 failed; 1 ignored
+  app 53 (1 ignored) · form-xml 13 · rqt 133
 mix test (server/)       → 30 passed
+cargo check -p app --target wasm32-unknown-unknown → ok
 ```
 
-## Browser testing — обязательное правило для UI
+## Правила фронта
 
-Любые изменения меню/тулбара/форм/MDI/top-level проверять **в настоящем
-браузере**, а не только unit-тестами:
+1. **Сначала парсер/модель, потом геометрия/отрисовка** — не повторять
+   ошибку «модель есть, а данные не читаются».
+2. **Qt6 golden — источник истины** для геометрии, QSS и визуального
+   diff-а; новые фикстуры снимать `tools/qt_reference`.
+3. **Additive changes**: уже закрытые раскладки, hit-test и mouse-сценарии
+   не должны менять поведение без отдельного regression-теста.
+4. **UI проверять в настоящем браузере** (Chrome DevTools MCP, WSLg
+   Chromium `127.0.0.1:9222`), для touch — через CDP
+   `Input.dispatchTouchEvent`, а не только unit-тестами.
+5. **Не добавлять фиктивные свойства**, которые не имеют источника в Qt,
+   `.ui` или Lua-протоколе. Новое свойство — только с тестом и
+   использованием в рендере/геометрии.
 
-- Chrome DevTools MCP, WSLg Chromium: `http://127.0.0.1:9222`;
-- full: `http://localhost:8080/?main=test_main.lua`;
-- standalone: `http://localhost:8080/?lua=demo_icons.lua&ui=test_dialog01.ui`;
-- клики/наведение — через CDP pointer events по canvas;
-- сохранять скриншоты до/после и смотреть пересечения текста/фонов
-  (именно так ловятся баги painter order).
+## Наследие: незакрытые кандидаты из архива
 
-## Что проверено по коду (и почему план переписан)
+Перенесены из `widgets-plan-0.0-0.16.md`, раздел «Touch-ввод»:
 
-| Утверждение из прежней версии | Факт |
-|---|---|
-| «`GridConfig` парсится из XML» | было ❌ (жёстко `None`); **0.12.1**: `GridConfig` удалён, ячейки парсятся с `<item>` |
-| «grid-позиции считаются round-robin» | было ⚠️ (недостижимая ветка); **0.12.1**: мёртвый round-robin удалён |
-| «`QLayoutItem::Widget` хранит `position`/`span`» | было ⚠️ (не читались); **0.12.1**: заменены на `LayoutCell` из парсера |
-| «`parse_value` понимает `formLayout`/`labelAlignment`/`fieldGrowthPolicy`/`horizontalSpacing`» | ❌ таких строк в `form-xml` нет вообще |
-| «QGridLayout деградирует в vbox» | ❌ в hbox; **0.12.2**: вид layout-а теперь явный (`QLayoutKind`), grid раскладывается сеткой |
-| «QFormLayout деградирует в vbox» | было ✅; **0.13.2**: двухколоночный движок, wrap и growth-политики |
-| «инфраструктура готова» | ❌ готова только модель данных-заглушка; ни парсинга, ни геометрии |
+- [x] мягкая клавиатура / IME / ввод текста на iOS/Android;
+- [x] сброс `hover` после `TouchPhase::Ended`;
+- [x] контекстное меню по долгому тапу (`contextMenuEvent`);
+- [x] выделение слова двойным тапом и маркеры выделения в `QLineEdit`;
+- [x] два пальца → scroll; pinch-zoom отложен (см. открытые решения);
+- [x] несколько одновременных касаний не ломают основной указатель.
 
-Дополнительно: до 0.12 в фикстурах не было ни одной формы с
-`QGridLayout`/`QFormLayout`; сетка закрыта в 0.12.5, форма — в 0.13.3
-(6 фикстур + категория `form` в review).
-
----
-
-## Закрытые задачи волны 0 (0.1–0.11) — ✅
-
-| Задача | Что сделано |
-|---|---|
-| 0.1 Hover | `under_mouse` выставляется при движении мыши; `:hover` QSS, Fusion hover, скроллбары |
-| 0.2 Tooltips | `toolTip` из свойств, таймер ~700 мс |
-| 0.3 `.ui` loader `<item>` | `<item>` внутри `<widget>` парсится, текст как `item_text` |
-| 0.4 Шрифты из `.ui` | `<property name="font">` → `PropValue::Str` |
-| 0.5 Двойной клик | `MouseButtonDblClick` при кликах в пределах 500 мс |
-| 0.6 Правая кнопка | `MouseButton::Right` → `dispatch_mouse_press/release` |
-| 0.7 toggled/stateChanged | QCheckBox/QRadioButton шлют событие в Lua |
-| 0.8 returnPressed | Enter в `QLineEdit` → `returnPressed` |
-| 0.9 CurrentIndexChanged | навигация в `QComboBox` → событие |
-| 0.10 Enter/Leave | `under_mouse_widget`, `widget_at_point`, переходы `Some(old)↔Some(new)↔None` |
-| 0.11 FocusIn/FocusOut | `focused_widget_id`, события на Tab/Shift+Tab |
-
-Эти пункты не требуют доработки; регрессии ловятся существующими тестами
-`app`/`rqt`.
+Эти пункты входят в 0.17.1 и не считаются сделанными до браузерной
+проверки на touch-эмуляции.
 
 ---
 
-## 0.12 QGridLayout — ✅ закрыто (0.12.1–0.12.5)
+## 0.17.1 Мобильный ввод — P0
 
-Цель: `.ui` с `QGridLayout` раскладывает виджеты по ячейкам, поддерживает
-`rowspan`/`colspan` и per-cell alignment; геометрия сверяется с Qt6
-offscreen. Stretch не поддерживается — решение A1 в `questions.md`
-(в `.ui` его нет, фиктивное свойство не добавляем).
+**Цель:** на телефоне пройти полный сценарий: тап в `QLineEdit` →
+поднимается мягкая клавиатура → ввод (включая русскую раскладку/IME)
+доходит до `text`/`formEvent` → `Enter`/`Tab` работают как на десктопе.
 
-**Итог (2026-11-25):** движок сетки — порт Qt `QGridLayoutPrivate::
-setupLayoutData`/`distribute` и `qGeomCalc` (`qlayoutengine.cpp`) на
-целочисленной арифметике. Строки/столбцы считаются по hint/min/max
-элементов, span распределяется `distributeMultiBox`, свободное место —
-по Qt-правилам (expand-колонки, иначе равные доли, иначе в зазоры),
-виджет в ячейке клампится по `maximumSize` и выравнивается по
-`<item alignment=>`. Геометрия 4 фикстур совпадает с Qt6 в пределах 1 px,
-raster-diff — в общих допусках (mean 0.8–4.7).
+### 0.17.1.1 Мост к скрытому полю ввода (L)
 
-### 0.12.1 Парсер: атрибуты `<item>` (S)
+Сейчас `winit` слушает `keydown` на `canvas`; iOS так клавиатуру не
+поднимает. Нужен отдельный input-элемент и явная передача текста в
+`App`, без попытки «притвориться», что winit сам всё пришлёт.
 
-Qt Designer кладёт координаты на сам `<item>`:
+- [ ] **`client/crates/app/index.html`**: скрытый `<textarea>` (или
+      `contenteditable`), `inputmode="text"`, `autocapitalize="off"`,
+      `autocomplete="off"`, `spellcheck="false"`, вынесен за viewport, но
+      не `display:none` (иначе iOS не откроет клавиатуру).
+- [ ] **JS-модуль** `client/crates/app/src/text_input.js` (или inline
+      module): `focus`/`blur`, `beforeinput`, `input`,
+      `compositionstart/update/end`, `keydown` для
+      Backspace/Delete/Enter/Tab/стрелок/Home/End/Ctrl+A; отправка
+      событий в Rust через `CustomEvent`/`wasm_bindgen`-экспорт.
+- [ ] **Rust-приёмник**: не собирать фальшивый `winit::KeyEvent`, а
+      переиспользовать существующий `KeyEdit`/`App::dispatch_key`-путь:
+      вынести обработку текста в `App::apply_text_input(action)` или
+      эквивалент. Так один код обслуживает десктоп и мобильный ввод.
+- [ ] **Синхронизация фокуса**: при фокусе `QLineEdit` — `textarea.focus()`;
+      при уходе фокуса/закрытии формы/модалки — `textarea.blur()`.
+      Не воровать фокус у меню, таблиц и мобильной клавиатуры без
+      `QLineEdit`.
+- [ ] **Composition/IME**: коммит `compositionend` в `text`; для
+      `compositionupdate` — либо нативная вставка после коммита, либо
+      минимальный preedit-слой поверх `QLineEdit` (решить в 0.17.1.3).
+- [ ] **Клавиши**: Backspace/Delete/Enter/Tab/стрелки/Home/End и Ctrl+A
+      должны идти тем же путём, что сейчас; не допускать двойного ввода
+      (`keydown` winit + `input` hidden-поля).
+- [ ] **Тесты**: unit на `KeyEdit`-путь; wasm-check; CDP-сценарий
+      `Input.dispatchTouchEvent` по `QLineEdit` + `Input.insertText` /
+      `keydown`; отдельно проверить, что без тапа в поле клавиатура не
+      появляется.
 
-```xml
-<item row="0" column="1" rowspan="2" colspan="2">
-  <widget class="QLineEdit" name="lineEdit"/>
-</item>
-```
+**DoD 0.17.1.1:** ✅ на CDP-эмуляции 390×844 тап в `QLineEdit` поднимает
+ввод, текст и `Enter` доходят до формы; на десктопе мышь/клавиатура не
+регрессируют. Проверено в браузере: «5», Backspace, Tab, Ctrl+A,
+`compositionend` «тест», тап по пустому месту снимает фокус.
 
-- добавить в `LayoutItem::Widget` (или в обёртку `LayoutCell`) поля
-  `row`, `column`, `rowspan`, `colspan` (defaults `0/0/1/1`);
-- читать атрибуты `<item>` в `parse_layout`;
-- `GridConfig` с массивами `row_span`/`col_span` **удалить**: в Qt span —
-  свойство элемента, а не строки/столбца; `rows`/`cols` не задаются в `.ui`
-  (выводятся из максимума `row+rowspan`/`column+colspan`);
-- тесты парсера на формы с явными `row/column/rowspan/colspan`.
+### 0.17.1.2 Touch-состояния и контекстное меню (M)
 
-**Сделано (2026-11-25):** `LayoutCell { row, column, row_span, column_span }`
-(defaults `0/0/1/1`), атрибуты читаются в `parse_layout` для widget / nested
-layout / spacer; `GridConfig` и `grid_config` удалены из `form-xml` и `rqt`;
-`QLayoutItem` в `rqt` теперь несёт `cell` вместо мёртвых `position`/`span`.
-Тесты: `parses_item_cells_from_grid_layouts`,
-`box_layout_items_default_to_single_cell`,
-`invalid_cell_attributes_fall_back_to_defaults`.
+- [ ] После `TouchPhase::Ended/Cancelled` сбрасывать `under_mouse_widget`
+      и `hover` у форм (аналог `QEvent::HoverLeave`). Не ломать hover
+      для настоящей мыши.
+- [ ] Долгий тап (~500 мс) → `formEvent "ContextMenu"` для виджета под
+      пальцем; добавить `QWidget::contextMenuEvent`-аналог или явный
+      host-путь, не подменять `Clicked`.
+- [ ] Двойной тап в `QLineEdit` → выделение слова; drag за маркеры
+      выделения — отдельным шагом, если 0.17.1.2 не влезает.
+- [ ] Многоточие: несколько `Touch`-id — хранить map указателей; как
+      минимум не терять второй палец и не отправлять его в основной
+      курсор.
 
-**Важно:** в `.ui` нет и stretch-факторов — Qt задаёт их кодом
-(`setRowStretch`). Решение по их поддержке — открытый вопрос №1
-(`questions.md`).
+**DoD:** ✅ после тача виджеты не остаются «под курсором»; долгий тап
+даёт `ContextMenu` и не превращается в click; двойной тап выделяет
+слово; второй палец не ломает основной сценарий.
 
-### 0.12.2 Явный вид layout-а вместо эвристики по имени (S)
+### 0.17.1.3 Pinch / два пальца (M)
 
-Сейчас вид определяется `spec.class.contains('H')` — хрупко и уже дало
-неверную деградацию grid в hbox.
+- [ ] Определить продуктовую семантику: pinch → масштаб всей сцены
+      (MDI/top-level) или только `QTableWidget`/`QTreeWidget`? Два
+      пальца → `MouseWheel` или pinch?
+- [ ] Реализовать после решения; не включать browser zoom, а работать
+      в canvas-системе координат с учётом DPR.
+- [ ] Тест: CDP multi-touch, сохранение координат hit-test после
+      масштаба/сдвига.
 
-- ввести `QLayoutKind { HBox, VBox, Grid, Form }` (или enum с параметрами);
-- `QBoxLayout` → `QLayout { kind, spacing, margins, items }`;
-- `load_layout` выбирает вид по классу, а не по подстроке;
-- поведение hbox/vbox не меняется (все 106 тестов зелёные).
+**Решение (2026-11-25):** два пальца — это scroll (`MouseWheel`-путь),
+pinch-zoom в 0.17 не делаем: в клиенте нет модели масштаба сцены, а
+самостоятельный zoom сломает hit-test и Qt-геометрию. `Pinch` остаётся
+открытым пунктом на отдельное решение.
 
-**Сделано (2026-11-25):** `QLayoutKind { HBox, VBox, Grid, Form }`,
-`QBoxLayout` → `QLayout { kind, spacing, margins, items }`;
-`QLayoutKind::from_class()` вместо `contains('H')`; `layout_widget`
-диспетчеризует в `layout_box`/`layout_grid`/`layout_engine` (Form пока
-идёт как vbox). Тесты `app`/`rqt` для box-layout-ов остались зелёными.
-
-### 0.12.3 Геометрический проход для grid (L)
-
-`layout_box` (`widgets.rs:1437`) умеет только одномерную раскладку. Нужен
-отдельный `layout_grid`:
-
-1. ширина столбца = максимум hint по элементам без span (span-элементы
-   распределяются по объединению столбцов);
-2. высота строки — аналогично;
-3. свободное место делится по stretch (если stretch нет — поровну, как Qt);
-4. каждому элементу выдаётся rect объединённых ячеек;
-5. вложенные layout-ы и спейсеры — такие же элементы ячеек;
-6. `margins`/`spacing` — из layout-а (Qt default spacing 6, margins 9/11).
-
-Подключение в `layout_widget`: выбор `layout_box`/`layout_grid` по
-`QLayoutKind`.
-
-**Сделано (2026-11-25):** `layout_grid` + `grid_tracks` + `q_geom_calc`
-(порт Qt, включая fixed-point распределение), `QGridTrack` ~
-`QLayoutStruct`, `distributeMultiBox`, `setupSpacings` (зазор только
-между разными элементами), `qSmartMinSize`/`qSmartMaxSize`
-(`grid_smart_min`/`grid_smart_max`) и классовые size policy по умолчанию
-(`widget_axis_policy`). Размеры строк/столбцов и точные позиции —
-целочисленные, как в Qt.
-
-### 0.12.4 Span и alignment (M)
-
-- `rowspan`/`colspan` — объединение ячеек с корректным учётом вклада в
-  размеры строк/столбцов;
-- выравнивание по умолчанию как в Qt: `Expanding`-виджеты заполняют ячейку,
-  остальные — по hint с `Qt::AlignLeft|AlignVCenter` (если не задан
-  `<property name="alignment">`);
-- при необходимости — per-item alignment из `.ui`.
-
-**Сделано (2026-11-25):** span через `distributeMultiBox` (и min, и
-hint, и вырожденный случай `maximum_sum < minSize`); `grid_widget_rect`
-повторяет `QWidgetItem::setGeometry`: кламп по `maximumSize`, при
-alignment — кламп по hint, выравнивание (Qt `visualAlignment`: без
-горизонтальных битов — влево, по вертикали без `AlignTop` — центр).
-`LayoutCell` получил `alignment: u32`, в `form-xml` парсится
-`<item alignment="Qt::AlignRight|…">`. Stretch — **не** поддерживается
-(решение A1-a).
-
-### 0.12.5 Стенд и покрытие (M)
-
-- 3–4 фикстуры: простая сетка 2×2, span по строке/столбцу, вложенный
-  layout в ячейке, сетка с разными size policy;
-- `tools/qt_reference` → Qt6 JSON + PNG, наши тесты:
-  `grid_*_geometry_matches_qt6_offscreen` (допуск 1 px) и raster-diff;
-- формы добавить в `tools/formgen` (категория `grid`) и в review-пак.
-
-**Сделано (2026-11-25):** фикстуры `client/crates/rqt/tests/fixtures/
-grid_{2x2,spans,nested,policies}.ui` + Qt6 golden JSON/PNG; тесты
-`grid_*_geometry_matches_qt6_offscreen` (1 px) и `grid_*_raster_
-compared_to_qt6`; категория `grid` в `tools/formgen/review.py`
-(4 формы, id `grid/76…79`), review-пак перегенерирован
-(mean 0.8–4.7, >30 — 1–6 %). Браузер: `?lua=test_grid.lua&ui=
-test_grid.ui` — grid, вложенный hbox, span-таблица, spacer, hit-test
-Reset/Close и ввод в ячейку проверены в WSLg-Chromium (:9222).
-
-**Definition of done 0.12:** ✅ имя→rect всех виджетов совпадает с Qt6 в
-пределах 1 px; span и per-cell alignment работают; hbox/vbox и остальные
-тесты не сломаны; формы есть в review. Stretch не входит (A1-a).
+**DoD:** ✅ two-finger scroll не конфликтует с drag/resize окон; координаты
+тапа после жеста остаются точными; при втором пальце tap/click
+отменяется.
 
 ---
 
-## 0.13 QFormLayout — ✅ сделано (2026-11-25)
+## 0.17.2 QSS v2 — P1 — ✅ закрыто с ограничениями
 
-Цель: label-field пары в две колонки с Qt-политиками роста и выравнивания.
+Сейчас QSS умеет цвета, `background`, `border`, `border-radius`,
+`padding` (частично), `font-*`, `text-align`, атрибутные селекторы и
+состояния. В 0.17.2 добавлены box model, градиенты и item-view.
 
-### 0.13.1 Парсер и свойства — ✅
+### 0.17.2.1 Box model: `margin`/`padding` — ✅
 
-- `form_xml::Layout` несёт `field_growth_policy`, `row_wrap_policy`,
-  `label_alignment`, `form_alignment`, `horizontal_spacing`,
-  `vertical_spacing`; enum-ы `FieldGrowthPolicy`/`RowWrapPolicy`.
-- Читаются `<enum>QFormLayout::…</enum>` и `<set>Qt::Align…|…</set>`
-  (Fusion-дефолты: `AllNonFixedFieldsGrow`, `DontWrapRows`, labels left,
-  form left/top). Поддержан Designer-синтаксис без `AlignmentFlag::`.
-- Строки/колонки берутся из `<item row= column= colspan=>` (0.12.1);
-  `colspan>=2` → spanning (full-row) item.
+- [x] `margin`, `margin-top/right/bottom/left` — парсятся и применяются:
+      margin сдвигает frame (фон/рамку), padding — content-rect.
+- [x] Полный `padding`: текст, selection/caret, кнопки, group box;
+      добавлены `padding-top/right/bottom/left`.
+- [x] `52_checks.ui` с `QGroupBox { margin-top }` больше не игнорирует
+      margin; старые box/grid/form-тесты не сломались.
+- [x] Тесты: `parses_box_model_sides_and_linear_gradient`,
+      `qss_margin_padding_and_gradient_affect_the_painted_rects`.
 
-### 0.13.2 Двухколоночный движок — ✅
+### 0.17.2.2 Фоны и границы — ⚠️
 
-- `layout_form` + `form_data` — порт `QFormLayoutPrivate::updateSizes`,
-  `setupVerticalLayoutData`, `setupHorizontalLayoutData` и
-  `arrangeWidgets` для не-HFW случая.
-- Колонка меток = максимум hint (с учётом wrap); поле получает остаток
-  по `fieldGrowthPolicy` (`AllNonFixedFieldsGrow` /
-  `FieldsStayAtSizeHint` / `ExpandingFieldsGrow`).
-- `rowWrapPolicy` (`DontWrapRows`/`WrapLongRows`/`WrapAllRows`),
-  `labelAlignment` (left/center/right), `formAlignment` (left/center/right,
-  top/center/bottom), `horizontalSpacing`/`verticalSpacing`.
-- Вертикальные треки считаются тем же `qGeomCalc`, что и grid; top/bottom
-  stretch повторяет Qt при `formAlignment`.
-- `layout_size_hint`/`layout_minimum_size`/`layout_maximum_size` знают про
-  Form; вложенный form внутри group box/vbox меряется как Qt-форма.
-- `QLineEdit` hint для form-движка приведён к целочисленной
-  `QFontMetrics`-формуле Qt (4 px), box-движок не затронут.
+- [x] `background-image`/`background` c `qlineargradient(...)`: парсятся
+      `x1/y1/x2/y2` и все `stop`, painter рисует по крайним стопам
+      вертикально через `FillLinearGradientRect`; multi-stop/угол —
+      задел на будущее.
+- [x] `background: none/transparent` и наследование style sheet по
+      цепочке родителей проверены.
+- [x] Golden/визуально: review `qss/52_checks` 4.88 → 4.07,
+      `qss/55_disabled` 11.44 → 4.41; браузерный скриншот `qss_checks`.
+- [ ] `border-image`/`url(...)` — **не поддерживаем в 0.17**: в клиенте
+      нет загрузки изображений для QSS. Нужен отдельный asset pipeline.
 
-### 0.13.3 Стенд и покрытие — ✅
+### 0.17.2.3 Item-view и subcontrol-селекторы — ✅ (базово)
 
-- Фикстуры `form_basic`, `form_wrap_long`, `form_wrap_all`, `form_growth`,
-  `form_alignment`, `form_group` + Qt6 JSON/PNG.
-- Тесты `form_*_geometry_matches_qt6_offscreen` (допуск 1 px) и
-  `form_*_raster_compared_to_qt6`; парсерные тесты
-  `parses_form_layout_properties`, `form_layout_defaults_follow_fusion`.
-- Категория `form` в `tools/formgen/review.py` (6 форм, id `form/80…85`);
-  review перегенерирован: mean diff 1.3–3.4, >30 — 1.6–3.2 %.
-- Браузер (chrome-devtools MCP, WSLg Chromium :9222):
-  `?lua=test_qform.lua&ui=test_qform.ui` — правая колонка меток, длинная
-  метка, checkbox, Reset/Close в spanning-row; Reset очищает text и
-  снимает checked. Фикстуры: `server/priv/qt_forms/test_qform.ui`,
-  `server/priv/lua_modules/test_qform.lua`.
+- [x] `QTreeWidget::item`, `QListWidget::item`, `QTableWidget::item`:
+      фон/цвет/selection для строк и ячеек.
+- [x] `QHeaderView::section`: фон/цвет секций table/tree.
+- [x] `QComboBox QAbstractItemView`: фон/цвет popup через `resolve_part`.
+- [ ] `QSplitter::handle`, `QScrollBar::handle`, `::chunk` — не меняли:
+      Fusion-рендер пока устраивает, отдельный subcontrol API не нужен.
+- [x] Descendant-селекторы: поддержан частный случай
+      `QComboBox QAbstractItemView`; общий `QDialog QPushButton` не
+      добавляли (нет источника в review-формах).
 
-**Definition of done 0.13:** ✅ две колонки, выравнивание и growth-политика
-совпадают с Qt6; формы в review.
+**DoD 0.17.2:** ✅ `margin`/`padding` меняют отрисовку; popup combo и
+tree/table item подхватывают QSS; 3 новых unit/paint-теста; review
+пересобран. Отдельной категории `qss2` нет — использованы существующие
+`qss/50–55`.
 
 ---
 
-## 0.14 Application shell / главное окно — ✅ 0.14.1–0.14.9
+## 0.17.3 Мелкие закрытия Qt-поведения — P2 — ✅
 
-Не входит в текущую волну 0.12/0.13 и вынесен в отдельный этап:
-главное окно как `QMainWindow`-аналог (menu + toolbar + central
-`QMdiArea` + statusbar), формы как MDI **или** top-level окна, application/window
-modal, меню из Lua и старый запуск без главного окна.
+### 0.17.3.1 `Form:center` / свойство `centered` — ✅
 
-Полный план: `docs/application-shell-plan.md`.
-Решения **D1–D8** приняты (`questions.md`); этап готов к старту.
+- [x] `centered=true` центрирует `QMdiSubWindow` в `QMdiArea` (и
+      top-level — в viewport) с сохранением размера.
+- [x] `Form:center` в Lua работает без изменений Lua-кода.
+- [x] Тест `centered_form_property_centers_in_mdi_viewport`.
 
-Коротко по этапам:
+### 0.17.3.2 `QSplitter` API — ✅ (sizes)
 
-- **0.14.1** ✅ домен/протокол: `role`, `placement`, `modal_scope`,
-  передача `mdi`, main-сессия;
-- **0.14.2** ✅ main shell и режимы `full`/`standalone`, viewport под
-  menu/statusbar;
-- **0.14.3** ✅ `QMenuBar`/`QMenu`/`QAction`, `App:set_menu` и menu actions;
-- **0.14.4** ✅ top-level слой (несколько окон, z-order, drag/resize);
-- **0.14.5** ✅ application/window modal;
-- **0.14.6** ✅ `QStatusBar` и технический подвал;
-- **0.14.7** ✅ `QToolBar` — обязательный виджет (actions общие с меню);
-- **0.14.8** ✅ загрузка `QMainWindow`/`QMenuBar`/`QToolBar`/
-  `QStatusBar` и `<action>`/`<addaction>` из `.ui`; static menu/toolbar
-  заменяются Lua-свойствами;
-- **0.14.9** ✅ Qt6 golden меню/toolbar/status/central (1 px),
-  браузерные сценарии full/standalone/top-level/modal.
+- [x] `sizes` через `setProperty` и `rqt`; layout пересчитывает панели,
+      resize формы сохраняет пропорции.
+- [ ] `childrenCollapsible`/`collapsible` — не добавлено: текущим формам
+      не нужно, min-size уже соблюдается.
+- [x] Тест `splitter_sizes_property_sets_pane_widths`.
+
+### 0.17.3.3 `QTreeWidget` свойства — ✅
+
+- [x] `expandAll`/`collapseAll` как свойства; `expanded` в `data` уже был.
+- [x] Тест `tree_expand_all_and_collapse_all_properties_rebuild_rows`;
+      current сохраняется существующим `rebuild_rows`.
+
+### 0.17.3.4 App sugar — не расширять без запроса
+
+`setWindowTitle`/`setIcon` уже работают; геометрия главного окна в
+браузере остаётся no-op по D5. `set_menu`/toolbar/statusbar закрыты в
+0.14.
 
 ---
 
-## 0.15 Упорядоченный display list / PaintBatch — ✅ сделано
+## 0.17.4 Review-пак и продуктовые решения — P2
 
-Реализовано 2026-11-25: `gfx::PaintBatch::{Rects,Text}` вместо двух
-глобальных пулов; `append_paint_commands` выдаёт батчи в порядке
-`QPaintCommand`; `gfx::render` проигрывает их в одном render-pass
-(rect-диапазоны + отдельный glyphon renderer на текстовый батч);
-`Shell::popup_rects` и фильтрация текстов удалены.
-
-### Проблема
-
-`QWidgetTree` и `paint_widget` уже иерархичны: родитель рисует себя и
-рекурсивно вызывает детей. Но `app::append_paint_commands` разбирает
-упорядоченный поток `QPaintCommand` на **два общих массива** —
-все `ColoredRect` и все `ColoredText`. `gfx::render` затем рисует
-сначала все прямоугольники, потом все тексты.
-
-Из-за этого теряется painter order:
-
-- текст toolbar просвечивает через popup (лечится текущей маскировкой);
-- текст одной формы может оказаться поверх другой формы;
-- top-level окно не всегда перекрывает текст MDI;
-- вложенное меню может смешиваться с родительским.
-
-Эталон: `docs/pas/WINUNIT.PAS` — `tgroup`/`twnd.show` рисует себя, затем
-рекурсивно детей; `tmenu.show` для каждого пункта сразу рисует фон и текст.
-Это обычный painter's algorithm / display list, а не два глобальных пула.
-
-### Цель
-
-Сохранить порядок рисования до GPU и убрать маскировку текста как
-временный костыль. Дерево виджетов переписывать **не нужно** — меняется
-только граница `QPainter → gfx`.
-
-### 0.15.1 Модель батчей (S/M)
-
-**Сделано:** `PaintBatch` в `gfx`; соседние однотипные команды
-объединяются, но `Rects -> Text -> Rects -> Text` сохраняет порядок.
-Clip текста по-прежнему попадает в `ColoredText::clip`.
-
-- ввести `PaintBatch { Rects(Vec<ColoredRect>), Text(Vec<ColoredText>) }`
-  (или `PaintList` с командами и диапазонами);
-- `append_paint_commands` должен выдавать батчи **в порядке команд**, а не
-  два независимых пула;
-- сохранить clip и шрифтовые параметры;
-- тест: порядок `Rects -> Text -> Rects -> Text` не меняется.
-
-### 0.15.2 Рендерер (M)
-
-**Сделано:** `gfx::render(clear, &[PaintBatch])`; все rect-батчи пишутся
-в один vertex buffer с диапазонами, текст — per-batch `TextRenderer`;
-всё внутри одного pass, `LoadOp::Clear` только в начале.
-
-- `gfx::render_batches(clear, &[PaintBatch])`:
-  - первый непустой батч — `LoadOp::Clear`, остальные — `LoadOp::Load`;
-  - либо последовательные render-pass'ы, либо переключение pipeline в
-    одном pass;
-  - текст каждого батча подготавливается/рисуется после его фона.
-- Оценить стоимость: батчи объединять только соседние одинаковые типы;
-  меню/окна не должны требовать отдельного pass на каждый виджет.
-
-### 0.15.3 Порядок слоёв в app (M)
-
-**Сделано:** `collect_paint() -> Vec<PaintBatch>`; порядок:
-shell base → MDI content+chrome по z-order → top-level по z-order →
-popup-меню по уровням. `Shell::popup_rects` и `texts.retain(...)`
-удалены, clipping форм/меню сохранён.
-
-- `collect_paint` возвращает батчи в порядке:
-  1. shell base: фон/menu/toolbar/status;
-  2. MDI-окна в z-order: content + chrome каждого окна;
-  3. top-level окна в z-order;
-  4. открытые popup-меню по уровням (родительское, затем вложенное).
-- Удалить `Shell::popup_rects` и фильтрацию текстов под popup из
-  `collect_paint`.
-- Сохранить clipping форм/меню.
-
-### 0.15.4 Тесты и browser (M)
-
-**Сделано:** unit-тесты на `Rects -> Text -> Rects -> Text`, popup над
-toolbar без маскировки, вложенное подменю, MDI→top-level; браузерные
-сценарии `?main=test_main.lua` («Файл», «Вид», вложенное подменю,
-toolbar) и `?lua=demo_icons.lua&ui=test_dialog01.ui` проверены через
-chrome-devtools MCP на `127.0.0.1:9222`, скриншоты до/после сняты.
-
-- unit: popup над toolbar, выбранный пункт меню с текстом, соседний
-  пункт меню; overlapping MDI/top-level; вложенное подменю.
-- `cargo test --workspace`, `mix test`, `trunk build --release`.
-- **Обязательная браузерная проверка через chrome-devtools MCP**:
-  - WSLg Chromium: `http://127.0.0.1:9222`;
-  - `http://localhost:8080/?main=test_main.lua` — открыть «Файл», «Вид»,
-    вложенное подменю, toolbar;
-  - `http://localhost:8080/?lua=demo_icons.lua&ui=test_dialog01.ui` —
-    standalone/top-level;
-  - клики/наведение через настоящий браузер (CDP pointer events), не
-    только unit-тесты; сохранять скриншоты до/после.
-- Добавить regression-тест на порядок батчей, чтобы маскировка не
-  вернулась.
-
-### 0.15.5 Golden/визуальный diff — ✅ сделано (2026-11-25)
-
-**Сделано:** программный рендер `gfx::PaintBatch` (`rasterize_batches`)
-в app-тестах через `rqt::raster`; эталонные PNG зафиксированы в
-`client/crates/app/tests/fixtures/`:
-
-- `shell_popup_toolbar.png` — popup над toolbar/base текстом;
-- `shell_nested_menu.png` — parent + nested submenu;
-- `shell_overlapping_windows.png` — MDI content под top-level окном.
-
-Тесты `shell_*_raster_matches_golden` собирают реальный `collect_paint()`
-и сравнивают mean/max diff; ignored-тест `regenerate_shell_goldens`
-перегенерирует эталоны. Дополнительно к batch-order unit-тестам это
-ловит возврат text-masking/перестановки слоёв.
-
-- ✅ зафиксировать эталонные PNG для menu popup + toolbar, overlapping
-  windows и nested menu;
-- ✅ сравнение с rqt software raster; Qt6/rqt формы остаются в 0.12/0.13.
-
-**Definition of done 0.15:** порядок рисования иерархичен на всех слоях;
-меню/toolbar/формы/top-level не смешиваются без text-masking; браузерные
-сценарии и тесты зелёные.
+- [ ] Запустить `scripts/review.sh`, открыть `review/index.html`, заполнить
+      `client/review/comments.md` по категориям (C1 в `questions.md`).
+- [ ] Исправить топ-расхождения вёрстки пачкой, а не по одному пикселю;
+      зафиксировать метрики до/после.
+- [ ] **B6/B7** (таблицы, `list_*`/БД) — не начинать без ответа
+      пользователя. Это отдельный продуктовый трек, не часть 0.17.
 
 ---
 
 ## Порядок работ
 
-0.14 идёт отдельным треком; порядок ниже — волна 0.12/0.13.
+1. ✅ **0.17.1.1** — hidden input + Rust-приёмник; проверено в браузере.
+2. ✅ **0.17.1.2** — hover reset, long tap, double tap, multi-touch.
+3. ✅ **0.17.1.3** — two-finger scroll; pinch отложен.
+4. ✅ **0.17.2** — QSS box model, вертикальный градиент, item-view
+   селекторы; `border-image` отложен.
+5. ✅ **0.17.3** — `Form:center`, splitter sizes, tree properties.
+6. ✅ **0.17.4** — review-пак пересобран; B6/B7 — только по решению.
 
-1. ✅ 0.12.1 парсер `<item row/column/rowspan/colspan>` + тесты.
-2. ✅ 0.12.2 `QLayoutKind`, без изменения поведения box-layout-ов.
-3. ✅ 0.12.3 `layout_grid` (базовая сетка без span).
-4. ✅ 0.12.4 span/alignment (stretch не поддерживаем — A1-a).
-5. ✅ 0.12.5 фикстуры + Qt6 golden + review + браузер.
-6. ⬅ 0.13.1 свойства `QFormLayout` + распознавание.
-7. 0.13.2 движок двух колонок + политики.
-8. 0.13.3 фикстуры + golden.
-9. 0.14 — отдельный этап `docs/application-shell-plan.md`; 0.14.1–0.14.9
-   ✅.
-10. ✅ 0.15 — `PaintBatch`/упорядоченный display list; text-masking убран,
-    проверено через chrome-devtools MCP (:9222).
+Каждый шаг заканчивается `cargo test --workspace`, для UI — браузерной
+проверкой; после QSS/раскладок — `scripts/review.sh`.
 
-Каждый шаг заканчивается прогоном `cargo test --workspace`; после 0.12.5 и
-0.13.3 — `scripts/review.sh` и проверка в браузере.
+## Definition of done 0.17
+
+- На телефоне (или CDP touch-эмуляции 390×844) можно тапнуть в
+  `QLineEdit`, набрать текст и нажать Enter/Tab; русская раскладка/IME
+  работают; после тача hover сброшен.
+- Долгий тап даёт контекстное событие; двойной тап выделяет слово;
+  второй палец не ломает основной указатель.
+- QSS `margin`/`padding`, градиенты и item-view селекторы работают на
+  новых фикстурах и не регрессируют старые 126 rqt-тестов.
+- `Form:center`, `QSplitter` sizes/API и tree expand/collapse свойства
+  доступны из Lua и покрыты тестами.
+- `cargo test --workspace` зелёный; wasm-check проходит; review-пак
+  пересобран, комментарии не потеряны.
 
 ## Риски
 
-- **Нет stretch в `.ui`** — не тащить фиктивную поддержку; решено (A1-a):
-  stretch-факторы не поддерживаем, пока не появится источник (свойство
-  `.ui` или API `rqt`).
-- **Ловушка «инфраструктура готова»** — модель данных без парсинга создаёт
-  ложное ощущение прогресса; поэтому 0.12.1 идёт первым.
-- **Регрессии hit-test/geometry при смене `QBoxLayout` → `QLayout`** —
-  делать 0.12.2 отдельным шагом с зелёными тестами.
-- **Пиксельная точность grid** — сначала Qt6 golden, потом отрисовка.
+- **Двойной ввод**: `keydown` winit и `input` hidden-поля могут дать
+  дубли; нужен один владелец текста.
+- **IME/composition**: порядок `compositionend`/`input` на iOS и Android
+  разный; проверять на реальном устройстве, а не только CDP.
+- **Фокус**: скрытое поле может перехватывать фокус у меню/таблиц;
+  нужен явный контракт «только `QLineEdit`».
+- **QSS margin**: легко получить неверную семантику; делать с golden,
+  а не «на глаз».
+- **Scope creep**: `QTabWidget`/`QSpinBox`/`QSlider`/`QTextEdit` в
+  текущих формах не встречаются; не тащить их в 0.17 без источника.
 
-## TODO на будущее (известные дефекты)
+## Открытые решения
 
-- [ ] **`QBoxLayout` не растит виджеты с политикой `Minimum`/`Preferred`.**
-  В Qt `qGeomCalc` при избытке места делит его между элементами, у которых
-  `maximumSize` больше hint (например, ряд `QPushButton`), а `rqt`
-  отдаёт избыток в зазоры (`layout_box`, ветка `growers` не включает
-  кнопки/combo). Поэтому ряд кнопок без spacer-а растягивается по-разному:
-  Qt — кнопки шире, `rqt` — зазоры. Grid уже считает по Qt-алгоритму,
-  box — нет. Чинить отдельным шагом (0.12.2 запрещал менять box-поведение),
-  с golden-тестом на ряд кнопок.
+1. **Pinch**: масштаб сцены или только wheel? Два пальца уже сделаны как
+   scroll; pinch отложен до появления модели масштаба сцены.
+2. **Preedit-слой**: показывать composition-текст поверх `QLineEdit` или
+   коммитить только после `compositionend`?
+3. **QSS margin**: применять как полноценный CSS box model (влияет на
+   layout) или ограничиться content-inset для текста? Рекомендация —
+   полноценно, с golden.
+4. **QSplitter API**: только `rqt`-API или ещё свойство `sizes` в Lua?
+5. **B6/B7**: нужны ли `tableLayout`/`groupedHeader` и слой данных —
+   ждёт решения пользователя.
+6. **border-image/url()**: нужен asset pipeline для QSS-картинок; в 0.17
+   не поддерживаем.
 
-- [ ] **Кнопки вываливаются за пределы формы при минимальном размере окна.**
-  При уменьшении MDI-подокна до `minimumSize` (или до малого размера,
-  который разрешает текущий fallback `80×64`) нижние кнопки — например,
-  OK/Cancel в `test_dialog01.ui` — рисуются вне content-области, поверх
-  рамки/за её пределами. Причина: layout не учитывает `minimumSizeHint`
-  layout-а и доступную высоту; `minimumSize` формы сейчас не поднимается
-  до минимума содержимого. Нужно:
-  - учитывать `minimumSizeHint` корневого layout-а при вычислении
-    эффективного минимума подокна (`max(minimumSize, layout min)`);
-  - при нехватке места сжимать/переносить/скроллить содержимое, а не
-    выпускать детей за content rect;
-  - проверять на форме с нижним `QHBoxLayout` кнопок и на длинных
-    подписях; добавить regression-тест geometry/hit-test.
+## Файлы, которые будут затронуты
 
-## Не входит в волну 0 (из `QT_PORT_PLAN.md`)
-
-- popup `QComboBox` и collapse/expand `QTreeWidget`;
-- `QSplitter`;
-- QSS-расширения сверх текущего подмножества.
-
-Меню/тулбар/главное окно вынесены в отдельный этап 0.14
-(`docs/application-shell-plan.md`), а не в волну 0.
-
-## Touch-ввод на смартфоне (iOS/Android) — состояние на 2026-11-25
-
-Проверка шла со смартфона (iPhone, Chrome = WebKit) по адресу
-`http://10.0.0.7:8080/?main=test_main.lua`; страницу отдаёт
-`client/scripts/serve_dist.py`, приложение — Phoenix на `:4000` через
-WireGuard-пир `10.0.0.7`. Симптом до правок: экран рисуется, меню
-открывается, окно формы создаётся, но **дальше не работает ничего** —
-кнопки, `QLineEdit`, перемещение и ресайз MDI-подокон. Всё, что не
-в левом верхнем углу, «промахивается».
-
-### Причина — три независимых дефекта, наложившихся друг на друга
-
-1. **Не было обработчика `WindowEvent::Touch`.** `winit` на web отдаёт
-   касания только как `Touch`; `CursorMoved` + `MouseInput` приходят
-   лишь для `pointerType == "mouse"`
-   (`winit/src/platform_impl/web/event_loop/window_target.rs`). В
-   `App::window_event` ветки `Touch` не было — тапы уходили в `_ => {}`.
-   ✅ Исправлено: логика указателя вынесена в `App::pointer_moved(x, y)`
-   / `App::pointer_released()`, `Touch{Started,Moved,Ended,Cancelled}`
-   делегируют туда же. Плюс `canvas { touch-action: none; user-select:
-   none; -webkit-touch-callout: none }`, чтобы WebKit не забирал жест под
-   скролл/зум/двойной тап.
-2. **В `index.html` не было `<meta name="viewport">`.** Мобильный
-   браузер брал layout viewport 980 px и масштабировал страницу:
-   `innerWidth = 980`, `canvas = 980×2120`, `visualViewport.scale =
-   0.398`. `winit` считает координаты указателя в CSS-пикселях
-   visual viewport, а виджеты живут в layout-пикселях → **промах 2.5×**,
-   растущий от левого верхнего угла. Поэтому «работало» только меню.
-   ✅ Исправлено: `width=device-width, initial-scale=1,
-   viewport-fit=cover, user-scalable=no` → `innerWidth = 390`,
-   `scale = 1`.
-3. **Рассинхрон DPI между `inner_size()` и координатами указателя.**
-   Web-бэкенд `winit` отдаёт `Resized`/`inner_size()` в CSS-пикселях, а
-   позиции указателя — в device-пикселях (`css * devicePixelRatio`),
-   при этом `window.scale_factor() == 3`. `Gfx::ui_scale` вычислялся как
-   `config / (size / dpr)`, т.е. 3 → логическое пространство приложения
-   становилось `130×281` вместо `390×844`, а `cursor = position /
-   ui_scale` давал ту же тройную ошибку (замер: тап в CSS `(213,269)`
-   приходил как `(639,807)`).
-   ✅ Исправлено: `App::physical_size()` домножает размер окна на DPR на
-   wasm, `App::sync_canvas_backing()` держит backing store канваса в
-   device-пикселях (`canvas = 1170×2532` при CSS `390×844`), так что
-   `ui_scale = 3`, логика — `390×844`, и картинка стала HiDPI-резкой.
-   То же пересчитывается в `ScaleFactorChanged` (`App::scaled_size`):
-   проверено поворотом 390×844 → 844×390 (`canvas` 2532×1170, тапы
-   продолжают попадать).
-
-### Проверено (доверенный тач, не синтетические события)
-
-Через CDP (`Input.dispatchTouchEvent` в WSLg Chromium :9222, эмуляция
-390×844, `deviceScaleFactor=3`, `maxTouchPoints=5`):
-
-- тап по меню «Файл» → меню открылось;
-- тап по пункту «Тестовая форма» → `menuAction open_lua` → `createForm`
-  через WS, форма разложена;
-- тап по `QPushButton` → `focus pushButton_1`, `event Clicked ->
-  pushButton_1`, `formEvent Clicked` ушёл на сервер;
-- тап по `QLineEdit` → `focus lineEdit_2`, `MouseButtonRelease ->
-  lineEdit_2`;
-- drag заголовка MDI-подокна → окно переехало (release гасится веткой
-  `dragging`, отдельного `click at` нет — так и задумано);
-- drag правой грани и правого нижнего угла → окно ресайзится.
-
-### Что осталось (не сделано, кандидаты в задачи)
-
-- [ ] **Мягкая клавиатура / ввод текста.** `winit` слушает `keydown` на
-  `canvas` (`tabindex=0`), iOS так клавиатуру не поднимает: `QLineEdit`
-  фокусируется, но печатать нечем. Нужен скрытый `<input>`/
-  `contenteditable` + `compositionend`/`beforeinput` → `KeyboardInput`
-  (и это единственный способ получить IME/эмодзи/русскую раскладку).
-- [ ] **Жесты не отключают поведение браузера целиком.** Сейчас запрещены
-  только те, что мапятся на `touch-action`; двойной тап, pinch-zoom и
-  скролл двумя пальцами в приложении не реализованы (и намеренно
-  заблокированы в браузере). Для «десктопного» приложения на телефоне
-  нужен свой набор: pinch → масштаб сцены, два пальца → `MouseWheel`
-  (сейчас `MouseWheel` приходит только от колеса мыши/трекпада).
-- [ ] **Контекстное меню / долгий тап.** `contextmenu` winit глушит через
-  `prevent_default`, но `QWidget::contextMenuEvent` в `rqt` не
-  задействован — долгий тап ничего не делает.
-- [ ] **Выделение текста в `QLineEdit`.** Двойной тап («слово») и
-  перетаскивание маркеров выделения не реализованы; сейчас выделение
-  живёт только через drag мышью (который на тач-экране означает
-  прокрутку/ресайз).
-- [ ] **`hover`-состояния на тач-экране.** После `TouchPhase::Ended`
-  `under_mouse_widget` остаётся выставленным — виджеты остаются
-  подсвеченными «под курсором». По-хорошему после тача hover нужно
-  сбрасывать (как Qt `QEvent::HoverLeave`).
-- [ ] **`touch` на нескольких пальцах.** Обрабатывается только основное
-  касание; `winit` отдаёт и остальные `Touch`-id, игнорируем.
-
-### Как воспроизводить
-
-`python3 client/scripts/serve_dist.py --port 8080` (отдаёт
-`client/crates/app/dist` с gzip, см. `CHANGELOG.md`), `mix phx.server` в
-`server/`, затем `http://<ip>:8080/?main=test_main.lua` с телефона, либо
-через CDP-эмуляцию touch (как выше) — синтетические `PointerEvent` из
-`page.evaluate` дают тот же путь, но проверять лучше `dispatchTouchEvent`.
+- `client/crates/app/index.html`, `client/crates/app/src/*` — hidden
+  input, touch-состояния, приём событий (готово в 0.17.1).
+- `client/crates/app/src/lib.rs` — `KeyEdit`/text-input путь, hover reset,
+  context menu, `Form:center`.
+- `client/crates/rqt/src/qss.rs`, `paint.rs`, `widgets.rs` — QSS v2,
+  splitter sizes, tree properties.
+- `client/crates/rqt/tests/fixtures/` — QSS v2 и touch-фикстуры/golden.
+- `client/review/`, `client/tools/formgen/`, `scripts/review.sh` — review
+  и QSS-категория.
+- `EPlan_Status.md`, `CHANGELOG.md`, `questions.md` — статусы и решения.

@@ -24,6 +24,13 @@ use winit::{
     window::{CursorIcon, Window, WindowId},
 };
 
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    /// Actions forwarded by the hidden mobile text field. The JS side owns
+    /// text composition and key semantics; Rust only sees `(kind, text)`.
+    static WEB_TEXT_INPUT: RefCell<Vec<(String, String)>> = const { RefCell::new(Vec::new()) };
+}
+
 /// In-progress cell edit of a `QTableWidget`: the buffer lives on the
 /// client until Enter/blur commits it (only then does it reach Lua).
 #[derive(Debug, Clone)]
@@ -399,6 +406,15 @@ struct App {
     mdi_hover: Option<(WindowLayer, usize, QMdiSubWindowHit)>,
     /// Active resize cursor; `None` means the default arrow.
     cursor_hit: Option<QMdiSubWindowHit>,
+    /// Touch contact that owns the pointer; additional contacts drive
+    /// two-finger scrolling (pinch zoom is a separate task).
+    primary_touch: Option<u64>,
+    secondary_touches: Vec<(u64, f32, f32)>,
+    /// Start of the active touch, for long-press detection.
+    touch_start: Option<(f32, f32, f64)>,
+    long_tap_sent: bool,
+    /// Last click/tap, for word selection on a double tap.
+    last_tap: Option<(String, String, f32, f32, f64)>,
     /// Application-level (browser chrome) properties from `setAppProperty`.
     chrome: AppChrome,
     /// Last size reported by `WindowEvent::Resized`.
@@ -450,6 +466,11 @@ impl App {
             scroll_click: false,
             mdi_hover: None,
             cursor_hit: None,
+            primary_touch: None,
+            secondary_touches: Vec::new(),
+            touch_start: None,
+            long_tap_sent: false,
+            last_tap: None,
             chrome: AppChrome::default(),
             last_size: Rc::new(Cell::new(None)),
         }
@@ -756,34 +777,53 @@ impl App {
                         .and_then(|form| form.tree.widget(form.root))
                         .map(|widget| widget.geometry)
                         .unwrap_or_default();
-                    let (rect, form_local) = match &value {
-                        form_xml::PropValue::Rect { x, y, w, h } => (
-                            Some(rqt::gui::QRectF::new(
-                                *x as f32, *y as f32, *w as f32, *h as f32,
-                            )),
-                            true,
-                        ),
-                        // `size` keeps the current (already absolute) position.
-                        form_xml::PropValue::Size { w, h } if property == "size" => (
-                            Some(rqt::gui::QRectF::new(
-                                current.x, current.y, *w as f32, *h as f32,
-                            )),
-                            false,
-                        ),
-                        form_xml::PropValue::Map(_) if property == "position" => {
-                            let x = value.get("x").and_then(|x| x.as_i64());
-                            let y = value.get("y").and_then(|y| y.as_i64());
-                            (
-                                Some(rqt::gui::QRectF::new(
-                                    x.map(|x| x as f32).unwrap_or(current.x),
-                                    y.map(|y| y as f32).unwrap_or(current.y),
-                                    current.width,
-                                    current.height,
-                                )),
-                                x.is_some() && y.is_some(),
+                    let centered = if property == "centered" && value.as_bool() == Some(true) {
+                        let area = self.area(layer);
+                        let viewport = area.viewport();
+                        area.subwindow(index).map(|subwindow| {
+                            let content = subwindow.content_rect();
+                            rqt::gui::QRectF::new(
+                                viewport.x + ((viewport.width - content.width) / 2.0).max(0.0),
+                                viewport.y + ((viewport.height - content.height) / 2.0).max(0.0),
+                                content.width,
+                                content.height,
                             )
+                        })
+                    } else {
+                        None
+                    };
+                    let (rect, form_local) = if let Some(centered) = centered {
+                        (Some(centered), false)
+                    } else {
+                        match &value {
+                            form_xml::PropValue::Rect { x, y, w, h } => (
+                                Some(rqt::gui::QRectF::new(
+                                    *x as f32, *y as f32, *w as f32, *h as f32,
+                                )),
+                                true,
+                            ),
+                            // `size` keeps the current (already absolute) position.
+                            form_xml::PropValue::Size { w, h } if property == "size" => (
+                                Some(rqt::gui::QRectF::new(
+                                    current.x, current.y, *w as f32, *h as f32,
+                                )),
+                                false,
+                            ),
+                            form_xml::PropValue::Map(_) if property == "position" => {
+                                let x = value.get("x").and_then(|x| x.as_i64());
+                                let y = value.get("y").and_then(|y| y.as_i64());
+                                (
+                                    Some(rqt::gui::QRectF::new(
+                                        x.map(|x| x as f32).unwrap_or(current.x),
+                                        y.map(|y| y as f32).unwrap_or(current.y),
+                                        current.width,
+                                        current.height,
+                                    )),
+                                    x.is_some() && y.is_some(),
+                                )
+                            }
+                            _ => (None, false),
                         }
-                        _ => (None, false),
                     };
                     if let Some(rect) = rect {
                         // Qt form-level geometry is relative to the window
@@ -822,9 +862,16 @@ impl App {
                     if property == "minimumSize" || property == "maximumSize" {
                         let (min, max) = self
                             .forms
-                            .get(form_id)
-                            .and_then(|form| form.tree.widget(form.root))
-                            .map(|widget| (widget.minimum_size, widget.maximum_size))
+                            .get_mut(form_id)
+                            .map(|form| {
+                                let root = form.root;
+                                let max = form
+                                    .tree
+                                    .widget(root)
+                                    .map(|widget| widget.maximum_size)
+                                    .unwrap_or_default();
+                                (form.tree.minimum_size_hint(root), max)
+                            })
                             .unwrap_or_default();
                         let area = self.area_mut(layer);
                         area.set_size_constraints(index, min, max);
@@ -1174,9 +1221,10 @@ impl App {
             rqt::gui::QSizeF::new(form_area.width, form_area.height),
         );
 
-        let (min_size, max_size) = tree
+        let min_size = tree.minimum_size_hint(root);
+        let max_size = tree
             .widget(root)
-            .map(|widget| (widget.minimum_size, widget.maximum_size))
+            .map(|widget| widget.maximum_size)
             .unwrap_or_default();
         let size_grip_disabled = matches!(
             tree.widget(root)
@@ -1303,7 +1351,12 @@ impl App {
                 };
                 if !subwindow.minimized {
                     let mut painter = rqt::gui::QPainter::new();
-                    rqt::paint::paint_widget_tree(&form.tree, form.root, &style, &mut painter);
+                    rqt::paint::paint_widget_tree_content(
+                        &form.tree,
+                        form.root,
+                        &style,
+                        &mut painter,
+                    );
                     append_paint_commands(painter.commands(), &mut batches);
                 }
                 let active = active_form.as_deref() == Some(subwindow.payload.as_str());
@@ -1319,6 +1372,22 @@ impl App {
         let mut overlay = rqt::gui::QPainter::new();
         self.shell.paint_overlay(&mut overlay, viewport);
         append_paint_commands(overlay.commands(), &mut batches);
+
+        // Combo popups are top-level in Qt: paint them after MDI/top-level
+        // chrome and shell popups so they cannot be covered by a frame.
+        for layer in [WindowLayer::Mdi, WindowLayer::Floating] {
+            for subwindow in self.area(layer).subwindows() {
+                let Some(form) = self.forms.get(&subwindow.payload) else {
+                    continue;
+                };
+                if subwindow.minimized {
+                    continue;
+                }
+                let mut painter = rqt::gui::QPainter::new();
+                rqt::paint::paint_combo_popups(&form.tree, &style, &mut painter);
+                append_paint_commands(painter.commands(), &mut batches);
+            }
+        }
         batches
     }
 
@@ -1580,6 +1649,11 @@ impl App {
         self.mdi_hover = None;
         let (layer, index) = self.find_window(form_id)?;
         let activated = self.area_mut(layer).activate(index)?;
+        for (id, form) in self.forms.iter_mut() {
+            if id != form_id {
+                form.tree.close_combo_popups();
+            }
+        }
         self.active_form = Some(form_id.to_string());
         self.focus_initial_form(form_id);
         Some(activated)
@@ -1671,6 +1745,9 @@ impl App {
                     if let Some(action) = self.shell.click(self.cursor, viewport) {
                         self.dispatch_shell_action(&action);
                     }
+                    for form in self.forms.values_mut() {
+                        form.tree.close_combo_popups();
+                    }
                     self.shell_press = true;
                     return;
                 }
@@ -1682,9 +1759,17 @@ impl App {
         self.line_select = None;
         self.caret_epoch = now_ms();
         let Some((layer, index, hit)) = self.window_hit_modal() else {
+            for form in self.forms.values_mut() {
+                form.tree.close_combo_popups();
+            }
             self.line_select = None;
             return;
         };
+        if !matches!(hit, QMdiSubWindowHit::Body) {
+            for form in self.forms.values_mut() {
+                form.tree.close_combo_popups();
+            }
+        }
         match hit {
             QMdiSubWindowHit::Title => {
                 self.commit_edit();
@@ -1754,11 +1839,10 @@ impl App {
                     return;
                 };
                 let point = rqt::gui::QPointF::new(self.cursor.0, self.cursor.1);
-                self.scroll_click = self
-                    .forms
-                    .get(&form_id)
-                    .and_then(|form| form.tree.scrollbar_at(form.root, point))
-                    .is_some();
+                self.scroll_click = self.forms.get(&form_id).is_some_and(|form| {
+                    form.tree.combo_popup_hit(point).is_none()
+                        && form.tree.scrollbar_at(form.root, point).is_some()
+                });
                 self.line_select = (class == "QLineEdit").then(|| LineSelect {
                     form_id: form_id.clone(),
                     name: name.clone(),
@@ -1937,7 +2021,12 @@ impl App {
                 let Some(form) = self.forms.get(&subwindow.payload) else {
                     continue;
                 };
-                let Some(widget) = form.tree.widget_at(form.root, point) else {
+                let widget = if let Some((popup, _)) = form.tree.combo_popup_hit(point) {
+                    Some(popup)
+                } else {
+                    form.tree.widget_at(form.root, point)
+                };
+                let Some(widget) = widget else {
                     continue;
                 };
                 let Some(widget) = form.tree.widget(widget) else {
@@ -2071,7 +2160,7 @@ impl App {
             Self::log(format!("focus {:?}", self.focused));
         }
 
-        let (protocol_event, start_cell_edit) = {
+        let (protocol_event, start_cell_edit, combo_before) = {
             let Some(form) = self.forms.get_mut(&form_id) else {
                 self.table_press = None;
                 return;
@@ -2080,6 +2169,7 @@ impl App {
                 self.table_press = None;
                 return;
             };
+            let combo_before = form.tree.combo_current_index(widget);
             let event = form.tree.mouse_release(
                 form.root,
                 rqt::gui::QPointF::new(self.cursor.0, self.cursor.1),
@@ -2103,7 +2193,7 @@ impl App {
             } else {
                 None
             };
-            (protocol_event, start_cell_edit)
+            (protocol_event, start_cell_edit, combo_before)
         };
 
         self.table_press = None;
@@ -2146,6 +2236,15 @@ impl App {
                             "value": tree.rows.get(row).map(|row| row.text.clone()).unwrap_or_default(),
                         }),
                     ))
+                }
+                "QComboBox" => {
+                    let current = form.tree.combo_current_index(widget)?;
+                    (Some(current) != combo_before).then(|| {
+                        (
+                            "CurrentIndexChanged",
+                            serde_json::json!({ "index": current }),
+                        )
+                    })
                 }
                 _ => None,
             }
@@ -2284,6 +2383,7 @@ impl App {
             | KeyEdit::Delete => {}
             KeyEdit::Commit => self.commit_edit(),
             KeyEdit::Tab => {}
+            KeyEdit::SelectAll => {}
             KeyEdit::ClearFocus => {
                 if let Some(edit) = self.editing.take() {
                     if let Some(table) = self.table_mut_for(&edit.form_id, &edit.table) {
@@ -2406,34 +2506,59 @@ impl App {
         tree.sync_bars(rqt::gui::QSizeF::new(viewport.width, body_height));
     }
 
+    /// Show/hide the off-screen field that owns the soft keyboard.
+    fn sync_web_text_input(&self) {
+        set_web_text_input_active(self.focused.is_some());
+    }
+
+    /// Apply messages from the hidden mobile field in arrival order.
+    #[cfg(target_arch = "wasm32")]
+    fn drain_web_text_input(&mut self) {
+        let events: Vec<(String, String)> =
+            WEB_TEXT_INPUT.with(|queue| queue.borrow_mut().drain(..).collect());
+        for (kind, text) in events {
+            let (action, shift) = text_input_action(&kind, &text);
+            let previous_shift = self.shift;
+            self.shift = shift;
+            self.apply_key_action(action);
+            self.shift = previous_shift;
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn drain_web_text_input(&mut self) {}
+
     /// Keyboard half of the event loop: an open cell edit first, then
     /// typing into a selected table cell, then the focused line edit.
     fn dispatch_key(&mut self, event: &winit::event::KeyEvent) {
-        if let Some(modal) = self.modal_form() {
-            if self.active_form_id().as_deref() != Some(modal) {
-                return;
-            }
-        }
         if self.ctrl {
             if let winit::keyboard::Key::Character(text) = &event.logical_key {
                 if text.eq_ignore_ascii_case("a") {
-                    if let Some((form_id, name)) = self.focused.clone() {
-                        if let Some(form) = self.forms.get_mut(&form_id) {
-                            if let Some(widget) = form.tree.find_widget(&name) {
-                                form.tree.select_all(widget);
-                                self.caret_epoch = now_ms();
-                            }
-                        }
-                    }
+                    self.apply_key_action(KeyEdit::SelectAll);
                     return;
                 }
             }
         }
         let action = key_edit(event.text.as_deref(), &event.logical_key);
+        self.apply_key_action(action);
+    }
+
+    /// Common keyboard path for native winit events and the hidden mobile
+    /// input field. The modal filter lives here so both sources obey it.
+    fn apply_key_action(&mut self, action: KeyEdit) {
+        if let Some(modal) = self.modal_form() {
+            if self.active_form_id().as_deref() != Some(modal) {
+                return;
+            }
+        }
         self.caret_epoch = now_ms();
 
         if matches!(action, KeyEdit::Tab) {
             self.tab_focus(self.shift);
+            return;
+        }
+
+        if self.combo_key(&action) {
             return;
         }
 
@@ -2541,6 +2666,20 @@ impl App {
                     }
                 }
             }
+            KeyEdit::SelectAll => {
+                let mut selected = false;
+                if let Some((form_id, name)) = self.focused.clone() {
+                    if let Some(form) = self.forms.get_mut(&form_id) {
+                        if let Some(widget) = form.tree.find_widget(&name) {
+                            form.tree.select_all(widget);
+                            selected = true;
+                        }
+                    }
+                }
+                if selected {
+                    self.caret_epoch = now_ms();
+                }
+            }
             KeyEdit::ClearFocus => {
                 if self.focused.take().is_some() {
                     Self::log("focus cleared");
@@ -2552,14 +2691,143 @@ impl App {
                     }
                 }
             }
+            KeyEdit::Commit => {
+                let Some((form_id, name)) = self.focused.clone() else {
+                    return;
+                };
+                if let Some(socket) = &self.socket {
+                    socket.send(
+                        "send_event",
+                        serde_json::json!({
+                            "command": "formEvent",
+                            "form_id": form_id,
+                            "widget_name": name,
+                            "event": "ReturnPressed",
+                        }),
+                    );
+                }
+                Self::log(format!("returnPressed {name}"));
+            }
             KeyEdit::Up
             | KeyEdit::Down
             | KeyEdit::PageUp
             | KeyEdit::PageDown
-            | KeyEdit::Commit
             | KeyEdit::Tab
             | KeyEdit::Ignore => {}
         }
+    }
+
+    /// Keyboard handling for `QComboBox`: arrows change the current item
+    /// when closed and move the popup highlight when open; Enter commits or
+    /// opens, Escape closes, Space opens (Qt behavior).
+    fn combo_key(&mut self, action: &KeyEdit) -> bool {
+        let Some(form_id) = self.active_form_id() else {
+            return false;
+        };
+        let Some((widget, name, open)) = self.forms.get(&form_id).and_then(|form| {
+            let widget = form.tree.focus_widget()?;
+            let node = form.tree.widget(widget)?;
+            (node.class_name == "QComboBox")
+                .then(|| (widget, node.object_name.clone(), node.combo_popup.is_some()))
+        }) else {
+            return false;
+        };
+        let Some(form) = self.forms.get_mut(&form_id) else {
+            return false;
+        };
+        let mut changed = None;
+        match action {
+            KeyEdit::ClearFocus if open => {
+                form.tree.close_combo_popup(widget);
+                return true;
+            }
+            KeyEdit::Commit => {
+                if open {
+                    let before = form.tree.combo_current_index(widget);
+                    form.tree.commit_combo_popup(widget);
+                    let after = form.tree.combo_current_index(widget);
+                    if after != before {
+                        changed = after;
+                    }
+                } else {
+                    form.tree.open_combo_popup(widget);
+                }
+            }
+            KeyEdit::Insert(text) if !text.is_empty() && text.trim().is_empty() && !open => {
+                form.tree.open_combo_popup(widget);
+                return true;
+            }
+            KeyEdit::Up
+            | KeyEdit::Down
+            | KeyEdit::PageUp
+            | KeyEdit::PageDown
+            | KeyEdit::Home
+            | KeyEdit::End => {
+                if open {
+                    let items = form
+                        .tree
+                        .property(widget, "items")
+                        .and_then(|value| match value {
+                            rqt::core::QVariant::List(items) => Some(items.len()),
+                            _ => None,
+                        })
+                        .unwrap_or(0);
+                    let delta = match action {
+                        KeyEdit::Up => -1,
+                        KeyEdit::Down => 1,
+                        KeyEdit::PageUp => -10,
+                        KeyEdit::PageDown => 10,
+                        KeyEdit::Home => -(items as i64),
+                        KeyEdit::End => items as i64,
+                        _ => 0,
+                    };
+                    form.tree.move_combo_highlight(widget, delta);
+                    return true;
+                }
+                let count = form
+                    .tree
+                    .property(widget, "items")
+                    .and_then(|value| match value {
+                        rqt::core::QVariant::List(items) => Some(items.len()),
+                        _ => None,
+                    })
+                    .unwrap_or(0);
+                if count == 0 {
+                    return true;
+                }
+                let current = form.tree.combo_current_index(widget).unwrap_or(0);
+                let next = match action {
+                    KeyEdit::Up => current.saturating_sub(1),
+                    KeyEdit::Down => (current + 1).min(count - 1),
+                    KeyEdit::PageUp => current.saturating_sub(10),
+                    KeyEdit::PageDown => (current + 10).min(count - 1),
+                    KeyEdit::Home => 0,
+                    KeyEdit::End => count - 1,
+                    _ => current,
+                };
+                if next != current {
+                    form.tree.select_combo_index(widget, next);
+                    changed = Some(next);
+                }
+            }
+            _ => return false,
+        }
+        if let Some(index) = changed {
+            if let Some(socket) = &self.socket {
+                socket.send(
+                    "send_event",
+                    serde_json::json!({
+                        "command": "formEvent",
+                        "form_id": form_id,
+                        "widget_name": name,
+                        "event": "CurrentIndexChanged",
+                        "index": index,
+                    }),
+                );
+            }
+            Self::log(format!("event CurrentIndexChanged -> {name}: {index}"));
+        }
+        true
     }
 
     /// Arrow/Page/Home/End navigation for the focused item view.
@@ -2670,14 +2938,28 @@ impl App {
                     return false;
                 };
                 match action {
-                    KeyEdit::Left | KeyEdit::Right => {
-                        let delta = if matches!(action, KeyEdit::Left) {
-                            -rqt::item_view::QVIEW_ROW_H
+                    KeyEdit::Left => {
+                        if tree.current_has_children() && tree.current_expanded().unwrap_or(false) {
+                            tree.set_row_expanded(current, false);
                         } else {
-                            rqt::item_view::QVIEW_ROW_H
-                        };
-                        tree.scroll_horizontal_by(delta, viewport.width);
-                        tree.hbar.set_value(tree.horizontal);
+                            tree.current_to_parent();
+                        }
+                        if let Some(row) = tree.current {
+                            tree.ensure_visible(row, body_height);
+                        }
+                        tree.sync_vertical_bar(body_height);
+                    }
+                    KeyEdit::Right => {
+                        if tree.current_has_children() && !tree.current_expanded().unwrap_or(false)
+                        {
+                            tree.set_row_expanded(current, true);
+                        } else {
+                            tree.current_to_first_child();
+                        }
+                        if let Some(row) = tree.current {
+                            tree.ensure_visible(row, body_height);
+                        }
+                        tree.sync_vertical_bar(body_height);
                     }
                     _ => {
                         tree.set_current(Some(row));
@@ -2715,6 +2997,7 @@ impl App {
         for (form_id, form) in self.forms.iter_mut() {
             if form_id != active {
                 form.tree.clear_focus();
+                form.tree.close_combo_popups();
             }
         }
         if self
@@ -2774,7 +3057,7 @@ impl App {
                     }
                 }
             }
-            "QTableWidget" | "QListWidget" | "QTreeWidget" => {
+            "QTableWidget" | "QListWidget" | "QTreeWidget" | "QComboBox" => {
                 self.focused = None;
                 self.table_focus = Some((form_id.to_string(), name.clone()));
             }
@@ -2973,6 +3256,8 @@ enum KeyEdit {
     Commit,
     /// Tab — move to the next focusable widget (Shift+Tab goes back).
     Tab,
+    /// Ctrl+A on the focused line edit.
+    SelectAll,
     ClearFocus,
     Ignore,
 }
@@ -3007,6 +3292,78 @@ fn key_edit(text: Option<&str>, key: &winit::keyboard::Key) -> KeyEdit {
             } else {
                 KeyEdit::Insert(printable)
             }
+        }
+    }
+}
+
+/// Map one message from the hidden web input field to a local action.
+/// `shift` is encoded in `text` as `"1"` for navigation keys.
+fn text_input_action(kind: &str, text: &str) -> (KeyEdit, bool) {
+    let shift = text == "1";
+    let action = match kind {
+        "insert" => KeyEdit::Insert(text.to_string()),
+        "backspace" => KeyEdit::Backspace,
+        "delete" => KeyEdit::Delete,
+        "left" => KeyEdit::Left,
+        "right" => KeyEdit::Right,
+        "up" => KeyEdit::Up,
+        "down" => KeyEdit::Down,
+        "pageUp" => KeyEdit::PageUp,
+        "pageDown" => KeyEdit::PageDown,
+        "home" => KeyEdit::Home,
+        "end" => KeyEdit::End,
+        "commit" => KeyEdit::Commit,
+        "tab" => KeyEdit::Tab,
+        "selectAll" => KeyEdit::SelectAll,
+        "clearFocus" => KeyEdit::ClearFocus,
+        _ => KeyEdit::Ignore,
+    };
+    (action, shift)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn install_web_text_input() {
+    use wasm_bindgen::{closure::Closure, JsCast, JsValue};
+
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    let callback = Closure::<dyn FnMut(String, String)>::new(|kind: String, text: String| {
+        WEB_TEXT_INPUT.with(|queue| queue.borrow_mut().push((kind, text)));
+    });
+    let _ = js_sys::Reflect::set(
+        window.as_ref(),
+        &JsValue::from_str("__epTextInput"),
+        callback.as_ref().unchecked_ref(),
+    );
+    callback.forget();
+
+    // Events typed before the wasm module finished loading are queued by JS.
+    if let Ok(flush) =
+        js_sys::Reflect::get(window.as_ref(), &JsValue::from_str("__epFlushTextQueue"))
+    {
+        if let Ok(flush) = flush.dyn_into::<js_sys::Function>() {
+            let _ = flush.call0(&JsValue::NULL);
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn set_web_text_input_active(_active: bool) {}
+
+#[cfg(target_arch = "wasm32")]
+fn set_web_text_input_active(active: bool) {
+    use wasm_bindgen::{JsCast, JsValue};
+
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    if let Ok(setter) = js_sys::Reflect::get(
+        window.as_ref(),
+        &JsValue::from_str("__epSetTextInputActive"),
+    ) {
+        if let Ok(setter) = setter.dyn_into::<js_sys::Function>() {
+            let _ = setter.call1(&JsValue::NULL, &JsValue::from_bool(active));
         }
     }
 }
@@ -3667,64 +4024,101 @@ impl App {
             self.drag_card(self.cursor.0 - last.0, self.cursor.1 - last.1);
         }
 
-        // Under mouse Enter/Leave handling (following Qt behavior)
-        // Track changes per form and generate events immediately
-        let point = rqt::gui::QPointF::new(self.cursor.0, self.cursor.1);
+        self.update_hover(Some(rqt::gui::QPointF::new(self.cursor.0, self.cursor.1)));
+    }
 
-        // Collect form_ids before iterating (since we borrow forms mutably)
+    /// Update `:hover` state and send Enter/Leave events. `None` releases
+    /// hover after the pointer leaves the canvas or a touch ends.
+    fn update_hover(&mut self, point: Option<rqt::gui::QPointF>) {
         let form_ids: Vec<String> = self.forms.keys().cloned().collect();
-
         for form_id in form_ids {
             let form = self.forms.get_mut(&form_id).expect("form exists");
-            let new_widget = form.tree.widget_at_point(point);
+            let new_widget = point.and_then(|point| form.tree.widget_at_point(point));
             let prev_widget = form.under_mouse_widget;
+            if prev_widget == new_widget {
+                continue;
+            }
 
-            // Generate Leave event if mouse left a widget
             if let Some(old) = prev_widget {
-                // Check if mouse actually left (new_widget is different or None)
-                if new_widget != Some(old) {
-                    if let Some(widget) = form.tree.widget(old) {
-                        if let Some(socket) = &self.socket {
-                            socket.send(
-                                "send_event",
-                                serde_json::json!({
-                                    "command": "formEvent",
-                                    "form_id": form_id.clone(),
-                                    "event": "Leave",
-                                    "widget_name": widget.object_name,
-                                }),
-                            );
-                        }
-                    }
+                let mut name = None;
+                if let Some(widget) = form.tree.widget_mut(old) {
+                    widget.under_mouse = false;
+                    name = Some(widget.object_name.clone());
+                }
+                if let (Some(name), Some(socket)) = (name, &self.socket) {
+                    socket.send(
+                        "send_event",
+                        serde_json::json!({
+                            "command": "formEvent",
+                            "form_id": form_id.clone(),
+                            "event": "Leave",
+                            "widget_name": name,
+                        }),
+                    );
                 }
             }
 
-            // Generate Enter event if mouse entered a new widget
             if let Some(new) = new_widget {
-                // Check if mouse actually entered (prev was different)
-                if prev_widget != new_widget {
-                    if let Some(widget) = form.tree.widget(new) {
-                        if let Some(socket) = &self.socket {
-                            socket.send(
-                                "send_event",
-                                serde_json::json!({
-                                    "command": "formEvent",
-                                    "form_id": form_id.clone(),
-                                    "event": "Enter",
-                                    "widget_name": widget.object_name,
-                                }),
-                            );
-                        }
-                    }
+                let mut name = None;
+                if let Some(widget) = form.tree.widget_mut(new) {
+                    widget.under_mouse = true;
+                    name = Some(widget.object_name.clone());
+                }
+                if let (Some(name), Some(socket)) = (name, &self.socket) {
+                    socket.send(
+                        "send_event",
+                        serde_json::json!({
+                            "command": "formEvent",
+                            "form_id": form_id.clone(),
+                            "event": "Enter",
+                            "widget_name": name,
+                        }),
+                    );
                 }
             }
 
-            // Update under_mouse_widget for this form
             form.under_mouse_widget = new_widget;
         }
     }
 
+    fn clear_hover(&mut self) {
+        self.update_hover(None);
+    }
+
+    /// Long-press context event for the widget under the active touch.
+    fn send_context_menu(&mut self) {
+        let Some((form_id, widget_name, _class)) = self.hit_test(self.cursor) else {
+            return;
+        };
+        if let Some(socket) = &self.socket {
+            socket.send(
+                "send_event",
+                serde_json::json!({
+                    "command": "formEvent",
+                    "form_id": form_id,
+                    "widget_name": widget_name,
+                    "event": "ContextMenu",
+                }),
+            );
+        }
+        Self::log(format!("context menu -> {widget_name}"));
+    }
+
     fn pointer_released(&mut self) {
+        let now = now_ms();
+        let hit = self.hit_test(self.cursor);
+        let double_tap = self
+            .last_tap
+            .as_ref()
+            .is_some_and(|(form, widget, x, y, time)| {
+                now - *time <= 350.0
+                    && (self.cursor.0 - *x).abs() <= 12.0
+                    && (self.cursor.1 - *y).abs() <= 12.0
+                    && hit
+                        .as_ref()
+                        .is_some_and(|(form_id, name, _)| form_id == form && name == widget)
+            });
+
         if self.scroll_click {
             self.scroll_click = false;
             self.left_down = false;
@@ -3740,6 +4134,22 @@ impl App {
             return;
         }
         self.dispatch_mouse_release();
+
+        if let Some((form_id, name, class)) = &hit {
+            if double_tap && class == "QLineEdit" {
+                if let Some(form) = self.forms.get_mut(form_id) {
+                    if let Some(widget) = form.tree.find_widget(name) {
+                        if let Some(rect) = form.tree.widget(widget).map(|node| node.geometry) {
+                            form.tree.select_word_at(widget, self.cursor.0 - rect.x);
+                            self.caret_epoch = now_ms();
+                        }
+                    }
+                }
+            }
+        }
+
+        self.last_tap =
+            hit.map(|(form_id, name, _)| (form_id, name, self.cursor.0, self.cursor.1, now));
     }
 }
 
@@ -3882,7 +4292,10 @@ impl ApplicationHandler for App {
         }
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
-            WindowEvent::CursorLeft { .. } => self.update_resize_cursor(None),
+            WindowEvent::CursorLeft { .. } => {
+                self.update_resize_cursor(None);
+                self.clear_hover();
+            }
             WindowEvent::Resized(size) => {
                 let (width, height) = self.physical_size(size);
                 self.last_size.set(Some((width, height)));
@@ -3948,11 +4361,71 @@ impl ApplicationHandler for App {
             WindowEvent::CursorMoved { position, .. } => self.pointer_moved(position.x, position.y),
             WindowEvent::Touch(touch) => {
                 // Phones/tablets: winit delivers touch contacts as `Touch` only,
-                // never as `CursorMoved`/`MouseInput`, so mirror the mouse path.
+                // never as `CursorMoved`/`MouseInput`. Only the first contact
+                // owns the mouse pointer; extra fingers are ignored until they
+                // are lifted (pinch/two-finger scroll is a separate task).
+                let x = touch.location.x as f32 / self.ui_scale();
+                let y = touch.location.y as f32 / self.ui_scale();
+                if let Some(index) = self
+                    .secondary_touches
+                    .iter()
+                    .position(|(id, _, _)| *id == touch.id)
+                {
+                    match touch.phase {
+                        TouchPhase::Moved => {
+                            let (_, last_x, last_y) = self.secondary_touches[index];
+                            self.secondary_touches[index] = (touch.id, x, y);
+                            let dx = x - last_x;
+                            let dy = y - last_y;
+                            if dx != 0.0 || dy != 0.0 {
+                                self.scroll_view(-dx, -dy);
+                            }
+                        }
+                        TouchPhase::Ended | TouchPhase::Cancelled => {
+                            self.secondary_touches.remove(index);
+                        }
+                        TouchPhase::Started => {}
+                    }
+                    return;
+                }
+                if let Some(primary) = self.primary_touch {
+                    if primary != touch.id {
+                        if touch.phase == TouchPhase::Started {
+                            self.secondary_touches.push((touch.id, x, y));
+                            // A second finger cancels tap/click/long-press and
+                            // switches the sequence to scrolling.
+                            self.left_down = false;
+                            self.touch_start = None;
+                            self.long_tap_sent = false;
+                            self.cancel_mouse_grabs();
+                        }
+                        return;
+                    }
+                }
                 self.pointer_moved(touch.location.x, touch.location.y);
                 match touch.phase {
-                    TouchPhase::Started => self.dispatch_mouse_press(),
-                    TouchPhase::Ended | TouchPhase::Cancelled => self.pointer_released(),
+                    TouchPhase::Started => {
+                        self.primary_touch = Some(touch.id);
+                        self.touch_start = Some((self.cursor.0, self.cursor.1, now_ms()));
+                        self.long_tap_sent = false;
+                        self.dispatch_mouse_press();
+                    }
+                    TouchPhase::Ended | TouchPhase::Cancelled => {
+                        let long_tap = self.long_tap_sent;
+                        let two_finger = !self.secondary_touches.is_empty();
+                        self.primary_touch = None;
+                        self.touch_start = None;
+                        self.long_tap_sent = false;
+                        if long_tap || two_finger {
+                            // Long press / two-finger scroll: do not turn the
+                            // release into a click.
+                            self.left_down = false;
+                            self.cancel_mouse_grabs();
+                        } else {
+                            self.pointer_released();
+                        }
+                        self.clear_hover();
+                    }
                     TouchPhase::Moved => {}
                 }
             }
@@ -3993,6 +4466,18 @@ impl ApplicationHandler for App {
     }
 
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        if let Some((x, y, started)) = self.touch_start {
+            if !self.long_tap_sent && self.primary_touch.is_some() && now_ms() - started >= 500.0 {
+                self.long_tap_sent = true;
+                self.last_tap = None;
+                self.cursor = (x, y);
+                self.send_context_menu();
+                self.cancel_mouse_grabs();
+                self.left_down = false;
+            }
+        }
+        self.sync_web_text_input();
+        self.drain_web_text_input();
         if let Some(window) = &self.window {
             window.request_redraw();
         }
@@ -4009,6 +4494,7 @@ fn run(params: Params) {
 #[wasm_bindgen::prelude::wasm_bindgen(start)]
 pub fn wasm_start() {
     console_error_panic_hook::set_once();
+    install_web_text_input();
     run(Params::from_location());
 }
 
@@ -4021,8 +4507,8 @@ pub fn run_native(params: Params) {
 mod tests {
     use super::{
         append_paint_commands, base64_encode, cursor_icon_for_hit, gfx, icon_url, key_edit, now_ms,
-        png_data_url, resized_frame, shell, App, AppChrome, AppChromeAction, KeyEdit, Params,
-        QtForm, WindowLayer, QMDI_TITLE_H,
+        png_data_url, resized_frame, shell, text_input_action, App, AppChrome, AppChromeAction,
+        KeyEdit, Params, QtForm, WindowLayer, QMDI_TITLE_H,
     };
     use rqt::core::QVariant;
     use rqt::gui::QRectF;
@@ -4376,6 +4862,43 @@ mod tests {
     }
 
     #[test]
+    fn centered_form_property_centers_in_mdi_viewport() {
+        use serde_json::json;
+
+        let xml = r#"<ui version="4.0"><class>Dialog</class>
+            <widget class="QDialog" name="Dialog">
+              <property name="geometry"><rect><x>7</x><y>9</y><width>300</width><height>200</height></rect></property>
+            </widget></ui>"#;
+        let mut app = App::new(Params {
+            full: true,
+            main_lua: Some("main.lua".into()),
+            ..Params::default()
+        });
+        app.mdi.set_viewport(QRectF::new(10.0, 20.0, 800.0, 600.0));
+        app.on_command(&json!({
+            "command": "createForm",
+            "form_id": "f",
+            "mode": "full",
+            "placement": "mdi",
+            "ui_xml": xml,
+        }));
+        app.on_command(&json!({
+            "command": "setFormProperty",
+            "form_id": "f",
+            "property": "centered",
+            "value": true,
+        }));
+        let index = app.mdi.index_of(|payload| payload == "f").unwrap();
+        let content = app.mdi.subwindow(index).unwrap().content_rect();
+        let viewport = app.mdi.viewport();
+        let dx = (content.x + content.width / 2.0) - (viewport.x + viewport.width / 2.0);
+        let dy = (content.y + content.height / 2.0) - (viewport.y + viewport.height / 2.0);
+        assert!(dx.abs() <= 0.5, "x off by {dx}");
+        assert!(dy.abs() <= 0.5, "y off by {dy}");
+        assert_eq!(content.size(), rqt::gui::QSizeF::new(300.0, 200.0));
+    }
+
+    #[test]
     fn load_main_window_command_applies_static_shell() {
         use serde_json::json;
 
@@ -4480,6 +5003,74 @@ mod tests {
                 .size(),
             rqt::gui::QSizeF::new(300.0, 220.0)
         );
+    }
+
+    #[test]
+    fn shrinking_form_stops_at_root_layout_minimum() {
+        use serde_json::json;
+
+        let xml = r#"<ui version="4.0"><class>OverflowDialog</class>
+            <widget class="QDialog" name="OverflowDialog">
+              <property name="geometry"><rect><x>0</x><y>0</y><width>360</width><height>240</height></rect></property>
+              <property name="minimumSize"><size><width>80</width><height>64</height></size></property>
+              <layout class="QVBoxLayout" name="verticalLayout">
+                <item><widget class="QPushButton" name="first">
+                  <property name="text"><string>First</string></property>
+                  <property name="minimumSize"><size><width>80</width><height>50</height></size></property>
+                </widget></item>
+                <item><widget class="QPushButton" name="second">
+                  <property name="text"><string>Second</string></property>
+                  <property name="minimumSize"><size><width>80</width><height>50</height></size></property>
+                </widget></item>
+              </layout>
+            </widget></ui>"#;
+        let mut app = App::new(Params::default());
+        app.on_command(&json!({
+            "command": "createForm",
+            "form_id": "overflow",
+            "ui_xml": xml,
+            "modal": false
+        }));
+        let index = app
+            .mdi
+            .index_of(|payload| payload == "overflow")
+            .expect("subwindow");
+        let expected = {
+            let form = app.forms.get_mut("overflow").unwrap();
+            let root = form.root;
+            form.tree.minimum_size_hint(root)
+        };
+        assert_eq!(expected, rqt::gui::QSizeF::new(102.0, 128.0));
+
+        // Ask for less than the layout needs: the frame must stop at the
+        // layout minimum instead of letting the button row escape.
+        app.on_command(&json!({
+            "command": "setFormProperty",
+            "form_id": "overflow",
+            "property": "size",
+            "value": { "w": 80, "h": 64 }
+        }));
+        let content = app.mdi.subwindow(index).unwrap().content_rect();
+        assert_eq!(content.size(), expected);
+
+        let second_rect = {
+            let form = &app.forms["overflow"];
+            let second = form.tree.find_widget("second").expect("second");
+            form.tree.widget(second).unwrap().geometry
+        };
+        assert!(content.contains(second_rect.top_left()));
+        assert!(content.contains(rqt::gui::QPointF::new(
+            second_rect.right() - 0.5,
+            second_rect.bottom() - 0.5
+        )));
+
+        let point = rqt::gui::QPointF::new(second_rect.x + 5.0, second_rect.y + 5.0);
+        let hit = app.hit_test((point.x, point.y)).expect("button hit");
+        assert_eq!(hit.1, "second");
+
+        // Below the content rect there is no form child to hit.
+        let outside = rqt::gui::QPointF::new(content.x + 5.0, content.bottom() + 2.0);
+        assert_eq!(app.hit_test((outside.x, outside.y)), None);
     }
 
     #[test]
@@ -5074,7 +5665,98 @@ mod tests {
 
     const TAB_UI: &str = r#"<ui version="4.0"><class>Dialog</class><widget class="QDialog" name="Dialog"><property name="geometry"><rect><x>0</x><y>0</y><width>300</width><height>200</height></rect></property><layout class="QVBoxLayout" name="l"><item><widget class="QLineEdit" name="lineEdit_1"/></item><item><widget class="QLineEdit" name="lineEdit_2"/></item><item><widget class="QPushButton" name="pushButton_1"><property name="text"><string>OK</string></property></widget></item></layout></widget></ui>"#;
     const TABLE_TAB_UI: &str = r#"<ui version="4.0"><class>Dialog</class><widget class="QDialog" name="Dialog"><property name="geometry"><rect><x>0</x><y>0</y><width>300</width><height>200</height></rect></property><layout class="QVBoxLayout" name="l"><item><widget class="QTableWidget" name="table"><property name="rowCount"><number>2</number></property><property name="columnCount"><number>2</number></property></widget></item><item><widget class="QPushButton" name="pushButton_1"><property name="text"><string>OK</string></property></widget></item></layout></widget></ui>"#;
+    const TREE_KEY_UI: &str = r#"<ui version="4.0"><class>Dialog</class><widget class="QDialog" name="Dialog"><property name="geometry"><rect><x>0</x><y>0</y><width>320</width><height>220</height></rect></property><layout class="QVBoxLayout" name="l"><item><widget class="QTreeWidget" name="tree"><column><property name="text"><string>Name</string></property></column></widget></item></layout></widget></ui>"#;
+    const COMBO_UI: &str = r#"<ui version="4.0"><class>Dialog</class><widget class="QDialog" name="Dialog"><property name="geometry"><rect><x>0</x><y>0</y><width>300</width><height>120</height></rect></property><layout class="QVBoxLayout" name="l"><item><widget class="QComboBox" name="combo"/></item></layout></widget></ui>"#;
     const LIST_TREE_TAB_UI: &str = r#"<ui version="4.0"><class>Dialog</class><widget class="QDialog" name="Dialog"><property name="geometry"><rect><x>0</x><y>0</y><width>300</width><height>240</height></rect></property><layout class="QVBoxLayout" name="l"><item><widget class="QListWidget" name="listWidget"/></item><item><widget class="QTreeWidget" name="treeWidget"><column><property name="text"><string>1</string></property></column></widget></item><item><widget class="QPushButton" name="pushButton_1"><property name="text"><string>OK</string></property></widget></item></layout></widget></ui>"#;
+
+    #[test]
+    fn tree_left_and_right_collapse_expand_and_move_to_parent() {
+        let mut app = App::new(Params::default());
+        app.on_create_form(&serde_json::json!({
+            "form_id": "f",
+            "ui_xml": TREE_KEY_UI,
+        }));
+        app.on_command(&serde_json::json!({
+            "command": "setProperty",
+            "form_id": "f",
+            "object_name": "tree",
+            "property": "data",
+            "value": [{
+                "text": "Root",
+                "children": [{ "text": "Child" }],
+            }],
+        }));
+        let tree = app
+            .forms
+            .get("f")
+            .unwrap()
+            .tree
+            .find_widget("tree")
+            .unwrap();
+        app.forms.get_mut("f").unwrap().tree.set_focus(tree);
+        app.sync_focus("f", tree, false);
+        assert_eq!(app.forms["f"].tree.tree(tree).unwrap().row_count(), 1);
+        assert!(app.navigate_view(&KeyEdit::Right));
+        assert_eq!(app.forms["f"].tree.tree(tree).unwrap().row_count(), 2);
+        assert!(app.forms["f"]
+            .tree
+            .tree(tree)
+            .unwrap()
+            .current_expanded()
+            .unwrap());
+        assert!(app.navigate_view(&KeyEdit::Down));
+        assert_eq!(app.forms["f"].tree.tree(tree).unwrap().current, Some(1));
+        assert!(app.navigate_view(&KeyEdit::Left));
+        assert_eq!(app.forms["f"].tree.tree(tree).unwrap().current, Some(0));
+        assert_eq!(
+            app.forms["f"].tree.tree(tree).unwrap().current_text(),
+            rqt::core::QVariant::String("Root".into())
+        );
+        assert!(app.navigate_view(&KeyEdit::Left));
+        assert!(!app.forms["f"]
+            .tree
+            .tree(tree)
+            .unwrap()
+            .current_expanded()
+            .unwrap());
+    }
+
+    #[test]
+    fn combo_keyboard_navigates_and_popup_commits_current_index() {
+        let mut app = App::new(Params::default());
+        app.on_create_form(&serde_json::json!({
+            "form_id": "f",
+            "ui_xml": COMBO_UI,
+        }));
+        app.on_command(&serde_json::json!({
+            "command": "setProperty",
+            "form_id": "f",
+            "object_name": "combo",
+            "property": "items",
+            "value": ["one", "two", "three"],
+        }));
+        let form = app.forms.get_mut("f").unwrap();
+        let combo = form.tree.find_widget("combo").unwrap();
+        form.tree.set_focus(combo);
+        app.sync_focus("f", combo, false);
+        assert_eq!(app.table_focus, Some(("f".into(), "combo".into())));
+
+        assert!(app.combo_key(&KeyEdit::Down));
+        assert_eq!(app.forms["f"].tree.combo_current_index(combo), Some(1));
+        assert!(app.combo_key(&KeyEdit::Commit));
+        assert!(app.forms["f"].tree.combo_popup_open(combo));
+        assert!(app.combo_key(&KeyEdit::Down));
+        assert_eq!(app.forms["f"].tree.combo_popup_highlight(combo), Some(2));
+        assert!(app.combo_key(&KeyEdit::Commit));
+        assert_eq!(app.forms["f"].tree.combo_current_index(combo), Some(2));
+        assert!(!app.forms["f"].tree.combo_popup_open(combo));
+        assert!(app.combo_key(&KeyEdit::Home));
+        assert_eq!(app.forms["f"].tree.combo_current_index(combo), Some(0));
+        assert!(app.combo_key(&KeyEdit::Insert(" ".into())));
+        assert!(app.forms["f"].tree.combo_popup_open(combo));
+        assert!(app.combo_key(&KeyEdit::ClearFocus));
+        assert!(!app.forms["f"].tree.combo_popup_open(combo));
+    }
 
     #[test]
     fn create_form_focuses_first_focusable_widget() {
@@ -5331,6 +6013,27 @@ mod tests {
     }
 
     #[test]
+    fn clear_hover_clears_qss_hover_state_and_enter_target() {
+        let mut app = App::new(Params::default());
+        add_form(&mut app, "f", TAB_UI);
+        let edit = app.forms["f"].tree.find_widget("lineEdit_1").unwrap();
+        app.forms
+            .get_mut("f")
+            .unwrap()
+            .tree
+            .widget_mut(edit)
+            .unwrap()
+            .under_mouse = true;
+        app.forms.get_mut("f").unwrap().under_mouse_widget = Some(edit);
+
+        app.clear_hover();
+
+        let form = &app.forms["f"];
+        assert!(!form.tree.widget(edit).unwrap().under_mouse);
+        assert_eq!(form.under_mouse_widget, None);
+    }
+
+    #[test]
     fn printable_text_is_inserted() {
         assert_eq!(
             key_edit(Some("abc"), &Key::Character("abc".into())),
@@ -5376,6 +6079,30 @@ mod tests {
         assert_eq!(
             key_edit(None, &Key::Named(NamedKey::Shift)),
             KeyEdit::Ignore
+        );
+    }
+
+    #[test]
+    fn web_text_input_maps_semantic_actions() {
+        assert_eq!(
+            text_input_action("insert", "Привет"),
+            (KeyEdit::Insert("Привет".into()), false)
+        );
+        assert_eq!(
+            text_input_action("backspace", ""),
+            (KeyEdit::Backspace, false)
+        );
+        assert_eq!(text_input_action("left", "1"), (KeyEdit::Left, true));
+        assert_eq!(text_input_action("right", ""), (KeyEdit::Right, false));
+        assert_eq!(text_input_action("home", "1"), (KeyEdit::Home, true));
+        assert_eq!(text_input_action("tab", "1"), (KeyEdit::Tab, true));
+        assert_eq!(
+            text_input_action("selectAll", ""),
+            (KeyEdit::SelectAll, false)
+        );
+        assert_eq!(
+            text_input_action("clearFocus", ""),
+            (KeyEdit::ClearFocus, false)
         );
     }
 }

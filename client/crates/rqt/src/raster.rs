@@ -1005,6 +1005,15 @@ mod tests {
     }
 
     #[test]
+    fn box_buttons_raster_compared_to_qt6() {
+        compare_grid_raster_with_qt6(
+            include_str!("../tests/fixtures/box_buttons.ui"),
+            include_bytes!("../tests/fixtures/qt6_box_buttons.png"),
+            "box_buttons",
+        );
+    }
+
+    #[test]
     fn rasterizes_text_pixels() {
         let image = rasterize(
             &[QPaintCommand::DrawText {

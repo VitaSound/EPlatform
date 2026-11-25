@@ -1,13 +1,15 @@
-# EPlatform — статус волны 0: события и layout-ы
+# EPlatform — статус проекта
 
 Актуализировано: 2026-11-25 по коду и прогонам тестов.
-План: `widgets-plan.md`; открытые решения: `questions.md`.
+Активный план: `widgets-plan.md` (волна 0.17).
+Архив закрытых планов: `docs/archive/completed-plans/`.
+Открытые решения: `questions.md`.
 
 ## Baseline
 
 ```
-cargo test --workspace   → 168 passed; 0 failed; 1 ignored
-  app 47 (1 ignored) · form-xml 13 · rqt 108
+cargo test --workspace   → 199 passed; 0 failed; 1 ignored
+  app 53 (1 ignored) · form-xml 13 · rqt 133
 mix test (server/)       → 30 passed; 0 failed
 ```
 
@@ -52,10 +54,9 @@ mix test (server/)       → 30 passed; 0 failed
   Браузер (WSLg-Chromium :9222): `?lua=test_grid.lua&ui=test_grid.ui` —
   сетка, вложенный hbox, span-таблица, spacer, ввод в ячейку,
   hit-test Reset/Close.
-- **Известный дефект (вне 0.12):** `QBoxLayout` отдаёт избыток места в
-  зазоры вместо роста виджетов с политикой `Minimum`/`Preferred`
-  (ряд кнопок без spacer-а). Grid уже считает по Qt-алгоритму;
-  box — следующий отдельный шаг (см. TODO в `widgets-plan.md`).
+- **`QBoxLayout`** — ✅ закрыто отдельным шагом: избыток делится между
+  growers по `qGeomCalc`, golden `box_buttons.ui`. Детали — в архиве
+  `docs/archive/completed-plans/widgets-plan-0.0-0.16.md`.
 
 ### 0.13.1–0.13.3 QFormLayout — ✅ сделано (2026-11-25)
 
@@ -108,12 +109,47 @@ mix test (server/)       → 30 passed; 0 failed
 | QGridLayout деградирует в vbox | в hbox |
 | QFormLayout деградирует в vbox | было да; закрыто в 0.13.2 |
 
-### Осталось
+### Волна 0.16: combo popup, tree expand, splitter, QSS — ✅
 
-1. **Box-layout рост:** `QBoxLayout` должен делить избыток между
-   виджетами с `maximumSize > hint` (как `qGeomCalc`), а не только
-   отдавать его в зазоры; отдельный шаг с golden-тестом.
-2. Дальнейшие layout-фронты — вне волны 0.14.
+Ранее вынесенные за волну 0 пункты закрыты:
+
+| Пункт | Что сделано |
+|---|---|
+| popup `QComboBox` | transient popup state, геометрия под/над combo, hit-test, выбор мышью и клавиатурой, `CurrentIndexChanged`; отдельный слой paint после рамок окон |
+| collapse/expand `QTreeWidget` | `expanded` у item (default `false`, как Qt), flatten видимых строк, branch-треугольники, click по индикатору, Left/Right в приложении |
+| `QSplitter` | horizontal/vertical, `handleWidth` 4, пропорции от hint, min панелей, drag ручки, Qt6 golden `splitter_h`/`splitter_v` (1 px) |
+| QSS сверх подмножества | named/`rgb()`/`rgba()`/`#ARGB`/`#AARRGGBB` цвета, `[prop="value"]`, `:pressed`/`:default`/`:open`/`:!state`, per-side `border-*`, `border-style`, `font`, `font-family`, `font-style`, `text-align` |
+
+Тесты: combo popup, tree collapse/current/keyboard, splitter Qt6
+geometry + drag/min, QSS parser/selector. Итог: `cargo test --workspace`
+— 189 passed, 1 ignored; wasm-check проходит.
+
+### Волна 0.17.1–0.17.4: мобильный ввод, QSS v2, API, review — ✅
+
+| Пункт | Что сделано |
+|---|---|
+| мобильный ввод | off-screen `<textarea>`, IME/composition, Backspace/Tab/Ctrl+A/Enter, hidden-фокус синхронизирован с `QLineEdit`; `keydown` в capture-фазе блокирует winit (нет двойной вставки) |
+| touch-сценарии | hover reset после touch, long tap → `ContextMenu`, double tap → слово в `QLineEdit`, multi-touch и two-finger scroll, pinch отложен |
+| QSS box model | `margin`/`padding` + per-side, frame/content rect, группа `QGroupBox { margin-top }` |
+| QSS градиенты | `qlineargradient(...)` (вертикально по крайним стопам), `background-image`; `border-image`/`url()` отложены |
+| QSS item-view | `QTreeWidget::item`/`QListWidget::item`/`QTableWidget::item`, `QHeaderView::section`, `QComboBox QAbstractItemView` |
+| API | `Form:center` (`centered`), `QSplitter.sizes`, `QTreeWidget.expandAll/collapseAll` |
+| review | `scripts/review.sh`: `qss/52_checks` 4.88 → 4.07, `qss/55_disabled` 11.44 → 4.41; браузерный QSS-скриншот |
+
+Тесты: `cargo test --workspace` — 199 passed, 1 ignored; wasm-check и
+`cargo fmt --check` зелёные. Браузер: touch-тап, IME «тест», Backspace,
+Tab, Ctrl+A, double tap, long tap, QSS-форма.
+
+## Осталось
+
+1. **Review-комментарии:** `client/review/comments.md` заполняет
+   пользователь; после этого — пачка правок вёрстки.
+2. **B6/B7:** `tableLayout`/`groupedHeader` и слой данных — ждут решения
+   пользователя.
+3. **`border-image`/QSS `url(...)`:** нужен asset pipeline для картинок.
+4. **Pinch-zoom:** нужна модель масштаба сцены; два пальца уже scroll.
+5. **Новые виджеты** (`QTabWidget`, `QSpinBox`, `QSlider`,
+   `QProgressBar`, `QTextEdit`) — только когда появятся в формах.
 
 ### Попутно исправлено
 

@@ -3,7 +3,9 @@ use crate::gui::{QFont, QFontMetrics, QMargins, QPalette, QPixmap, QPointF, QRec
 use crate::item_model::{QEditTrigger, QSelectionMode, QTableWidget};
 use crate::item_view::{QListWidget, QTreeWidget, QVIEW_HEADER_H};
 use crate::qss::QStyleSheet;
-use crate::scroll::{QScrollAreaLayout, QScrollBar, QScrollBarPolicy, QScrollBarSubControl};
+use crate::scroll::{
+    QOrientation, QScrollAreaLayout, QScrollBar, QScrollBarPolicy, QScrollBarSubControl,
+};
 
 pub type QWidgetId = usize;
 
@@ -176,6 +178,55 @@ impl QLayout {
     }
 }
 
+/// `QSplitter` state. Pane sizes are kept in pixels so a handle drag and a
+/// later window resize (which scales the ratios) behave like Qt.
+#[derive(Clone, Debug)]
+pub struct QSplitter {
+    pub orientation: QOrientation,
+    pub handle_width: f32,
+    pub sizes: Vec<f32>,
+}
+
+impl QSplitter {
+    pub fn new() -> Self {
+        Self {
+            orientation: QOrientation::Horizontal,
+            handle_width: 4.0,
+            sizes: Vec::new(),
+        }
+    }
+
+    pub fn is_horizontal(&self) -> bool {
+        self.orientation == QOrientation::Horizontal
+    }
+}
+
+impl Default for QSplitter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// `QComboBox` popup view state. Item strings live in the `items` property
+/// (the same source the closed combo paints); only the transient open state
+/// is kept here, like `QComboBoxPrivateContainer` in Qt.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct QComboBoxPopup {
+    pub highlight: usize,
+    pub scroll: usize,
+}
+
+/// Height of one popup row in Fusion. Qt's `QComboBox` view returns 24 px for
+/// the default 14 px DejaVu Sans font (`QListView::sizeHintForRow`).
+pub const QCOMBO_POPUP_ROW_H: f32 = 24.0;
+
+#[derive(Clone, Debug)]
+struct QSplitterDrag {
+    widget: QWidgetId,
+    handle: usize,
+    last: f32,
+}
+
 #[derive(Clone, Debug)]
 pub struct QWidget {
     pub class_name: String,
@@ -215,6 +266,8 @@ pub struct QWidget {
     pub table: Option<Box<QTableWidget>>,
     pub list: Option<Box<QListWidget>>,
     pub tree: Option<Box<QTreeWidget>>,
+    pub splitter: Option<Box<QSplitter>>,
+    pub combo_popup: Option<QComboBoxPopup>,
 }
 
 impl QWidget {
@@ -231,6 +284,11 @@ impl QWidget {
         };
         let tree = if class_name == "QTreeWidget" {
             Some(Box::new(QTreeWidget::new()))
+        } else {
+            None
+        };
+        let splitter = if class_name == "QSplitter" {
+            Some(Box::new(QSplitter::new()))
         } else {
             None
         };
@@ -274,6 +332,8 @@ impl QWidget {
             table,
             list,
             tree,
+            splitter,
+            combo_popup: None,
         }
     }
 
@@ -341,10 +401,45 @@ impl QWidget {
             ),
             "QTableWidget" => QSizeF::new(256.0, 192.0),
             "QListWidget" | "QTreeWidget" => QSizeF::new(256.0, 192.0),
+            "QSplitter" => QSizeF::new(256.0, 192.0),
             "QGroupBox" => QSizeF::new(text_width + 16.0, font_height + 16.0),
             _ => QSizeF::new(100.0, font_height + 8.0),
         }
     }
+}
+
+fn variant_text(value: &QVariant) -> Option<String> {
+    match value {
+        QVariant::String(text) | QVariant::Enum(text) => Some(text.clone()),
+        QVariant::Int(value) => Some(value.to_string()),
+        QVariant::Double(value) => Some(value.to_string()),
+        _ => None,
+    }
+}
+
+fn value_as_i64(value: &QVariant) -> Option<i64> {
+    match value {
+        QVariant::Int(value) => Some(*value),
+        QVariant::Double(value) => Some(*value as i64),
+        QVariant::String(text) | QVariant::Enum(text) => text.parse().ok(),
+        _ => None,
+    }
+}
+
+fn combo_items(widget: &QWidget) -> Vec<String> {
+    match widget.property("items") {
+        Some(QVariant::List(items)) => items.iter().filter_map(variant_text).collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn combo_visible_rows(widget: &QWidget, count: usize) -> usize {
+    let max_visible = widget
+        .property("maxVisibleItems")
+        .and_then(value_as_i64)
+        .unwrap_or(10)
+        .max(1) as usize;
+    count.min(max_visible).max(1)
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -359,6 +454,7 @@ pub struct QWidgetTree {
     widgets: Vec<QWidget>,
     mouse_grab: Option<QWidgetId>,
     scroll_drag: Option<QScrollDrag>,
+    splitter_drag: Option<QSplitterDrag>,
 }
 
 impl QWidgetTree {
@@ -417,6 +513,10 @@ impl QWidgetTree {
 
     pub fn widget_mut(&mut self, id: QWidgetId) -> Option<&mut QWidget> {
         self.widgets.get_mut(id)
+    }
+
+    pub fn iter_widgets(&self) -> impl Iterator<Item = (QWidgetId, &QWidget)> {
+        self.widgets.iter().enumerate()
     }
 
     pub fn set_property(
@@ -535,6 +635,45 @@ impl QWidgetTree {
                 _ => None,
             };
         }
+        if widget.class_name == "QSplitter" {
+            let Some(splitter) = widget.splitter.as_mut() else {
+                return false;
+            };
+            if name == "orientation" {
+                let text = variant_text(&value).unwrap_or_default();
+                splitter.orientation = if text.to_ascii_lowercase().contains("vertical") {
+                    QOrientation::Vertical
+                } else if text.to_ascii_lowercase().contains("horizontal") {
+                    QOrientation::Horizontal
+                } else {
+                    splitter.orientation
+                };
+                splitter.sizes.clear();
+            } else if name == "handleWidth" {
+                if let Some(width) = value_as_i64(&value) {
+                    splitter.handle_width = (width as f32).max(0.0);
+                    splitter.sizes.clear();
+                }
+            } else if name == "sizes" {
+                if let QVariant::List(items) = &value {
+                    splitter.sizes = items
+                        .iter()
+                        .filter_map(value_as_i64)
+                        .map(|size| (size as f32).max(0.0))
+                        .collect();
+                }
+            }
+        }
+        if widget.class_name == "QComboBox" && name == "text" {
+            // `setCurrentText` style updates are represented by `text`; keep
+            // the current index in sync with the item list when possible.
+            if let Some(text) = value.as_str() {
+                let items = combo_items(widget);
+                if let Some(index) = items.iter().position(|item| item == text) {
+                    widget.set_property("currentIndex", QVariant::Int(index as i64));
+                }
+            }
+        }
         if widget.class_name == "QLineEdit" && name == "text" {
             let length = match &value {
                 QVariant::String(text) | QVariant::Enum(text) => text.chars().count(),
@@ -545,7 +684,34 @@ impl QWidgetTree {
             widget.selection_anchor = None;
             widget.cursor_visible = true;
         }
+        let property_name = name.clone();
         widget.set_property(name, value);
+        if widget.class_name == "QComboBox" {
+            if matches!(
+                property_name.as_str(),
+                "items" | "currentIndex" | "maxVisibleItems" | "enabled" | "visible"
+            ) {
+                let items = combo_items(widget);
+                if items.is_empty() || !widget.visible || !widget.enabled {
+                    widget.combo_popup = None;
+                } else {
+                    let current = widget
+                        .property("currentIndex")
+                        .and_then(|value| value_as_i64(value))
+                        .unwrap_or(0)
+                        .max(0) as usize;
+                    let visible = combo_visible_rows(widget, items.len());
+                    if let Some(popup) = widget.combo_popup.as_mut() {
+                        popup.highlight = popup.highlight.min(items.len() - 1);
+                        popup.scroll = popup
+                            .scroll
+                            .min(current.saturating_sub(visible.saturating_sub(1)))
+                            .min(items.len() - visible);
+                        popup.highlight = popup.highlight.max(popup.scroll);
+                    }
+                }
+            }
+        }
         !is_item_view || handled
     }
 
@@ -774,6 +940,55 @@ impl QWidgetTree {
         true
     }
 
+    /// Select the word under `local_x` (double tap/click in a line edit).
+    /// Word characters follow Qt closely enough for UI text: Unicode
+    /// alphanumerics plus `_`; punctuation/whitespace selects one character.
+    pub fn select_word_at(&mut self, widget: QWidgetId, local_x: f32) -> bool {
+        if self
+            .widgets
+            .get(widget)
+            .map(|node| node.class_name.as_str())
+            != Some("QLineEdit")
+        {
+            return false;
+        }
+        let Some(position) = self.cursor_at_x(widget, local_x) else {
+            return false;
+        };
+        let text: Vec<char> = self.text(widget).unwrap_or_default().chars().collect();
+        if text.is_empty() {
+            return false;
+        }
+        let word = |ch: char| ch.is_alphanumeric() || ch == '_';
+        let (start, end) = if position < text.len() && word(text[position]) {
+            let mut start = position;
+            while start > 0 && word(text[start - 1]) {
+                start -= 1;
+            }
+            let mut end = position;
+            while end < text.len() && word(text[end]) {
+                end += 1;
+            }
+            (start, end)
+        } else if position > 0 && word(text[position - 1]) {
+            let mut start = position - 1;
+            while start > 0 && word(text[start - 1]) {
+                start -= 1;
+            }
+            (start, position)
+        } else {
+            let start = position.min(text.len().saturating_sub(1));
+            (start, (start + 1).min(text.len()))
+        };
+        let Some(node) = self.widgets.get_mut(widget) else {
+            return false;
+        };
+        node.selection_anchor = Some(start);
+        node.cursor_position = end;
+        node.cursor_visible = true;
+        true
+    }
+
     pub fn clear_line_edit_selection(&mut self, widget: QWidgetId) -> bool {
         let Some(node) = self.widgets.get_mut(widget) else {
             return false;
@@ -877,6 +1092,488 @@ impl QWidgetTree {
 
     pub fn tree_mut(&mut self, id: QWidgetId) -> Option<&mut QTreeWidget> {
         self.widgets.get_mut(id)?.tree.as_deref_mut()
+    }
+
+    fn root_of(&self, widget: QWidgetId) -> Option<QWidgetId> {
+        let mut current = Some(widget);
+        let mut root = None;
+        while let Some(id) = current {
+            root = Some(id);
+            current = self.widgets.get(id).and_then(|node| node.parent);
+        }
+        root
+    }
+
+    /// Popup rectangle in form coordinates, mirroring the way Qt places the
+    /// combo container: at least as wide as the combo, below it when there is
+    /// room, otherwise above, and clamped inside the form.
+    pub fn combo_popup_rect(&self, widget: QWidgetId) -> Option<QRectF> {
+        let node = self.widgets.get(widget)?;
+        if node.class_name != "QComboBox" || node.combo_popup.is_none() {
+            return None;
+        }
+        let items = combo_items(node);
+        if items.is_empty() {
+            return None;
+        }
+        let metrics = QFontMetrics::new(&node.font);
+        let visible = combo_visible_rows(node, items.len());
+        let content_width = items
+            .iter()
+            .map(|item| metrics.horizontal_advance(item))
+            .fold(0.0_f32, f32::max)
+            + 10.0;
+        let root = self.root_of(widget)?;
+        let root_rect = self.widgets.get(root)?.geometry;
+        let width = node
+            .geometry
+            .width
+            .max(content_width)
+            .min(root_rect.width.max(node.geometry.width));
+        let height = (visible as f32 * QCOMBO_POPUP_ROW_H + 2.0).min(root_rect.height.max(1.0));
+        let mut x = node.geometry.x;
+        let mut y = node.geometry.bottom();
+        if y + height > root_rect.bottom() {
+            let above = node.geometry.y - height;
+            y = if above >= root_rect.y {
+                above
+            } else {
+                (root_rect.bottom() - height).max(root_rect.y)
+            };
+        }
+        x = x.min(root_rect.right() - width).max(root_rect.x);
+        Some(QRectF::new(x, y, width, height))
+    }
+
+    pub fn combo_popup_widget(&self) -> Option<QWidgetId> {
+        self.widgets
+            .iter()
+            .position(|widget| widget.combo_popup.is_some())
+    }
+
+    /// Hit-test an open popup. `Some((combo, Some(row)))` is an item hit;
+    /// `Some((combo, None))` is the popup frame (a click that only dismisses
+    /// the popup must not fall through to the widget below).
+    pub fn combo_popup_hit(&self, point: QPointF) -> Option<(QWidgetId, Option<usize>)> {
+        for (id, widget) in self.widgets.iter().enumerate().rev() {
+            if widget.combo_popup.is_none() {
+                continue;
+            }
+            let rect = self.combo_popup_rect(id)?;
+            if !rect.contains(point) {
+                continue;
+            }
+            let popup = widget.combo_popup.as_ref()?;
+            let items = combo_items(widget);
+            let row = ((point.y - rect.y - 1.0) / QCOMBO_POPUP_ROW_H).floor();
+            let row = if row < 0.0 {
+                None
+            } else {
+                let index = popup.scroll + row as usize;
+                (index < items.len()).then_some(index)
+            };
+            return Some((id, row));
+        }
+        None
+    }
+
+    pub fn combo_popup_open(&self, widget: QWidgetId) -> bool {
+        self.widgets
+            .get(widget)
+            .is_some_and(|node| node.combo_popup.is_some())
+    }
+
+    pub fn open_combo_popup(&mut self, widget: QWidgetId) -> bool {
+        let Some(node) = self.widgets.get_mut(widget) else {
+            return false;
+        };
+        if node.class_name != "QComboBox" || !node.enabled || !node.visible {
+            return false;
+        }
+        let items = combo_items(node);
+        if items.is_empty() {
+            return false;
+        }
+        let current = node
+            .property("currentIndex")
+            .and_then(value_as_i64)
+            .unwrap_or(0)
+            .clamp(0, items.len() as i64 - 1) as usize;
+        let visible = combo_visible_rows(node, items.len());
+        node.combo_popup = Some(QComboBoxPopup {
+            highlight: current,
+            scroll: current.saturating_sub(visible.saturating_sub(1)),
+        });
+        true
+    }
+
+    pub fn close_combo_popup(&mut self, widget: QWidgetId) {
+        if let Some(node) = self.widgets.get_mut(widget) {
+            node.combo_popup = None;
+        }
+    }
+
+    pub fn close_combo_popups(&mut self) {
+        for widget in &mut self.widgets {
+            widget.combo_popup = None;
+        }
+    }
+
+    pub fn combo_current_index(&self, widget: QWidgetId) -> Option<usize> {
+        let node = self.widgets.get(widget)?;
+        let items = combo_items(node);
+        if items.is_empty() {
+            return None;
+        }
+        Some(
+            node.property("currentIndex")
+                .and_then(value_as_i64)
+                .unwrap_or(0)
+                .clamp(0, items.len() as i64 - 1) as usize,
+        )
+    }
+
+    /// Set `currentIndex` and close the popup, like selecting an item in the
+    /// QComboBox popup. Returns `true` when the index changed.
+    pub fn select_combo_index(&mut self, widget: QWidgetId, index: usize) -> bool {
+        let Some(node) = self.widgets.get_mut(widget) else {
+            return false;
+        };
+        let items = combo_items(node);
+        if index >= items.len() {
+            return false;
+        }
+        let changed = self
+            .widgets
+            .get(widget)
+            .and_then(|node| node.property("currentIndex"))
+            .and_then(value_as_i64)
+            .unwrap_or(0)
+            != index as i64;
+        self.widgets[widget].set_property("currentIndex", QVariant::Int(index as i64));
+        self.widgets[widget].combo_popup = None;
+        changed
+    }
+
+    pub fn combo_popup_highlight(&self, widget: QWidgetId) -> Option<usize> {
+        self.widgets
+            .get(widget)
+            .and_then(|node| node.combo_popup.as_ref())
+            .map(|popup| popup.highlight)
+    }
+
+    pub fn move_combo_highlight(&mut self, widget: QWidgetId, delta: i64) -> bool {
+        let Some(node) = self.widgets.get_mut(widget) else {
+            return false;
+        };
+        let items = combo_items(node);
+        if items.is_empty() {
+            return false;
+        }
+        if node.combo_popup.is_none() {
+            return false;
+        }
+        let visible = combo_visible_rows(node, items.len());
+        let Some(popup) = node.combo_popup.as_mut() else {
+            return false;
+        };
+        let next = (popup.highlight as i64 + delta).clamp(0, items.len() as i64 - 1);
+        popup.highlight = next as usize;
+        if popup.highlight < popup.scroll {
+            popup.scroll = popup.highlight;
+        } else if popup.highlight >= popup.scroll + visible {
+            popup.scroll = popup.highlight + 1 - visible;
+        }
+        true
+    }
+
+    pub fn set_combo_highlight(&mut self, widget: QWidgetId, index: usize) -> bool {
+        let Some(node) = self.widgets.get_mut(widget) else {
+            return false;
+        };
+        let items = combo_items(node);
+        if index >= items.len() {
+            return false;
+        }
+        if node.combo_popup.is_none() {
+            return false;
+        }
+        let visible = combo_visible_rows(node, items.len());
+        let Some(popup) = node.combo_popup.as_mut() else {
+            return false;
+        };
+        popup.highlight = index;
+        if index < popup.scroll {
+            popup.scroll = index;
+        } else if index >= popup.scroll + visible {
+            popup.scroll = index + 1 - visible;
+        }
+        true
+    }
+
+    pub fn commit_combo_popup(&mut self, widget: QWidgetId) -> bool {
+        let Some(index) = self.combo_popup_highlight(widget) else {
+            return false;
+        };
+        if self.combo_current_index(widget) == Some(index) {
+            self.close_combo_popup(widget);
+            return false;
+        }
+        self.select_combo_index(widget, index)
+    }
+
+    /// Splitter containing the point, plus the handle index (between panes
+    /// `handle` and `handle + 1`).
+    pub fn splitter_handle_at(&self, point: QPointF) -> Option<(QWidgetId, usize)> {
+        for (id, widget) in self.widgets.iter().enumerate().rev() {
+            let Some(splitter) = widget.splitter.as_deref() else {
+                continue;
+            };
+            if !widget.visible || !widget.geometry.contains(point) {
+                continue;
+            }
+            let horizontal = splitter.is_horizontal();
+            for (index, pair) in widget.children.windows(2).enumerate() {
+                let Some(a) = self.widgets.get(pair[0]) else {
+                    continue;
+                };
+                let Some(b) = self.widgets.get(pair[1]) else {
+                    continue;
+                };
+                let (start, end) = if horizontal {
+                    (a.geometry.right(), b.geometry.x)
+                } else {
+                    (a.geometry.bottom(), b.geometry.y)
+                };
+                if end <= start {
+                    continue;
+                }
+                let axis = if horizontal { point.x } else { point.y };
+                if axis >= start && axis < end {
+                    return Some((id, index));
+                }
+            }
+        }
+        None
+    }
+
+    fn splitter_minimum(&mut self, widget: QWidgetId) -> QSizeF {
+        let Some(node) = self.widgets.get(widget) else {
+            return QSizeF::default();
+        };
+        let Some(splitter) = node.splitter.as_deref() else {
+            return QSizeF::default();
+        };
+        let horizontal = splitter.is_horizontal();
+        let children = node.children.clone();
+        let handle = splitter.handle_width;
+        let mut main = handle * children.len().saturating_sub(1) as f32;
+        let mut perp = 0.0_f32;
+        for child in children {
+            let min = self.minimum_size_hint(child);
+            if horizontal {
+                main += min.width;
+                perp = perp.max(min.height);
+            } else {
+                main += min.height;
+                perp = perp.max(min.width);
+            }
+        }
+        if horizontal {
+            QSizeF::new(main, perp)
+        } else {
+            QSizeF::new(perp, main)
+        }
+    }
+
+    fn measure_splitter(&mut self, widget: QWidgetId) -> QSizeF {
+        let Some(node) = self.widgets.get(widget) else {
+            return QSizeF::default();
+        };
+        let Some(splitter) = node.splitter.as_deref() else {
+            return QSizeF::default();
+        };
+        let horizontal = splitter.is_horizontal();
+        let handle = splitter.handle_width;
+        let children = node.children.clone();
+        let mut main = handle * children.len().saturating_sub(1) as f32;
+        let mut perp = 0.0_f32;
+        for child in children {
+            let hint = self.measure(child);
+            if horizontal {
+                main += hint.width;
+                perp = perp.max(hint.height);
+            } else {
+                main += hint.height;
+                perp = perp.max(hint.width);
+            }
+        }
+        let hint = if horizontal {
+            QSizeF::new(main, perp)
+        } else {
+            QSizeF::new(perp, main)
+        };
+        if let Some(node) = self.widgets.get_mut(widget) {
+            node.size_hint = hint;
+        }
+        hint
+    }
+
+    fn layout_splitter(&mut self, widget: QWidgetId, rect: QRectF) {
+        let (horizontal, handle, children, mut desired) = {
+            let Some(node) = self.widgets.get(widget) else {
+                return;
+            };
+            let Some(splitter) = node.splitter.as_deref() else {
+                return;
+            };
+            (
+                splitter.is_horizontal(),
+                splitter.handle_width,
+                node.children.clone(),
+                splitter.sizes.clone(),
+            )
+        };
+        let count = children.len();
+        if count == 0 {
+            return;
+        }
+        let total = ((if horizontal { rect.width } else { rect.height })
+            - handle * count.saturating_sub(1) as f32)
+            .max(0.0);
+        if desired.len() != count {
+            desired = children
+                .iter()
+                .map(|child| {
+                    let hint = self
+                        .widgets
+                        .get(*child)
+                        .map(|node| node.size_hint)
+                        .unwrap_or_default();
+                    if horizontal {
+                        hint.width
+                    } else {
+                        hint.height
+                    }
+                })
+                .collect();
+        }
+        let desired_sum: f32 = desired.iter().sum();
+        let mut sizes: Vec<f32> = if desired_sum > 0.0 {
+            desired
+                .iter()
+                .map(|size| size / desired_sum * total)
+                .collect()
+        } else {
+            vec![total / count as f32; count]
+        };
+        let minimums: Vec<f32> = children
+            .iter()
+            .map(|child| {
+                let min = self.minimum_size_hint(*child);
+                (if horizontal { min.width } else { min.height }).max(0.0)
+            })
+            .collect();
+        for _ in 0..count {
+            let deficit: f32 = sizes
+                .iter()
+                .zip(&minimums)
+                .map(|(size, min)| (min - size).max(0.0))
+                .sum();
+            if deficit <= 0.01 {
+                break;
+            }
+            let free: f32 = sizes
+                .iter()
+                .zip(&minimums)
+                .map(|(size, min)| (size - min).max(0.0))
+                .sum();
+            if free <= 0.01 {
+                break;
+            }
+            for (size, min) in sizes.iter_mut().zip(&minimums) {
+                let removable = (*size - *min).max(0.0);
+                if removable > 0.0 {
+                    *size -= deficit * removable / free;
+                }
+            }
+        }
+        for (size, min) in sizes.iter_mut().zip(&minimums) {
+            *size = size.max(*min).max(0.0);
+        }
+        let mut cursor = if horizontal { rect.x } else { rect.y };
+        let end = if horizontal {
+            rect.right()
+        } else {
+            rect.bottom()
+        };
+        for (index, child) in children.iter().enumerate() {
+            let mut length = sizes[index];
+            if index + 1 == count {
+                length = (end - cursor).max(0.0);
+            }
+            let child_rect = if horizontal {
+                QRectF::new(cursor, rect.y, length, rect.height)
+            } else {
+                QRectF::new(rect.x, cursor, rect.width, length)
+            };
+            self.layout_widget(*child, child_rect);
+            cursor += length + handle;
+        }
+        if let Some(node) = self.widgets.get_mut(widget) {
+            if let Some(splitter) = node.splitter.as_mut() {
+                splitter.sizes = sizes;
+            }
+        }
+    }
+
+    fn drag_splitter(&mut self, delta: f32) -> bool {
+        let Some(drag) = self.splitter_drag.clone() else {
+            return false;
+        };
+        let (horizontal, mut sizes, children) = {
+            let Some(node) = self.widgets.get(drag.widget) else {
+                return false;
+            };
+            let Some(splitter) = node.splitter.as_deref() else {
+                return false;
+            };
+            (
+                splitter.is_horizontal(),
+                splitter.sizes.clone(),
+                node.children.clone(),
+            )
+        };
+        if sizes.len() != children.len() || drag.handle + 1 >= sizes.len() {
+            return false;
+        }
+        let (first_min, second_min) = {
+            let a = self.minimum_size_hint(children[drag.handle]);
+            let b = self.minimum_size_hint(children[drag.handle + 1]);
+            (
+                (if horizontal { a.width } else { a.height }).max(0.0),
+                (if horizontal { b.width } else { b.height }).max(0.0),
+            )
+        };
+        let total = sizes[drag.handle] + sizes[drag.handle + 1];
+        let maximum_first = (total - second_min).max(first_min);
+        let first = (sizes[drag.handle] + delta).clamp(first_min, maximum_first);
+        let second = (total - first).max(second_min);
+        sizes[drag.handle] = first;
+        sizes[drag.handle + 1] = second;
+        if let Some(node) = self.widgets.get_mut(drag.widget) {
+            if let Some(splitter) = node.splitter.as_mut() {
+                splitter.sizes = sizes;
+            }
+        }
+        let rect = self
+            .widgets
+            .get(drag.widget)
+            .map(|node| node.geometry)
+            .unwrap_or_default();
+        self.layout_splitter(drag.widget, rect);
+        self.sync_views();
+        true
     }
 
     pub fn sync_views(&mut self) {
@@ -991,9 +1688,6 @@ impl QWidgetTree {
         if !target.visible || !target.enabled || target.focus_policy == QFocusPolicy::NoFocus {
             return false;
         }
-        if target.has_focus {
-            return true;
-        }
         self.clear_focus();
         self.widgets[widget].has_focus = true;
         match self.widgets[widget].class_name.as_str() {
@@ -1062,7 +1756,9 @@ impl QWidgetTree {
 
     fn widget_at_inner(&self, widget: QWidgetId, point: QPointF) -> Option<QWidgetId> {
         let node = self.widgets.get(widget)?;
-        if !node.visible || !node.enabled {
+        // Qt delivers mouse events only inside the parent; a child that
+        // overflows a shrunken form is clipped and is not hit outside it.
+        if !node.visible || !node.enabled || !node.geometry.contains(point) {
             return None;
         }
         for child in node.children.iter().rev() {
@@ -1070,11 +1766,7 @@ impl QWidgetTree {
                 return Some(hit);
             }
         }
-        if node.geometry.contains(point) {
-            Some(widget)
-        } else {
-            None
-        }
+        Some(widget)
     }
 
     pub fn scrollbar_at(&self, root: QWidgetId, point: QPointF) -> Option<QWidgetId> {
@@ -1099,6 +1791,42 @@ impl QWidgetTree {
         point: QPointF,
         shift: bool,
     ) -> Option<QWidgetEvent> {
+        // A popup is a top-level overlay: it receives the click before any
+        // widget below it, and a click elsewhere dismisses it first.
+        let open_popup = self.combo_popup_widget();
+        if let Some((popup, row)) = self.combo_popup_hit(point) {
+            if let Some(row) = row {
+                self.set_combo_highlight(popup, row);
+            }
+            self.mouse_grab = Some(popup);
+            return Some(QWidgetEvent {
+                widget: popup,
+                event_type: QEventType::MouseButtonPress,
+                clicked: false,
+            });
+        }
+        if open_popup.is_some() {
+            self.close_combo_popups();
+        }
+        if let Some((splitter, handle)) = self.splitter_handle_at(point) {
+            let horizontal = self
+                .widgets
+                .get(splitter)
+                .and_then(|node| node.splitter.as_deref())
+                .map(QSplitter::is_horizontal)
+                .unwrap_or(true);
+            self.splitter_drag = Some(QSplitterDrag {
+                widget: splitter,
+                handle,
+                last: if horizontal { point.x } else { point.y },
+            });
+            self.mouse_grab = Some(splitter);
+            return Some(QWidgetEvent {
+                widget: splitter,
+                event_type: QEventType::MouseButtonPress,
+                clicked: false,
+            });
+        }
         let widget = self.widget_at(root, point)?;
         if self.handle_scrollbar_press(widget, point) {
             self.mouse_grab = Some(widget);
@@ -1124,6 +1852,17 @@ impl QWidgetTree {
         let class = self.widgets[widget].class_name.clone();
         let geometry = self.widgets[widget].geometry;
         let font = self.widgets[widget].font.clone();
+        if class == "QComboBox" {
+            if open_popup != Some(widget) {
+                self.open_combo_popup(widget);
+            }
+            self.mouse_grab = Some(widget);
+            return Some(QWidgetEvent {
+                widget,
+                event_type: QEventType::MouseButtonPress,
+                clicked: false,
+            });
+        }
         match class.as_str() {
             "QTableWidget" => {
                 if let Some(table) = self.widgets[widget].table.as_mut() {
@@ -1166,8 +1905,18 @@ impl QWidgetTree {
                     );
                     if body.contains(point) {
                         let local_y = point.y - body.y;
+                        let local_x = point.x - body.x + tree.horizontal;
                         if let Some(row) = tree.row_at(local_y) {
+                            let branch = tree.rows.get(row).is_some_and(|row| {
+                                row.has_children
+                                    && local_x >= row.indent() + 2.0
+                                    && local_x
+                                        <= row.indent() + 2.0 + crate::item_view::QVIEW_BRANCH_W
+                            });
                             tree.set_current(Some(row));
+                            if branch {
+                                tree.toggle_row_expanded(row);
+                            }
                         }
                     }
                 }
@@ -1192,6 +1941,20 @@ impl QWidgetTree {
                 self.widgets[grab].pressed = inside;
                 return true;
             }
+        }
+        if let Some(drag) = self.splitter_drag.clone() {
+            let horizontal = self
+                .widgets
+                .get(drag.widget)
+                .and_then(|node| node.splitter.as_deref())
+                .map(QSplitter::is_horizontal)
+                .unwrap_or(true);
+            let axis = if horizontal { point.x } else { point.y };
+            let delta = axis - drag.last;
+            if let Some(drag) = self.splitter_drag.as_mut() {
+                drag.last = axis;
+            }
+            return self.drag_splitter(delta);
         }
         let Some(drag) = self.scroll_drag else {
             return false;
@@ -1393,6 +2156,7 @@ impl QWidgetTree {
     pub fn cancel_mouse_grab(&mut self) {
         self.mouse_grab = None;
         self.scroll_drag = None;
+        self.splitter_drag = None;
         for widget in &mut self.widgets {
             widget.pressed = false;
             if let Some(table) = widget.table.as_mut() {
@@ -1413,6 +2177,7 @@ impl QWidgetTree {
     pub fn mouse_release(&mut self, root: QWidgetId, point: QPointF) -> Option<QWidgetEvent> {
         let grabbed = self.mouse_grab.take();
         self.scroll_drag = None;
+        let splitter_drag = self.splitter_drag.take();
         if let Some(widget) = grabbed {
             if let Some(node) = self.widgets.get_mut(widget) {
                 if let Some(table) = node.table.as_mut() {
@@ -1427,6 +2192,36 @@ impl QWidgetTree {
                     tree.vbar.pressed = None;
                     tree.hbar.pressed = None;
                 }
+            }
+        }
+        if let Some(drag) = splitter_drag {
+            return Some(QWidgetEvent {
+                widget: drag.widget,
+                event_type: QEventType::MouseButtonRelease,
+                clicked: false,
+            });
+        }
+        if let Some(widget) = grabbed {
+            if self.widgets[widget].class_name == "QComboBox" {
+                if let Some((popup, row)) = self.combo_popup_hit(point) {
+                    if popup == widget {
+                        if let Some(row) = row {
+                            self.select_combo_index(widget, row);
+                        } else {
+                            self.close_combo_popup(widget);
+                        }
+                    }
+                } else {
+                    let inside_combo = self.widgets[widget].geometry.contains(point);
+                    if !inside_combo {
+                        self.close_combo_popup(widget);
+                    }
+                }
+                return Some(QWidgetEvent {
+                    widget,
+                    event_type: QEventType::MouseButtonRelease,
+                    clicked: false,
+                });
             }
         }
         let hit = self.widget_at(root, point);
@@ -1459,6 +2254,13 @@ impl QWidgetTree {
     }
 
     pub fn measure(&mut self, widget: QWidgetId) -> QSizeF {
+        if self
+            .widgets
+            .get(widget)
+            .is_some_and(|node| node.splitter.is_some())
+        {
+            return self.measure_splitter(widget);
+        }
         let Some(node) = self.widgets.get_mut(widget) else {
             return QSizeF::default();
         };
@@ -1533,16 +2335,53 @@ impl QWidgetTree {
         self.sync_views();
     }
 
+    /// `QWidget::minimumSizeHint()` as used by a window manager: the explicit
+    /// `minimumSize` raised to the root layout's total minimum. Qt's default
+    /// layout constraint pushes this value into the form's minimum size, so a
+    /// dialog cannot be squeezed until its bottom button row escapes the
+    /// content rect.
+    pub fn minimum_size_hint(&mut self, widget: QWidgetId) -> QSizeF {
+        self.measure(widget);
+        let Some(node) = self.widgets.get(widget) else {
+            return QSizeF::default();
+        };
+        let layout_min = node
+            .layout
+            .as_ref()
+            .map(|layout| self.layout_minimum_size(layout))
+            .unwrap_or_default();
+        let splitter = node.splitter.is_some();
+        let minimum = node.minimum_size;
+        let splitter_min = if splitter {
+            self.splitter_minimum(widget)
+        } else {
+            QSizeF::default()
+        };
+        QSizeF::new(
+            minimum.width.max(layout_min.width).max(splitter_min.width),
+            minimum
+                .height
+                .max(layout_min.height)
+                .max(splitter_min.height),
+        )
+    }
+
     fn apply_explicit_positions(&mut self, widget: QWidgetId) {
         let Some(parent) = self.widgets.get(widget) else {
             return;
         };
         let parent_origin = (parent.geometry.x, parent.geometry.y);
         let children = parent.children.clone();
+        // QSplitter owns its children geometry; Designer may still store a
+        // `<property name="geometry">` on them, which must not override the
+        // splitter layout.
+        let splitter_parent = parent.class_name == "QSplitter";
         for child in children {
-            if let Some(relative) = self.widgets[child].explicit_position {
-                self.widgets[child].geometry.x = parent_origin.0 + relative.x;
-                self.widgets[child].geometry.y = parent_origin.1 + relative.y;
+            if !splitter_parent {
+                if let Some(relative) = self.widgets[child].explicit_position {
+                    self.widgets[child].geometry.x = parent_origin.0 + relative.x;
+                    self.widgets[child].geometry.y = parent_origin.1 + relative.y;
+                }
             }
             self.apply_explicit_positions(child);
         }
@@ -1551,6 +2390,14 @@ impl QWidgetTree {
     fn layout_widget(&mut self, widget: QWidgetId, rect: QRectF) {
         if let Some(node) = self.widgets.get_mut(widget) {
             node.geometry = rect;
+        }
+        let splitter = self
+            .widgets
+            .get(widget)
+            .is_some_and(|node| node.splitter.is_some());
+        if splitter {
+            self.layout_splitter(widget, rect);
+            return;
         }
         let Some(node) = self.widgets.get_mut(widget) else {
             return;
@@ -1659,9 +2506,55 @@ impl QWidgetTree {
                     .map(|(index, _)| index)
                     .collect();
                 if !growers.is_empty() {
-                    let share = slack / growers.len() as f32;
-                    for index in growers {
-                        sizes[index] += share;
+                    // `qGeomCalc()`'s growth branch: items that can grow get
+                    // an equal share of the free space (not `hint + share`),
+                    // giving up on items that hit their hint or maximum.
+                    let fixed: f32 = (0..count)
+                        .filter(|index| !growers.contains(index))
+                        .map(|index| sizes[index])
+                        .sum();
+                    let mut remaining = available - fixed - gaps;
+                    let mut active = growers;
+                    loop {
+                        if active.is_empty() {
+                            break;
+                        }
+                        let share = remaining / active.len() as f32;
+                        let mut fixed_any = false;
+                        let mut next_active = Vec::new();
+                        for index in &active {
+                            let maximum = self.item_max_size(&layout.items[*index], horizontal);
+                            if sizes[*index] > share + 0.01 {
+                                // Keep the item at its hint: it is wider than
+                                // the equal share and would only shrink.
+                                remaining -= sizes[*index];
+                                fixed_any = true;
+                            } else if share > maximum + 0.01 {
+                                // Clamp at the maximum and redistribute the
+                                // surplus among the other growers.
+                                sizes[*index] = maximum;
+                                remaining -= maximum;
+                                fixed_any = true;
+                            } else {
+                                next_active.push(*index);
+                            }
+                        }
+                        if !fixed_any {
+                            let share = remaining / active.len() as f32;
+                            for index in &active {
+                                sizes[*index] = share;
+                            }
+                            break;
+                        }
+                        active = next_active;
+                    }
+                    // If every grower stopped at its maximum, the remaining
+                    // space goes back into the gaps, as Qt does for spacers.
+                    let leftover = available - sizes.iter().sum::<f32>() - gaps;
+                    if leftover > 0.01 {
+                        let gap_extra = leftover / (count as f32 + 1.0);
+                        cursor_extra = gap_extra;
+                        gap_extra_value = gap_extra;
                     }
                 } else {
                     let gap_extra = slack / (count as f32 + 1.0);
@@ -1715,7 +2608,13 @@ impl QWidgetTree {
                 QRectF::new(inner.x, cursor, perp, main)
             };
             match item {
-                QLayoutItem::Widget { id, .. } => self.layout_widget(*id, slot),
+                QLayoutItem::Widget { id, cell } => {
+                    // `QWidgetItem::setGeometry`: clamp to the maximum size
+                    // and apply the item alignment (vertical centring by
+                    // default), like the grid engine does.
+                    let rect = self.grid_widget_rect(*id, slot, cell.alignment);
+                    self.layout_widget(*id, rect);
+                }
                 QLayoutItem::Layout {
                     layout: inner_layout,
                     ..
@@ -2620,6 +3519,28 @@ impl QWidgetTree {
         let Some(node) = self.widgets.get(id) else {
             return fallback;
         };
+        if let Some(splitter) = node.splitter.as_deref() {
+            let horizontal = splitter.is_horizontal();
+            let handle = splitter.handle_width;
+            let children = node.children.clone();
+            let mut main = handle * children.len().saturating_sub(1) as f32;
+            let mut perp = 0.0_f32;
+            for child in children {
+                let (width, height) = self.widget_minimum_hint(child);
+                if horizontal {
+                    main += width as f32;
+                    perp = perp.max(height as f32);
+                } else {
+                    main += height as f32;
+                    perp = perp.max(width as f32);
+                }
+            }
+            return if horizontal {
+                (main.round() as i32, perp.round() as i32)
+            } else {
+                (perp.round() as i32, main.round() as i32)
+            };
+        }
         match node.class_name.as_str() {
             "QLineEdit" => (32, fallback.1.max(24)),
             "QTableWidget" | "QListWidget" | "QTreeWidget" => (70, 70),
@@ -2681,25 +3602,26 @@ impl QWidgetTree {
         }
     }
 
+    /// Qt's `qGeomCalc()` grows every item whose maximum size exceeds its
+    /// hint, regardless of class: a row of `QPushButton`s (policy `Minimum`)
+    /// or a `QComboBox` (`Preferred`) is stretched just like a label.
     fn item_can_grow(&self, item: &QLayoutItem, horizontal: bool) -> bool {
-        let QLayoutItem::Widget { id, .. } = item else {
-            return false;
-        };
-        let Some(widget) = self.widgets.get(*id) else {
-            return false;
-        };
-        if !matches!(
-            widget.class_name.as_str(),
-            "QLabel" | "QCheckBox" | "QRadioButton" | "QGroupBox" | "QWidget"
-        ) {
-            return false;
-        }
-        let (available, hint) = if horizontal {
-            (widget.maximum_size.width, widget.size_hint.width)
+        let metrics = self.grid_item_metrics(item);
+        let (maximum, hint) = if horizontal {
+            (metrics.max_w, metrics.hint_w)
         } else {
-            (widget.maximum_size.height, widget.size_hint.height)
+            (metrics.max_h, metrics.hint_h)
         };
-        available > hint + 0.5
+        maximum > hint
+    }
+
+    fn item_max_size(&self, item: &QLayoutItem, horizontal: bool) -> f32 {
+        let metrics = self.grid_item_metrics(item);
+        if horizontal {
+            metrics.max_w as f32
+        } else {
+            metrics.max_h as f32
+        }
     }
 
     fn widget_expands(&self, widget: QWidgetId, horizontal: bool) -> bool {
@@ -3396,6 +4318,18 @@ fn set_tree_property(tree: &mut QTreeWidget, name: &str, value: &QVariant, font:
         },
         "verticalScrollBarPolicy" => set_scroll_policy(true, &mut tree.vbar, value),
         "horizontalScrollBarPolicy" => set_scroll_policy(false, &mut tree.hbar, value),
+        "expandAll" => {
+            if value.as_bool() == Some(true) {
+                tree.expand_all();
+            }
+            true
+        }
+        "collapseAll" => {
+            if value.as_bool() == Some(true) {
+                tree.collapse_all();
+            }
+            true
+        }
         _ => false,
     }
 }
@@ -3663,16 +4597,22 @@ mod tests {
     const GRID_SPANS: &str = include_str!("../tests/fixtures/grid_spans.ui");
     const GRID_NESTED: &str = include_str!("../tests/fixtures/grid_nested.ui");
     const GRID_POLICIES: &str = include_str!("../tests/fixtures/grid_policies.ui");
+    const BOX_BUTTONS: &str = include_str!("../tests/fixtures/box_buttons.ui");
     const QT6_GRID_2X2: &str = include_str!("../tests/fixtures/qt6_grid_2x2.json");
     const QT6_GRID_SPANS: &str = include_str!("../tests/fixtures/qt6_grid_spans.json");
     const QT6_GRID_NESTED: &str = include_str!("../tests/fixtures/qt6_grid_nested.json");
     const QT6_GRID_POLICIES: &str = include_str!("../tests/fixtures/qt6_grid_policies.json");
+    const QT6_BOX_BUTTONS: &str = include_str!("../tests/fixtures/qt6_box_buttons.json");
     const FORM_BASIC: &str = include_str!("../tests/fixtures/form_basic.ui");
     const FORM_WRAP_LONG: &str = include_str!("../tests/fixtures/form_wrap_long.ui");
     const FORM_WRAP_ALL: &str = include_str!("../tests/fixtures/form_wrap_all.ui");
     const FORM_GROWTH: &str = include_str!("../tests/fixtures/form_growth.ui");
     const FORM_ALIGNMENT: &str = include_str!("../tests/fixtures/form_alignment.ui");
     const FORM_GROUP: &str = include_str!("../tests/fixtures/form_group.ui");
+    const SPLITTER_H: &str = include_str!("../tests/fixtures/splitter_h.ui");
+    const SPLITTER_V: &str = include_str!("../tests/fixtures/splitter_v.ui");
+    const QT6_SPLITTER_H: &str = include_str!("../tests/fixtures/qt6_splitter_h.json");
+    const QT6_SPLITTER_V: &str = include_str!("../tests/fixtures/qt6_splitter_v.json");
     const QT6_FORM_BASIC: &str = include_str!("../tests/fixtures/qt6_form_basic.json");
     const QT6_FORM_WRAP_LONG: &str = include_str!("../tests/fixtures/qt6_form_wrap_long.json");
     const QT6_FORM_WRAP_ALL: &str = include_str!("../tests/fixtures/qt6_form_wrap_all.json");
@@ -3753,6 +4693,24 @@ mod tests {
     }
 
     #[test]
+    fn splitter_horizontal_geometry_matches_qt6_offscreen() {
+        assert_geometry_matches_qt6(SPLITTER_H, QT6_SPLITTER_H, 1.0);
+    }
+
+    #[test]
+    fn splitter_vertical_geometry_matches_qt6_offscreen() {
+        assert_geometry_matches_qt6(SPLITTER_V, QT6_SPLITTER_V, 1.0);
+    }
+
+    #[test]
+    fn splitter_contributes_child_minimums_to_form_minimum() {
+        let (mut tree, root) = load_ui(SPLITTER_H).expect("loads ui");
+        assert_eq!(tree.minimum_size_hint(root), QSizeF::new(166.0, 92.0));
+        let (mut tree, root) = load_ui(SPLITTER_V).expect("loads ui");
+        assert_eq!(tree.minimum_size_hint(root), QSizeF::new(92.0, 166.0));
+    }
+
+    #[test]
     fn grid_2x2_geometry_matches_qt6_offscreen() {
         assert_geometry_matches_qt6(GRID_2X2, QT6_GRID_2X2, 1.0);
     }
@@ -3770,6 +4728,79 @@ mod tests {
     #[test]
     fn grid_policies_geometry_matches_qt6_offscreen() {
         assert_geometry_matches_qt6(GRID_POLICIES, QT6_GRID_POLICIES, 1.0);
+    }
+
+    #[test]
+    fn box_buttons_grow_without_spacer_matches_qt6_offscreen() {
+        // No expander: Qt's `qGeomCalc` gives every button an equal share of
+        // the extra width instead of pushing the surplus into the gaps.
+        assert_geometry_matches_qt6(BOX_BUTTONS, QT6_BOX_BUTTONS, 1.0);
+    }
+
+    const OVERFLOW_FORM: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0"><class>OverflowDialog</class>
+ <widget class="QDialog" name="OverflowDialog">
+  <property name="geometry"><rect><x>0</x><y>0</y><width>120</width><height>60</height></rect></property>
+  <layout class="QVBoxLayout" name="verticalLayout">
+   <item><widget class="QPushButton" name="first">
+    <property name="text"><string>First</string></property>
+    <property name="minimumSize"><size><width>80</width><height>50</height></size></property>
+   </widget></item>
+   <item><widget class="QPushButton" name="second">
+    <property name="text"><string>Second</string></property>
+    <property name="minimumSize"><size><width>80</width><height>50</height></size></property>
+   </widget></item>
+  </layout>
+ </widget>
+</ui>"#;
+
+    #[test]
+    fn layout_minimum_raises_form_minimum_size() {
+        let (mut tree, root) = load_ui(OVERFLOW_FORM).expect("loads ui");
+        // Two 50 px buttons + 6 px spacing + 2 × 11 px margins.
+        assert_eq!(tree.minimum_size_hint(root), QSizeF::new(102.0, 128.0));
+    }
+
+    #[test]
+    fn overflowing_child_is_clipped_and_not_hit_outside_root() {
+        use crate::gui::QPaintCommand;
+
+        let (tree, root) = load_ui(OVERFLOW_FORM).expect("loads ui");
+        let root_rect = tree.widget(root).unwrap().geometry;
+        let second = tree.find_widget("second").expect("second button");
+        let second_rect = tree.widget(second).unwrap().geometry;
+        assert!(
+            second_rect.bottom() > root_rect.bottom(),
+            "fixture must overflow: {second_rect:?} vs {root_rect:?}"
+        );
+
+        // A point inside the overflowing button but outside the form root is
+        // clipped by Qt and must not reach the button.
+        let outside = QPointF::new(second_rect.x + 5.0, second_rect.y + 5.0);
+        assert!(!root_rect.contains(outside));
+        assert_eq!(tree.widget_at(root, outside), None);
+
+        let mut painter = crate::gui::QPainter::new();
+        crate::paint::paint_widget_tree(
+            &tree,
+            root,
+            &crate::style::QFusionStyle::default(),
+            &mut painter,
+        );
+        for command in painter.commands() {
+            if let QPaintCommand::SetClip { rect: Some(rect) } = command {
+                if rect.is_empty() {
+                    continue;
+                }
+                assert!(
+                    rect.left() >= root_rect.left() - 0.01
+                        && rect.top() >= root_rect.top() - 0.01
+                        && rect.right() <= root_rect.right() + 0.01
+                        && rect.bottom() <= root_rect.bottom() + 0.01,
+                    "clip escapes root: {rect:?} vs {root_rect:?}"
+                );
+            }
+        }
     }
 
     const FIXTURE: &str = include_str!("../../form-xml/tests/fixtures/test_dialog01.ui");
@@ -3940,6 +4971,19 @@ mod tests {
         tree.layout(root, tree.widget(root).unwrap().geometry);
         assert_eq!(tree.focus_first(root), Some(edit));
         assert_eq!(tree.table(table).unwrap().current(), None);
+    }
+
+    #[test]
+    fn double_tap_selects_the_word_under_the_cursor() {
+        let (mut tree, root) = load_ui(FIXTURE).expect("loads ui");
+        let line = tree.find_widget("lineEdit_1").expect("line edit");
+        tree.set_property(line, "text", QVariant::String("hello world".into()));
+        tree.layout(root, tree.widget(root).unwrap().geometry);
+        let font = tree.widget(line).unwrap().font.clone();
+        let metrics = QFontMetrics::new(&font);
+        let local_x = 4.0 + metrics.horizontal_advance("hello wor");
+        assert!(tree.select_word_at(line, local_x));
+        assert_eq!(tree.line_edit_selection(line), Some((6, 11)));
     }
 
     #[test]
@@ -4231,6 +5275,7 @@ mod tests {
                 QVariant::Map(vec![("text".into(), QVariant::String("Other".into()))]),
             ]),
         );
+        tree.tree_mut(tree_widget).unwrap().expand_all();
         tree.relayout(root);
         let rect = tree.widget(tree_widget).unwrap().geometry;
         let point = QPointF::new(rect.x + 8.0, rect.y + QVIEW_HEADER_H + 35.0);
@@ -4244,6 +5289,203 @@ mod tests {
             tree.get_table_property(tree_widget, "currentText"),
             Some(QVariant::String("Child".into()))
         );
+    }
+
+    fn combos_form() -> (QWidgetTree, QWidgetId, QWidgetId) {
+        let mut tree = QWidgetTree::new();
+        let root = tree.create_widget("QDialog", "Dialog");
+        tree.set_geometry(root, QRectF::new(0.0, 0.0, 300.0, 200.0));
+        let combo = tree.create_widget("QComboBox", "combo");
+        tree.add_child(root, combo);
+        tree.set_geometry(combo, QRectF::new(10.0, 10.0, 120.0, 25.0));
+        tree.set_property(
+            combo,
+            "items",
+            QVariant::List(vec![
+                QVariant::String("one".into()),
+                QVariant::String("two".into()),
+                QVariant::String("three".into()),
+            ]),
+        );
+        tree.set_property(combo, "currentIndex", QVariant::Int(0));
+        (tree, root, combo)
+    }
+
+    #[test]
+    fn combo_popup_opens_and_selects_an_item_on_release() {
+        let (mut tree, root, combo) = combos_form();
+        assert!(!tree.combo_popup_open(combo));
+        let combo_rect = tree.widget(combo).unwrap().geometry;
+        tree.mouse_press(root, QPointF::new(combo_rect.x + 5.0, combo_rect.y + 5.0));
+        assert!(tree.combo_popup_open(combo));
+        let popup = tree.combo_popup_rect(combo).expect("popup rect");
+        assert_eq!(popup.x, combo_rect.x);
+        assert_eq!(popup.y, combo_rect.bottom());
+        assert_eq!(popup.height, 3.0 * QCOMBO_POPUP_ROW_H + 2.0);
+        // Press highlights the row, release commits it and closes the popup.
+        let row_point = QPointF::new(popup.x + 5.0, popup.y + 1.0 + QCOMBO_POPUP_ROW_H * 1.5);
+        tree.mouse_press(root, row_point);
+        assert_eq!(tree.combo_popup_highlight(combo), Some(1));
+        tree.mouse_release(root, row_point);
+        assert_eq!(
+            tree.property(combo, "currentIndex"),
+            Some(&QVariant::Int(1))
+        );
+        assert!(!tree.combo_popup_open(combo));
+    }
+
+    #[test]
+    fn combo_popup_closes_on_outside_click_and_click_on_combo() {
+        let (mut tree, root, combo) = combos_form();
+        let combo_rect = tree.widget(combo).unwrap().geometry;
+        tree.mouse_press(root, QPointF::new(combo_rect.x + 5.0, combo_rect.y + 5.0));
+        assert!(tree.combo_popup_open(combo));
+        tree.mouse_press(root, QPointF::new(250.0, 150.0));
+        assert!(!tree.combo_popup_open(combo));
+
+        tree.mouse_press(root, QPointF::new(combo_rect.x + 5.0, combo_rect.y + 5.0));
+        assert!(tree.combo_popup_open(combo));
+        tree.mouse_press(root, QPointF::new(combo_rect.x + 5.0, combo_rect.y + 5.0));
+        assert!(!tree.combo_popup_open(combo));
+    }
+
+    #[test]
+    fn combo_popup_above_when_no_room_below() {
+        let (mut tree, root, combo) = combos_form();
+        tree.set_geometry(combo, QRectF::new(10.0, 170.0, 120.0, 25.0));
+        tree.mouse_press(root, QPointF::new(15.0, 175.0));
+        let popup = tree.combo_popup_rect(combo).expect("popup rect");
+        assert!(popup.bottom() <= 170.0);
+        assert!(popup.y >= 0.0);
+    }
+
+    fn splitter_form(orientation: &str) -> (QWidgetTree, QWidgetId, QWidgetId, QWidgetId) {
+        let mut tree = QWidgetTree::new();
+        let root = tree.create_widget("QDialog", "Dialog");
+        tree.set_geometry(root, QRectF::new(0.0, 0.0, 400.0, 200.0));
+        let splitter = tree.create_widget("QSplitter", "splitter");
+        tree.add_child(root, splitter);
+        tree.set_property(splitter, "orientation", QVariant::Enum(orientation.into()));
+        let left = tree.create_widget("QListWidget", "left");
+        let right = tree.create_widget("QListWidget", "right");
+        tree.add_child(splitter, left);
+        tree.add_child(splitter, right);
+        tree.set_geometry(splitter, QRectF::new(0.0, 0.0, 400.0, 200.0));
+        (tree, root, left, right)
+    }
+
+    #[test]
+    fn splitter_splits_evenly_and_drags_handles() {
+        let (mut tree, root, left, right) = splitter_form("Qt::Orientation::Horizontal");
+        assert_eq!(tree.widget(left).unwrap().geometry.width, 198.0);
+        assert_eq!(tree.widget(left).unwrap().geometry.x, 0.0);
+        assert_eq!(tree.widget(right).unwrap().geometry.x, 202.0);
+        assert_eq!(tree.widget(right).unwrap().geometry.width, 198.0);
+
+        let handle = QPointF::new(200.0, 10.0);
+        tree.mouse_press(root, handle);
+        assert!(tree.mouse_move(QPointF::new(250.0, 10.0)));
+        tree.mouse_release(root, QPointF::new(250.0, 10.0));
+        let near = |actual: f32, expected: f32| (actual - expected).abs() < 0.01;
+        assert!(near(tree.widget(left).unwrap().geometry.width, 248.0));
+        assert!(near(tree.widget(right).unwrap().geometry.x, 252.0));
+        assert!(near(tree.widget(right).unwrap().geometry.width, 148.0));
+
+        let vertical = splitter_form("Qt::Orientation::Vertical");
+        let (mut tree, _root, top, bottom) = vertical;
+        tree.set_geometry(
+            tree.find_widget("splitter").unwrap(),
+            QRectF::new(0.0, 0.0, 400.0, 200.0),
+        );
+        assert_eq!(tree.widget(top).unwrap().geometry.y, 0.0);
+        assert_eq!(tree.widget(top).unwrap().geometry.height, 98.0);
+        assert_eq!(tree.widget(bottom).unwrap().geometry.y, 102.0);
+        assert_eq!(tree.widget(bottom).unwrap().geometry.height, 98.0);
+    }
+
+    #[test]
+    fn splitter_sizes_property_sets_pane_widths() {
+        let (mut tree, _root, left, right) = splitter_form("Qt::Orientation::Horizontal");
+        let splitter = tree.find_widget("splitter").unwrap();
+        tree.set_property(
+            splitter,
+            "sizes",
+            QVariant::List(vec![QVariant::Int(80), QVariant::Int(316)]),
+        );
+        tree.relayout(splitter);
+        assert_eq!(tree.widget(left).unwrap().geometry.width, 80.0);
+        assert_eq!(tree.widget(right).unwrap().geometry.x, 84.0);
+        assert_eq!(tree.widget(right).unwrap().geometry.width, 316.0);
+    }
+
+    #[test]
+    fn splitter_honors_child_minimum_sizes() {
+        let (mut tree, root, left, _right) = splitter_form("Qt::Orientation::Horizontal");
+        tree.set_property(left, "minimumSize", QVariant::Size(QSizeF::new(300.0, 0.0)));
+        let splitter = tree.find_widget("splitter").unwrap();
+        tree.relayout(splitter);
+        assert!(tree.widget(left).unwrap().geometry.width >= 300.0);
+        let handle_x = tree.widget(left).unwrap().geometry.right() + 1.0;
+        tree.mouse_press(root, QPointF::new(handle_x, 10.0));
+        tree.mouse_move(QPointF::new(10.0, 10.0));
+        tree.mouse_release(root, QPointF::new(10.0, 10.0));
+        assert!(tree.widget(left).unwrap().geometry.width >= 300.0);
+    }
+
+    #[test]
+    fn tree_expand_all_and_collapse_all_properties_rebuild_rows() {
+        let (mut tree, root) = load_ui(DIALOG02).expect("loads ui");
+        let tree_widget = tree.find_widget("treeWidget").expect("tree");
+        tree.set_property(
+            tree_widget,
+            "data",
+            QVariant::List(vec![QVariant::Map(vec![
+                ("text".into(), QVariant::String("Root".into())),
+                (
+                    "children".into(),
+                    QVariant::List(vec![QVariant::Map(vec![(
+                        "text".into(),
+                        QVariant::String("Child".into()),
+                    )])]),
+                ),
+            ])]),
+        );
+        tree.relayout(root);
+        assert_eq!(tree.tree(tree_widget).unwrap().row_count(), 1);
+        tree.set_property(tree_widget, "expandAll", QVariant::Bool(true));
+        assert_eq!(tree.tree(tree_widget).unwrap().row_count(), 2);
+        tree.set_property(tree_widget, "collapseAll", QVariant::Bool(true));
+        assert_eq!(tree.tree(tree_widget).unwrap().row_count(), 1);
+    }
+
+    #[test]
+    fn tree_branch_indicator_click_toggles_expansion() {
+        let (mut tree, root) = load_ui(DIALOG02).expect("loads ui");
+        let tree_widget = tree.find_widget("treeWidget").expect("tree");
+        tree.set_property(
+            tree_widget,
+            "data",
+            QVariant::List(vec![QVariant::Map(vec![
+                ("text".into(), QVariant::String("Root".into())),
+                (
+                    "children".into(),
+                    QVariant::List(vec![QVariant::Map(vec![(
+                        "text".into(),
+                        QVariant::String("Child".into()),
+                    )])]),
+                ),
+            ])]),
+        );
+        tree.relayout(root);
+        assert_eq!(tree.tree(tree_widget).unwrap().row_count(), 1);
+        let rect = tree.widget(tree_widget).unwrap().geometry;
+        let branch = QPointF::new(rect.x + 6.0, rect.y + QVIEW_HEADER_H + 10.0);
+        tree.mouse_press(root, branch);
+        tree.mouse_release(root, branch);
+        assert_eq!(tree.tree(tree_widget).unwrap().row_count(), 2);
+        tree.mouse_press(root, branch);
+        tree.mouse_release(root, branch);
+        assert_eq!(tree.tree(tree_widget).unwrap().row_count(), 1);
     }
 
     #[test]

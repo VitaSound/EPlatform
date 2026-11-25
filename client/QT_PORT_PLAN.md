@@ -82,7 +82,11 @@
      track/arrow clicks, keyboard Page/Home/End, viewport clipping, horizontal
      scroll колонок, hit-test/resize с учётом scrollbar extent; модели списка и
      дерева, selection/current, golden-геометрия со scrollbars и PNG-дифф.
-     Отложено: popup `QComboBox` и collapse/expand узлов `QTreeWidget`.
+     Popup `QComboBox`, collapse/expand узлов `QTreeWidget` и `QSplitter`
+     закрыты в волне 0.16 (см. `widgets-plan.md`); в 0.17 QSS расширен
+     box model (margin/padding), вертикальными `qlineargradient` и
+     item-view-селекторами, добавлены `Form:center`, `QSplitter.sizes`
+     и `QTreeWidget.expandAll/collapseAll`.
 
 ## Критерии готовности
 

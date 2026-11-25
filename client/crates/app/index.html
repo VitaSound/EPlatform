@@ -47,6 +47,197 @@
         window.__epErrors.push("rejection: " + String(e.reason)),
       );
     </script>
+    <script>
+      // Mobile text input bridge.
+      //
+      // iOS/Android only raise the soft keyboard for a focused form field,
+      // not for a canvas. The canvas (winit) keeps rendering and hit-testing;
+      // this off-screen textarea owns text composition and forwards one
+      // semantic action at a time to Rust (`window.__epTextInput`).
+      (function () {
+        var ta = document.createElement("textarea");
+        ta.id = "ep-text-input";
+        ta.setAttribute("autocomplete", "off");
+        ta.setAttribute("autocapitalize", "off");
+        ta.setAttribute("autocorrect", "off");
+        ta.setAttribute("spellcheck", "false");
+        ta.setAttribute("inputmode", "text");
+        ta.setAttribute("aria-hidden", "true");
+        ta.tabIndex = -1;
+        // Keep it rendered (iOS ignores `display:none` for programmatic
+        // focus), but make it invisible and unable to affect layout.
+        ta.style.cssText = [
+          "position:fixed",
+          "left:0",
+          "top:0",
+          "width:1px",
+          "height:1px",
+          "opacity:0",
+          "border:0",
+          "padding:0",
+          "margin:0",
+          "z-index:-1",
+          "font-size:16px",
+          "caret-color:transparent",
+          "background:transparent",
+          "color:transparent",
+          "pointer-events:none",
+          "resize:none",
+          "overflow:hidden",
+          "white-space:pre",
+        ].join(";");
+        document.body.appendChild(ta);
+
+        var queue = (window.__epTextQueue = []);
+        var active = false;
+        var composing = false;
+        var suppressNextInput = false;
+
+        function send(kind, text) {
+          if (typeof window.__epTextInput === "function") {
+            try {
+              window.__epTextInput(kind, text || "");
+              return;
+            } catch (_) {}
+          }
+          queue.push([kind, text || ""]);
+        }
+
+        window.__epFlushTextQueue = function () {
+          var callback = window.__epTextInput;
+          if (typeof callback !== "function") return;
+          while (queue.length > 0) {
+            var event = queue.shift();
+            callback(event[0], event[1]);
+          }
+        };
+
+        window.__epSetTextInputActive = function (next) {
+          next = !!next;
+          if (next === active) {
+            if (next) ta.focus({ preventScroll: true });
+            return;
+          }
+          active = next;
+          if (active) {
+            ta.value = "";
+            ta.focus({ preventScroll: true });
+          } else {
+            ta.blur();
+            ta.value = "";
+            composing = false;
+            suppressNextInput = false;
+          }
+        };
+
+        ta.addEventListener("compositionstart", function () {
+          composing = true;
+          suppressNextInput = false;
+        });
+
+        ta.addEventListener("compositionend", function (event) {
+          composing = false;
+          var text = event.data || ta.value || "";
+          ta.value = "";
+          // Some engines fire one more `input` with the same text after
+          // `compositionend`; suppress it to avoid a duplicate insert.
+          suppressNextInput = true;
+          if (text) send("insert", text);
+        });
+
+        ta.addEventListener("input", function (event) {
+          if (composing || event.isComposing) return;
+          if (suppressNextInput) {
+            suppressNextInput = false;
+            ta.value = "";
+            return;
+          }
+          var text = ta.value;
+          ta.value = "";
+          if (text) send("insert", text);
+        });
+
+        // Registered before the wasm/winit bundle, in capture phase: while
+        // the hidden field owns the keyboard, winit must not also receive
+        // `keydown` (otherwise every printable key is inserted twice).
+        window.addEventListener(
+          "keydown",
+          function (event) {
+            if (!active) return;
+            event.stopImmediatePropagation();
+            if (event.isComposing || composing || event.key === "Process") return;
+
+            var shift = event.shiftKey ? "1" : "";
+            if (event.ctrlKey || event.metaKey) {
+              if (event.key === "a" || event.key === "A") {
+                event.preventDefault();
+                send("selectAll", "");
+              }
+              return;
+            }
+
+            switch (event.key) {
+              case "Backspace":
+                event.preventDefault();
+                send("backspace", "");
+                break;
+              case "Delete":
+                event.preventDefault();
+                send("delete", "");
+                break;
+              case "Enter":
+                event.preventDefault();
+                send("commit", "");
+                break;
+              case "Tab":
+                event.preventDefault();
+                send("tab", shift);
+                break;
+              case "Escape":
+                event.preventDefault();
+                send("clearFocus", "");
+                break;
+              case "ArrowLeft":
+                event.preventDefault();
+                send("left", shift);
+                break;
+              case "ArrowRight":
+                event.preventDefault();
+                send("right", shift);
+                break;
+              case "Home":
+                event.preventDefault();
+                send("home", shift);
+                break;
+              case "End":
+                event.preventDefault();
+                send("end", shift);
+                break;
+              case "ArrowUp":
+                event.preventDefault();
+                send("up", "");
+                break;
+              case "ArrowDown":
+                event.preventDefault();
+                send("down", "");
+                break;
+              case "PageUp":
+                event.preventDefault();
+                send("pageUp", "");
+                break;
+              case "PageDown":
+                event.preventDefault();
+                send("pageDown", "");
+                break;
+              default:
+                // Printable characters go through `input`/IME composition.
+                break;
+            }
+          },
+          true,
+        );
+      })();
+    </script>
     <link data-trunk rel="rust" href="Cargo.toml" data-wasm-opt="0" />
   </body>
 </html>
