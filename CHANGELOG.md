@@ -1,5 +1,255 @@
 # Changelog
 
+## 2026-11-25
+
+### Grid layout 0.12.2–0.12.5: `QGridLayout` раскладывается сеткой
+
+- **Явный вид layout-а.** `QBoxLayoutDirection` + `class.contains('H')`
+  заменены на `QLayoutKind { HBox, VBox, Grid, Form }` и
+  `QLayout { kind, spacing, margins, items }`; `QLayoutKind::from_class()`
+  читает класс из `.ui`. `layout_widget` диспетчеризует в
+  `layout_box`/`layout_grid` (Form пока идёт как vbox, 0.13).
+  Поведение hbox/vbox не изменилось.
+- **Движок сетки — порт Qt.** `layout_grid` + `grid_tracks` повторяют
+  `QGridLayoutPrivate::setupLayoutData`/`distribute` и `qGeomCalc`
+  (`qlayoutengine.cpp`): целочисленные размеры, fixed-point распределение,
+  `distributeMultiBox` для span, `setupSpacings` (зазор только между
+  разными элементами), `qSmartMinSize`/`qSmartMaxSize` и классовые
+  size policy по умолчанию (`widget_axis_policy`).
+- **Парсер.** Добавлен `<property name="sizePolicy">`
+  (`hsizetype`/`vsizetype` → `PropValue::Map`) и
+  `<item alignment="Qt::Align…">` → `LayoutCell.alignment: u32`
+  (константы `form_xml::ALIGN_*`).
+- **Span и alignment.** `grid_widget_rect` повторяет
+  `QWidgetItem::setGeometry`: кламп по `maximumSize`, при заданном
+  alignment — кламп по hint и Qt-выравнивание (без горизонтальных битов —
+  влево, по вертикали без `AlignTop` — по центру).
+- **Stretch** не поддерживается (решение A1-a: в `.ui` его нет,
+  фиктивное свойство не добавляем).
+- **Тесты.** `grid_{2x2,spans,nested,policies}_geometry_matches_qt6_
+  offscreen` (допуск 1 px) и `grid_*_raster_compared_to_qt6`; фикстуры
+  + Qt6 JSON/PNG в `client/crates/rqt/tests/fixtures/`; парсерные тесты
+  `parses_size_policy_types`, `parses_item_alignment_flags`; вырожденная
+  сетка из одних спейсеров — `grid_with_spacers_in_tight_rect_does_not_panic`
+  (защита от underflow в shrink-ветке `qGeomCalc`).
+- **Review.** Категория `grid` в `tools/formgen/review.py` (4 формы,
+  id `grid/76…79`), пак перегенерирован: mean 0.8–4.7, >30 — 1–6 %.
+- **Проверки.** `cargo test --workspace` — 147 passed (app 41,
+  form-xml 10, rqt 96); `trunk build --release` — ok. Браузер
+  (chrome-devtools MCP, WSLg Chromium :9222):
+  `?lua=test_grid.lua&ui=test_grid.ui` — сетка 3×4 с вложенным hbox,
+  span-таблицей и spacer-ом; ввод в ячейку, hit-test Reset/Close.
+  Фикстуры для этого: `server/priv/qt_forms/test_grid.ui`,
+  `server/priv/lua_modules/test_grid.lua`.
+- **Известный дефект (вне 0.12).** `QBoxLayout` отдаёт избыток места в
+  зазоры, а не растит виджеты с политикой `Minimum`/`Preferred`
+  (например, ряд кнопок без spacer-а). Grid уже считает по Qt-алгоритму;
+  box — отдельный шаг (TODO в `widgets-plan.md`).
+
+### Paint order 0.15: ordered display list / PaintBatch
+
+- **Модель.** `gfx::PaintBatch::{Rects,Text}` заменил два глобальных
+  пула (`Vec<ColoredRect>` + `Vec<ColoredText>`). `append_paint_commands`
+  выдаёт батчи в порядке `QPaintCommand`; соседние однотипные команды
+  объединяются, но `Rects -> Text -> Rects -> Text` сохраняет порядок.
+- **Рендерер.** `gfx::render(clear, &[PaintBatch])` проигрывает батчи в
+  одном render-pass: rect-батчи — диапазоны общего vertex buffer, текст —
+  отдельный glyphon `TextRenderer` на текстовый батч.
+- **Слои.** `App::collect_paint` отдаёт display list в порядке
+  shell base → MDI content+chrome по z-order → top-level по z-order →
+  popup-меню по уровням (родитель, затем вложенное).
+- **Маскировка удалена.** `Shell::popup_rects` и фильтрация
+  `texts.retain(...)` под popup удалены: непрозрачный фон popup теперь
+  честно перекрывает toolbar/form/MDI текст благодаря painter order.
+- **Тесты.** `paint_command_stream_keeps_rect_text_rect_text_order`,
+  `popup_background_is_batched_after_base_text_without_masking`,
+  `nested_popup_batches_paint_parent_before_child`,
+  `mdi_content_is_painted_before_floating_top_level_windows`.
+- **Проверки.** `cargo test --workspace` — 136 passed (app 41,
+  form-xml 8, rqt 87); `mix test` — 29 passed; `trunk build --release`.
+  В браузере (chrome-devtools MCP, WSLg Chromium :9222) проверены
+  `?main=test_main.lua` (Файл/Вид/вложенное подменю/toolbar) и
+  `?lua=demo_icons.lua&ui=test_dialog01.ui`; скриншоты до/после сняты.
+
+### Application shell 0.14: main window, menu, toolbar, top-level, modal
+
+- **Режимы запуска.** `?main=<script>` — full mode с main-сессией
+  (`role=main`) и оболочкой; `?lua=<script>&ui=...` — standalone без
+  главного окна; `?mode=full&lua=...` — явный full. `?app=` остаётся
+  application id.
+- **Протокол.** `createForm` теперь всегда несёт `role`, `mode`,
+  `placement` (`mdi`/`top-level`), `modal`, `modal_scope`; `start_app`
+  запускает main, `setAppProperty` содержит `source_form_id`/`role`.
+- **Main session.** `DialogManager.start_app`, one main per application;
+  main владеет top-level формами; `Form:close` на main закрывает
+  приложение; menu actions маршрутизируются в main (`menuAction`).
+- **Клиент.** `Shell`: menu bar, toolbar, statusbar; `QMdiArea` —
+  центральная область; `floating` — top-level слой (z-order, активация,
+  drag/resize/close); menu popup/вложенные подменю/иконки; toolbar
+  actions; status message + технические поля.
+- **Меню не смешивается с toolbar.** Исторически glyphon рисовал все
+  text-runs после всех прямоугольников, и текст toolbar просвечивал
+  через popup; временно он отбрасывался по popup rect. В 0.15 маскировка
+  удалена и заменена упорядоченным display list (см. выше).
+- **Standalone.** Формы идут в top-level, `mdi=true` коэрсится в
+  top-level; меню/statusbar нет. Full/standalone проверены в браузере.
+- **Modal.** `modal_scope` (`application`/`window`); application modal
+  блокирует shell, MDI и top-level; клавиатурный guard.
+- **Lua.** `App:setToolBar`, `setToolBarVisible`, `setStatusMessage`/
+  `showMessage`, `setStatusVisible`, `setStatusInfo`; menu actions
+  выполняет main-сессия через `App:open_lua`/`App:close`.
+- **Отложено.** 0.14.8 — загрузка `QMainWindow`/`QMenuBar`/`QStatusBar`
+  из `.ui` (D3-A: пока фиксированная оболочка); golden-снимки
+  menu/statusbar.
+- **Тесты.** `cargo test --workspace` — 132 passed (app 37, form-xml 8,
+  rqt 87); `mix test` — 29 passed; wasm check — ok. Live:
+  `?main=test_main.lua` (menu/toolbar/status/MDI/top-level/exit),
+  `?lua=demo_icons.lua&ui=test_dialog01.ui` (standalone top-level).
+
+### MDI: ресайзабельность, min/max и курсоры границ
+
+- `QMdiSubWindow` получил `resizable`, `min_content`, `max_content`.
+  `can_resize()` учитывает флаг, maximized/minimized и вырожденный диапазон;
+  `set_size_constraints`/`set_frame`/`resize_content`/`set_content_geometry`
+  клампят размер по `minimumSize`/`maximumSize` формы.
+- Интерактивные зоны: 4 px по краям, 8 px в углах, 12 px у нижне-правого
+  grip; новые `QMdiSubWindowHit::Resize{Top,Bottom,Left,Right,*}`.
+  Перетаскивание любой границы/угла держит противоположную грань на месте
+  (`resized_frame`), максимум/минимум соблюдаются.
+- Grip рисуется только при `can_resize()`.
+- Курсор: при наведении на границу/угол winit `set_cursor` ставит
+  `W/E/N/S/Nw/Ne/Sw/Se-resize`, вне границ — `Default`; во время drag
+  курсор сохраняется, на `CursorLeft` сбрасывается.
+- Флаг: `Form:setResizable(false)` (алиас `setSizeGripEnabled`),
+  `sizeGripEnabled=false` из `.ui` или `windowFlags` с
+  `MSWindowsFixedSizeDialogHint` (парсится `<set>` в form-xml).
+- `Form:setMinimumSize`/`Form:setMaximumSize` (2 аргумента или таблица);
+  изменения на лету клампят подокно и перелейавливают форму.
+- Тесты: `resize_borders_follow_resizable_flag_and_constraints` (rqt),
+  `resized_frame_anchors_opposite_edges_and_clamps`,
+  `resize_cursor_follows_the_border_direction`,
+  `form_resize_flag_and_constraints_follow_ui_and_commands` (app),
+  `parses_window_flag_sets` (form-xml), e2e-фикстура `test_form_resize.lua`.
+- Проверки: `cargo test --workspace` — 123 passed (app 28, form-xml 8,
+  rqt 87); `mix test` — 25 passed; wasm check — ok.
+- Вживую: курсоры `w-resize`/`nw-resize`/`e-resize`; перетаскивание левой
+  границы сжимает форму, сохраняя правую; у `setResizable(false)` grip
+  скрыт, курсор на границе — обычная стрелка.
+
+### Формы: `Form:move` / `Form:resize`
+
+- `form.lua`: `Form:move(x, y | {x,y})` шлёт `setFormProperty "position"`,
+  `Form:resize(w, h | {w,h})` — `setFormProperty "size"`.
+- Клиент (`app::on_command`): `position` (Map с `x`/`y`) двигает MDI-подокно,
+  сохраняя размер; `size` (Size) меняет размер, сохраняя позицию. Оба
+  обновляют `QMdiSubWindow.frame`, content rect и дерево виджетов.
+  `Form:setGeometry({x,y,w,h})` по-прежнему двигает и меняет размер сразу.
+- Проверено вживую (WSLg-Chromium): `Form:move(40,40)` перемещает форму без
+  изменения размера, `Form:resize(380,220)` уменьшает её на месте.
+  Координаты — content rect: заголовок MDI рисуется на 24 px выше, поэтому
+  для видимого заголовка нужно `y >= 24`.
+- Тесты: `form_position_and_size_keep_the_other_dimension` (app),
+  `form move/resize sugar sends position and size` + фикстура
+  `test_form_move.lua` (server).
+- Проверки: `cargo test --workspace` — 117 passed (app 24, form-xml 7,
+  rqt 86); `mix test` — 24 passed; wasm check — ok.
+
+### 0.12.1: ячейки `<item>` и первый размер canvas
+
+- `form-xml`: добавлен `LayoutCell { row, column, row_span, column_span }`
+  (дефолт `0/0/1/1`), читаются атрибуты
+  `<item row= column= rowspan= colspan=>` для widget, nested layout и spacer.
+- `GridConfig` (массивы `row_span`/`col_span`/stretch) удалён из `form-xml`:
+  модель не соответствовала `.ui`, где span — свойство элемента.
+- `rqt`: `QLayoutItem::{Widget,Spacer,Layout}` несут `cell`; удалены мёртвые
+  `position`/`span`, `QBoxLayout.grid_config` и round-robin заглушка.
+- Тесты: `parses_item_cells_from_grid_layouts`,
+  `box_layout_items_default_to_single_cell`,
+  `invalid_cell_attributes_fall_back_to_defaults`.
+- **Исправлен чёрный экран до ресайза окна.** winit-web присылает `Resized`
+  до готовности `Gfx`, а `Window::inner_size()` остаётся `1x1`, поэтому
+  surface настраивался на 1×1 и форма не рисовалась. Теперь последний размер
+  из `Resized` хранится в `last_size`, применяется через `gfx.resize` сразу
+  после создания `Gfx`, затем вызывается `request_redraw()`.
+  Проверено в WSLg-Chromium: `canvas = 1280x657`, форма видна сразу, без
+  ручного изменения размера окна.
+- Проверки: `cargo test --workspace` — 116 passed (app 23, form-xml 7,
+  rqt 86); `cargo check -p app --target wasm32-unknown-unknown` — ok;
+  `mix test` — 23 passed.
+- Документация: `widgets-plan.md` (0.12.1 ✅), `EPlan_Status.md`.
+
+### App sugar: title/icon и задел под desktop-host
+
+- Добавлен host API `set_app_property/3` → команда `setAppProperty`
+  (`server/lib/e_platform/lua/api.ex`).
+- `application.lua`: `App:setWindowTitle` и `App:setIcon` работают через
+  `setAppProperty`; `resize`, `move`, `setGeometry`, `center`,
+  `showMaximized/Minimized/Normal/FullScreen`, `visible`, `set_menu`
+  объявлены и передаются тем же протоколом, но браузерный клиент их
+  игнорирует — задел под desktop-бинарник с нативным окном вокруг
+  встроенного браузера.
+- Клиент: `windowTitle` → `document.title`, `windowIcon` → favicon
+  (`<link rel=icon>`); URL/`data:`/относительные пути применяются напрямую,
+  `img24:N`/`img24d:N` — нарезкой встроенного спрайта (см. ниже),
+  `:/icons/...` остаются desktop-host.
+- `AppChrome` + `icon_url` изолируют разбор свойств от побочных эффектов;
+  добавлен юнит-тест `app_property_applies_browser_chrome_and_keeps_desktop_sugar_as_noop`.
+- Серверный e2e-тест `app sugar sends browser chrome and reserves
+  desktop-only properties` + фикстура `test_app_sugar.lua`.
+- Проверки: `cargo test --workspace` — 107 passed (app 22, form-xml 4,
+  rqt 81); `mix test` — 23 passed; `cargo check -p app --target
+  wasm32-unknown-unknown` — ok (web-sys features `Document`, `Element`,
+  `Node`, `HtmlLinkElement`, `HtmlHeadElement`).
+
+### Иконки: нарезка IMAGELIST24 (tcs_qtgui)
+
+- Из `tcs_qtgui/icons/IMAGELIST24.bmp` и `IMAGELIST24_DISABLED.bmp`
+  сгенерированы `client/assets/icons/IMAGELIST24.png` и
+  `IMAGELIST24_DISABLED.png` (белый фон → alpha 0, как в Qt
+  `iconFromSprite`); оба PNG встроены через `include_bytes!`.
+- Новый модуль `rqt::icons`: `spec_index` (нумерация Qt с 1, `0` = первый
+  элемент), ленивое декодирование спрайта (`OnceLock`), нарезка ячеек
+  24×24, `pixmap(spec)` и `png_bytes(spec)` для favicon.
+- `QRasterImage`: добавлены `from_png_bytes`/`to_png_bytes`; `save_png`
+  использует их, поэтому декод/энкод работает и на `wasm32`.
+- `rqt` loader: `<iconset normaloff/disabledoff>` и runtime
+  `setProperty("icon", "img24:N")` теперь режут спрайт; для нормальной
+  спецификации автоматически подставляется `img24d:N` в `icon_disabled`.
+- `app`: legacy-спецификация favicon кодируется в PNG data URL
+  (`image/png`) и ставится заменой `<link rel="icon">` — без Blob/object
+  URL. Проверено в headless Chromium (CDP): `document.title` меняется,
+  `href` начинается с `data:image/png;base64,`, в `window.__epLogs` есть
+  `apply app.windowIcon=png:... bytes`.
+- Тесты: 4 теста `rqt::icons` + `set_property_icon_slices_img24_sprite` +
+  расширенный `app_property_applies_browser_chrome_and_keeps_desktop_sugar_as_noop`.
+- Проверки: `cargo test --workspace` — 112 passed (app 22, form-xml 4,
+  rqt 86); `mix test` — 23 passed; `cargo check -p app --target
+  wasm32-unknown-unknown` — ok.
+
+### Актуализация документации (кодовых изменений нет)
+
+- Зафиксирован фактический baseline: `cargo test --workspace` — 106 passed
+  (app 21, form-xml 4, rqt 81); `mix test` в `server/` — 22 passed.
+- `EPlan_Status.md` переписан: события 0.1–0.11 закрыты; «инфраструктура»
+  QGridLayout/QFormLayout признана нерабочей.
+- `widgets-plan.md` переписан: 0.12/0.13 разложены на шаги
+  (парсер `<item row/column/rowspan/colspan>` → `QLayoutKind` → геометрия →
+  span/alignment → golden), добавлены критерии готовности и риски.
+- `questions.md` переписан: вместо отчётов о выполненных задачах — реальные
+  открытые вопросы (stretch, политики QFormLayout, `create_empty_form`,
+  `Form:center`, `modal_result`, App sugar, `invoke_qt`, таблицы, данные,
+  review-пак, `tcs_back/db_migrate`).
+- `docs/lua-module-composition.md` §12: отмечены реализованные `open_opts` →
+  `init`, `open_lua`, модалки; `create_empty_form`, `Form:center`,
+  `tableLayout`/`groupedHeader`, App sugar, `invoke_qt` и слой данных — нет.
+- `docs/lua-event-loop-and-modal-forms.md`: добавлена пометка, что §4.3
+  («чего нет») устарел — модалки и `open_opts` реализованы.
+- Установлено расхождение: `form-xml::parse_layout` ставит `grid_config`
+  в `None` (`lib.rs:237`), grid-ветка `widgets.rs:2004` недостижима,
+  `position`/`span` в `QLayoutItem::Widget` нигде не читаются,
+  `formLayout`/`labelAlignment`/`fieldGrowthPolicy` не парсятся,
+  `QGridLayout` деградирует в hbox, `QFormLayout` — в vbox.
+
 ## 2026-11-24
 
 ### Tab-фокус и переходы по виджетам

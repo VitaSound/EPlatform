@@ -200,6 +200,74 @@ def spacer(horizontal, width=40, height=20):
     )
 
 
+def prop_size_policy(horizontal, vertical):
+    return (
+        '<property name="sizePolicy">'
+        f'<sizepolicy hsizetype="{horizontal}" vsizetype="{vertical}">'
+        "<horstretch>0</horstretch><verstretch>0</verstretch>"
+        "</sizepolicy></property>"
+    )
+
+
+def grid_item(row, column, content, rowspan=1, colspan=1, alignment=None):
+    attrs = f'row="{row}" column="{column}"'
+    if rowspan != 1:
+        attrs += f' rowspan="{rowspan}"'
+    if colspan != 1:
+        attrs += f' colspan="{colspan}"'
+    if alignment:
+        attrs += f' alignment="{alignment}"'
+    return f"<item {attrs}>{content}</item>"
+
+
+def grid_layout(name, items, spacing=6, margins=11):
+    body = "".join(items)
+    props = "".join(
+        f'<property name="{key}"><number>{value}</number></property>'
+        for key, value in (
+            ("leftMargin", margins),
+            ("topMargin", margins),
+            ("rightMargin", margins),
+            ("bottomMargin", margins),
+            ("spacing", spacing),
+        )
+    )
+    return f'<layout class="QGridLayout" name="{name}">{props}{body}</layout>'
+
+
+def form_grid(title, width, height, grid):
+    root = widget(
+        "QDialog",
+        "Dialog",
+        (
+            '<property name="geometry"><rect>'
+            f'<x>0</x><y>0</y><width>{width}</width><height>{height}</height>'
+            "</rect></property>"
+            + prop_text("windowTitle", title)
+        ),
+        grid,
+    )
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        f'<ui version="4.0"><class>Dialog</class>{root}</ui>\n'
+    )
+
+
+def add_grid(cases, name, title, width, height, items, description=""):
+    cases.append(
+        {
+            "id": f"grid/{name}",
+            "category": "grid",
+            "name": name,
+            "title": title,
+            "description": description,
+            "xml": form_grid(
+                title, width, height, grid_layout("gridLayout", items)
+            ),
+        }
+    )
+
+
 def add(
     cases,
     category,
@@ -655,6 +723,101 @@ QTableWidget { background-color: #ffffff; border: 2px solid #3f51b5; }
             description=f"scrollbar policy {vertical} / {horizontal}",
         )
 
+    add_grid(
+        cases,
+        "2x2",
+        "Grid 2x2",
+        320,
+        220,
+        [
+            grid_item(0, 0, label("label_1", "Name:")),
+            grid_item(0, 1, line("lineEdit_1")),
+            grid_item(1, 0, label("label_2", "Code:")),
+            grid_item(1, 1, combo("comboBox_1")),
+        ],
+        description="simple 2x2 grid, label/field pairs",
+    )
+    add_grid(
+        cases,
+        "spans",
+        "Grid spans",
+        400,
+        300,
+        [
+            grid_item(0, 0, label("label_1", "Name:")),
+            grid_item(0, 1, line("lineEdit_1"), colspan=2),
+            grid_item(
+                1,
+                0,
+                button("ok", "OK"),
+                rowspan=2,
+                alignment="Qt::AlignHCenter|Qt::AlignVCenter",
+            ),
+            grid_item(1, 1, table("table", 10, 3), colspan=2),
+            grid_item(2, 1, label("label_2", "Status:")),
+            grid_item(2, 2, label("label_3", "Ready")),
+        ],
+        description="rowspan/colspan with item alignment",
+    )
+    add_grid(
+        cases,
+        "nested",
+        "Grid nested",
+        420,
+        300,
+        [
+            grid_item(0, 0, label("label_1", "Filter:")),
+            grid_item(0, 1, line("lineEdit_1"), colspan=2),
+            grid_item(
+                1,
+                0,
+                layout(
+                    "QHBoxLayout",
+                    "noteLayout",
+                    [label("label_2", "Note:"), line("lineEdit_2")],
+                    6,
+                    0,
+                ),
+                colspan=3,
+            ),
+            grid_item(2, 0, spacer(True), colspan=2),
+            grid_item(2, 2, button("close", "Close")),
+        ],
+        description="nested box layout and spacer inside grid cells",
+    )
+    add_grid(
+        cases,
+        "policies",
+        "Grid policies",
+        480,
+        340,
+        [
+            grid_item(
+                0,
+                0,
+                widget(
+                    "QPushButton",
+                    "fixed",
+                    prop_size_policy("Fixed", "Fixed") + prop_text("text", "Fixed"),
+                ),
+            ),
+            grid_item(0, 1, line("lineEdit_1")),
+            grid_item(1, 0, table("table", 8, 3), colspan=2),
+            grid_item(
+                2,
+                0,
+                widget(
+                    "QLabel",
+                    "growing",
+                    prop_size_policy("Expanding", "Preferred")
+                    + prop_text("text", "Status:"),
+                ),
+            ),
+            grid_item(2, 1, label("label_2", "ready")),
+        ],
+        description="explicit sizePolicy Expanding/Fixed in a grid",
+    )
+
     assert len(cases) >= 70, len(cases)
     return cases
 
@@ -815,7 +978,7 @@ nav{{background:white;border:1px solid #d8dde6;padding:10px 12px;border-radius:6
 </style></head><body>
 <h1>EPlatform Qt review</h1>
 <p class="note">Комментарии: <a href="comments.md">review/comments.md</a>. ID формы стабилен между прогонами.
-Категории <code>scroll</code> и <code>selection</code> — в конце страницы (быстрый переход в навигации ниже).</p>
+Категории <code>scroll</code>, <code>selection</code> и <code>grid</code> — в конце страницы (быстрый переход в навигации ниже).</p>
 <p>Форм: {len(cases)}. Diff: mean по каналам 0–255.</p>
 <nav>{nav}</nav>
 {''.join(sections)}

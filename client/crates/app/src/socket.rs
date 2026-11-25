@@ -8,6 +8,8 @@
 pub enum SocketEvent {
     Opened,
     Joined,
+    /// `phx_reply` payload for a non-join request (e.g. `start_app`).
+    Reply(serde_json::Value),
     Command(serde_json::Value),
     Closed,
     Error(String),
@@ -37,6 +39,8 @@ pub(crate) mod protocol {
     pub enum Decoded {
         /// First `phx_reply` with `status: ok` for our topic → join ack.
         Joined,
+        /// A non-join `phx_reply` payload (request reply).
+        Reply(Value),
         /// Server-initiated `command` push (createForm, setProperty, ...).
         Command(Value),
         /// Anything else (heartbeat replies, non-ok replies, foreign topics).
@@ -57,7 +61,14 @@ pub(crate) mod protocol {
                 if arr[2].as_str() == Some(topic)
                     && payload.get("status").and_then(Value::as_str) == Some("ok") =>
             {
-                Decoded::Joined
+                // The join reply is the only reply with ref "1"; later
+                // request replies (start_app/start_dialog) must be delivered
+                // to the app so it can remember the main session id.
+                if arr[1].as_str() == Some("1") {
+                    Decoded::Joined
+                } else {
+                    Decoded::Reply(payload)
+                }
             }
             "command" => Decoded::Command(payload),
             _ => Decoded::Other,
@@ -116,6 +127,9 @@ mod imp {
                             Some(crate::socket::protocol::Decoded::Joined) if !joined.get() => {
                                 joined.set(true);
                                 let _ = on_event.send(SocketEvent::Joined);
+                            }
+                            Some(crate::socket::protocol::Decoded::Reply(payload)) => {
+                                let _ = on_event.send(SocketEvent::Reply(payload));
                             }
                             Some(crate::socket::protocol::Decoded::Command(payload)) => {
                                 let _ = on_event.send(SocketEvent::Command(payload));
@@ -258,6 +272,19 @@ mod tests {
     fn decode_join_ack() {
         let frame = json!(["1", "1", "app:demo", "phx_reply", {"status": "ok"}]).to_string();
         assert_eq!(protocol::decode(&frame, "app:demo"), Some(Decoded::Joined));
+    }
+
+    #[test]
+    fn decode_request_reply_after_join() {
+        let frame = json!(["1", "2", "app:demo", "phx_reply",
+            {"status": "ok", "response": {"form_id": "main", "role": "main"}}])
+        .to_string();
+        match protocol::decode(&frame, "app:demo") {
+            Some(Decoded::Reply(payload)) => {
+                assert_eq!(payload["response"]["role"], "main");
+            }
+            other => panic!("expected Reply, got {:?}", other),
+        }
     }
 
     #[test]

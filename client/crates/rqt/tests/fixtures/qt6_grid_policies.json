@@ -1,0 +1,520 @@
+{
+    "font": {
+        "ascent": 13,
+        "descent": 3.296875,
+        "family": "DejaVu Sans",
+        "height": 16.296875,
+        "m_advance": 12.078125,
+        "pixel_size": 14,
+        "textlabel_advance": 66.015625,
+        "x_advance": 8.28125
+    },
+    "form_class": "QDialog",
+    "form_name": "GridDialog",
+    "geometry": {
+        "h": 340,
+        "w": 480,
+        "x": 158,
+        "y": 128
+    },
+    "layout": {
+        "bottom": 11,
+        "left": 11,
+        "right": 11,
+        "spacing": 6,
+        "top": 11
+    },
+    "root_layout_items": [
+        {
+            "class": "QPushButton",
+            "h": 25,
+            "hint_h": 25,
+            "hint_w": 80,
+            "i": 0,
+            "w": 80,
+            "widget": "pushButton_1",
+            "x": 11,
+            "y": 11
+        },
+        {
+            "class": "QLineEdit",
+            "h": 24,
+            "hint_h": 24,
+            "hint_w": 142,
+            "i": 1,
+            "w": 226,
+            "widget": "lineEdit_1",
+            "x": 243,
+            "y": 11
+        },
+        {
+            "class": "QTableWidget",
+            "h": 264,
+            "hint_h": 192,
+            "hint_w": 256,
+            "i": 2,
+            "w": 458,
+            "widget": "tableWidget_1",
+            "x": 11,
+            "y": 42
+        },
+        {
+            "class": "QLabel",
+            "h": 17,
+            "hint_h": 17,
+            "hint_w": 50,
+            "i": 3,
+            "w": 226,
+            "widget": "label_1",
+            "x": 11,
+            "y": 312
+        },
+        {
+            "class": "QLabel",
+            "h": 17,
+            "hint_h": 17,
+            "hint_w": 40,
+            "i": 4,
+            "w": 226,
+            "widget": "label_2",
+            "x": 243,
+            "y": 312
+        }
+    ],
+    "scroll_areas": [
+        {
+            "class": "QTableWidget",
+            "hbar": {
+                "add_line": {
+                    "h": 14,
+                    "w": 14,
+                    "x": 428,
+                    "y": 0
+                },
+                "max": 0,
+                "min": 0,
+                "page": 3,
+                "rect": {
+                    "h": 14,
+                    "w": 442,
+                    "x": 12,
+                    "y": 291
+                },
+                "single": 1,
+                "slider": {
+                    "h": 14,
+                    "w": 414,
+                    "x": 14,
+                    "y": 0
+                },
+                "sub_line": {
+                    "h": 14,
+                    "w": 14,
+                    "x": 0,
+                    "y": 0
+                },
+                "value": 0,
+                "visible": false
+            },
+            "name": "tableWidget_1",
+            "vbar": {
+                "add_line": {
+                    "h": 14,
+                    "w": 14,
+                    "x": 0,
+                    "y": 234
+                },
+                "max": 0,
+                "min": 0,
+                "page": 8,
+                "rect": {
+                    "h": 248,
+                    "w": 14,
+                    "x": 454,
+                    "y": 43
+                },
+                "single": 1,
+                "slider": {
+                    "h": 220,
+                    "w": 14,
+                    "x": 0,
+                    "y": 14
+                },
+                "sub_line": {
+                    "h": 14,
+                    "w": 14,
+                    "x": 0,
+                    "y": 0
+                },
+                "value": 0,
+                "visible": false
+            },
+            "viewport": {
+                "h": 241,
+                "w": 442,
+                "x": 26,
+                "y": 64
+            }
+        },
+        {
+            "class": "QHeaderView",
+            "hbar": {
+                "add_line": {
+                    "h": 30,
+                    "w": 14,
+                    "x": 86,
+                    "y": 0
+                },
+                "max": 0,
+                "min": 0,
+                "page": 10,
+                "rect": {
+                    "h": 30,
+                    "w": 100,
+                    "x": 12,
+                    "y": 64
+                },
+                "single": 1,
+                "slider": {
+                    "h": 30,
+                    "w": 72,
+                    "x": 14,
+                    "y": 0
+                },
+                "sub_line": {
+                    "h": 30,
+                    "w": 14,
+                    "x": 0,
+                    "y": 0
+                },
+                "value": 0,
+                "visible": false
+            },
+            "name": "",
+            "vbar": {
+                "add_line": {
+                    "h": 14,
+                    "w": 100,
+                    "x": 0,
+                    "y": 16
+                },
+                "max": 0,
+                "min": 0,
+                "page": 10,
+                "rect": {
+                    "h": 30,
+                    "w": 100,
+                    "x": 12,
+                    "y": 64
+                },
+                "single": 1,
+                "slider": {
+                    "h": 2,
+                    "w": 100,
+                    "x": 0,
+                    "y": 14
+                },
+                "sub_line": {
+                    "h": 14,
+                    "w": 100,
+                    "x": 0,
+                    "y": 0
+                },
+                "value": 0,
+                "visible": false
+            },
+            "viewport": {
+                "h": 241,
+                "w": 14,
+                "x": 12,
+                "y": 64
+            }
+        },
+        {
+            "class": "QHeaderView",
+            "hbar": {
+                "add_line": {
+                    "h": 30,
+                    "w": 14,
+                    "x": 86,
+                    "y": 0
+                },
+                "max": 0,
+                "min": 0,
+                "page": 10,
+                "rect": {
+                    "h": 30,
+                    "w": 100,
+                    "x": 26,
+                    "y": 43
+                },
+                "single": 1,
+                "slider": {
+                    "h": 30,
+                    "w": 72,
+                    "x": 14,
+                    "y": 0
+                },
+                "sub_line": {
+                    "h": 30,
+                    "w": 14,
+                    "x": 0,
+                    "y": 0
+                },
+                "value": 0,
+                "visible": false
+            },
+            "name": "",
+            "vbar": {
+                "add_line": {
+                    "h": 14,
+                    "w": 100,
+                    "x": 0,
+                    "y": 16
+                },
+                "max": 0,
+                "min": 0,
+                "page": 10,
+                "rect": {
+                    "h": 30,
+                    "w": 100,
+                    "x": 26,
+                    "y": 43
+                },
+                "single": 1,
+                "slider": {
+                    "h": 2,
+                    "w": 100,
+                    "x": 0,
+                    "y": 14
+                },
+                "sub_line": {
+                    "h": 14,
+                    "w": 100,
+                    "x": 0,
+                    "y": 0
+                },
+                "value": 0,
+                "visible": false
+            },
+            "viewport": {
+                "h": 21,
+                "w": 442,
+                "x": 26,
+                "y": 43
+            }
+        }
+    ],
+    "widgets": [
+        {
+            "class": "QDialog",
+            "h": 340,
+            "hint_h": 268,
+            "hint_w": 278,
+            "min_h": 146,
+            "min_w": 148,
+            "name": "GridDialog",
+            "policy_h": 5,
+            "policy_v": 5,
+            "w": 480,
+            "x": 0,
+            "y": 0
+        },
+        {
+            "class": "QPushButton",
+            "h": 25,
+            "hint_h": 25,
+            "hint_w": 80,
+            "min_h": 25,
+            "min_w": 80,
+            "name": "pushButton_1",
+            "policy_h": 0,
+            "policy_v": 0,
+            "w": 80,
+            "x": 11,
+            "y": 11
+        },
+        {
+            "class": "QLineEdit",
+            "h": 24,
+            "hint_h": 24,
+            "hint_w": 142,
+            "min_h": 24,
+            "min_w": 32,
+            "name": "lineEdit_1",
+            "policy_h": 7,
+            "policy_v": 0,
+            "w": 226,
+            "x": 243,
+            "y": 11
+        },
+        {
+            "class": "QTableWidget",
+            "h": 264,
+            "hint_h": 192,
+            "hint_w": 256,
+            "min_h": 70,
+            "min_w": 70,
+            "name": "tableWidget_1",
+            "policy_h": 7,
+            "policy_v": 7,
+            "w": 458,
+            "x": 11,
+            "y": 42
+        },
+        {
+            "class": "QWidget",
+            "h": 241,
+            "hint_h": -1,
+            "hint_w": -1,
+            "min_h": -1,
+            "min_w": -1,
+            "name": "qt_scrollarea_viewport",
+            "policy_h": 5,
+            "policy_v": 5,
+            "w": 442,
+            "x": 26,
+            "y": 64
+        },
+        {
+            "class": "QWidget",
+            "h": 241,
+            "hint_h": -1,
+            "hint_w": -1,
+            "min_h": -1,
+            "min_w": -1,
+            "name": "qt_scrollarea_viewport",
+            "policy_h": 5,
+            "policy_v": 5,
+            "w": 14,
+            "x": 12,
+            "y": 64
+        },
+        {
+            "class": "QWidget",
+            "h": 30,
+            "hint_h": 14,
+            "hint_w": 54,
+            "min_h": 14,
+            "min_w": 54,
+            "name": "qt_scrollarea_hcontainer",
+            "policy_h": 5,
+            "policy_v": 5,
+            "w": 100,
+            "x": 12,
+            "y": 64
+        },
+        {
+            "class": "QWidget",
+            "h": 30,
+            "hint_h": 54,
+            "hint_w": 14,
+            "min_h": 54,
+            "min_w": 14,
+            "name": "qt_scrollarea_vcontainer",
+            "policy_h": 5,
+            "policy_v": 5,
+            "w": 100,
+            "x": 12,
+            "y": 64
+        },
+        {
+            "class": "QWidget",
+            "h": 21,
+            "hint_h": -1,
+            "hint_w": -1,
+            "min_h": -1,
+            "min_w": -1,
+            "name": "qt_scrollarea_viewport",
+            "policy_h": 5,
+            "policy_v": 5,
+            "w": 442,
+            "x": 26,
+            "y": 43
+        },
+        {
+            "class": "QWidget",
+            "h": 30,
+            "hint_h": 14,
+            "hint_w": 54,
+            "min_h": 14,
+            "min_w": 54,
+            "name": "qt_scrollarea_hcontainer",
+            "policy_h": 5,
+            "policy_v": 5,
+            "w": 100,
+            "x": 26,
+            "y": 43
+        },
+        {
+            "class": "QWidget",
+            "h": 30,
+            "hint_h": 54,
+            "hint_w": 14,
+            "min_h": 54,
+            "min_w": 14,
+            "name": "qt_scrollarea_vcontainer",
+            "policy_h": 5,
+            "policy_v": 5,
+            "w": 100,
+            "x": 26,
+            "y": 43
+        },
+        {
+            "class": "QWidget",
+            "h": 14,
+            "hint_h": 14,
+            "hint_w": 54,
+            "min_h": 14,
+            "min_w": 54,
+            "name": "qt_scrollarea_hcontainer",
+            "policy_h": 5,
+            "policy_v": 5,
+            "w": 442,
+            "x": 12,
+            "y": 291
+        },
+        {
+            "class": "QWidget",
+            "h": 248,
+            "hint_h": 54,
+            "hint_w": 14,
+            "min_h": 54,
+            "min_w": 14,
+            "name": "qt_scrollarea_vcontainer",
+            "policy_h": 5,
+            "policy_v": 5,
+            "w": 14,
+            "x": 454,
+            "y": 43
+        },
+        {
+            "class": "QLabel",
+            "h": 17,
+            "hint_h": 17,
+            "hint_w": 50,
+            "min_h": 17,
+            "min_w": 50,
+            "name": "label_1",
+            "policy_h": 7,
+            "policy_v": 5,
+            "w": 226,
+            "x": 11,
+            "y": 312
+        },
+        {
+            "class": "QLabel",
+            "h": 17,
+            "hint_h": 17,
+            "hint_w": 40,
+            "min_h": 17,
+            "min_w": 40,
+            "name": "label_2",
+            "policy_h": 5,
+            "policy_v": 5,
+            "w": 226,
+            "x": 243,
+            "y": 312
+        }
+    ]
+}

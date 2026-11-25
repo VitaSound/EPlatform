@@ -17,9 +17,36 @@ defmodule EPlatformWeb.PlatformChannel do
     socket =
       socket
       |> assign(:application_id, application_id)
+      |> assign(:main_form_id, nil)
       |> assign(:form_ids, MapSet.new())
 
     {:ok, %{"application_id" => application_id}, socket}
+  end
+
+  @impl true
+  def handle_in("start_app", params, socket) do
+    application_id = socket.assigns.application_id
+    lua_file = params["lua_file"] || ""
+
+    opts = %{
+      mode: :full,
+      role: :main,
+      mdi: false,
+      open_opts: params["open_opts"] || %{}
+    }
+
+    case DialogManager.start_app(application_id, lua_file, opts) do
+      {:ok, form_id} ->
+        socket =
+          socket
+          |> assign(:main_form_id, form_id)
+          |> assign(:form_ids, MapSet.put(socket.assigns.form_ids, form_id))
+
+        {:reply, {:ok, %{"form_id" => form_id, "role" => "main"}}, socket}
+
+      {:error, reason} ->
+        {:reply, {:error, %{"reason" => inspect(reason)}}, socket}
+    end
   end
 
   @impl true
@@ -27,10 +54,14 @@ defmodule EPlatformWeb.PlatformChannel do
     application_id = socket.assigns.application_id
     lua_file = params["lua_file"] || ""
     ui_file = params["ui_file"] || ""
+    standalone = params["mode"] == "standalone"
 
     opts = %{
       modal: params["modal"] == true,
-      mdi: params["mdi"] != false,
+      mdi: if(standalone, do: false, else: params["mdi"] != false),
+      mode: if(standalone, do: :standalone, else: :full),
+      role: :form,
+      modal_scope: params["modal_scope"] || "none",
       open_opts: params["open_opts"] || %{}
     }
 

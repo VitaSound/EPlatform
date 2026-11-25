@@ -1,5 +1,6 @@
 pub mod core;
 pub mod gui;
+pub mod icons;
 pub mod item_model;
 pub mod item_view;
 pub mod mdi;

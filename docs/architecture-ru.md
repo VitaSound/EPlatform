@@ -130,12 +130,28 @@ client/
 - После join-ack клиент сразу шлёт `start_dialog {lua_file, ui_file}`.
 - Не Qt-биндинги: `rqt` пере реализует семантику Qt, `app` растеризует paint-команды через wgpu; точность проверяется golden-PNG против Qt6 offscreen.
 
+### Application shell (этап 0.14)
+
+Клиент поддерживает два режима:
+
+- **full** — `?main=<script>`: main-сессия (`role=main`) и фиксированная
+  оболочка `QMenuBar` + `QToolBar` + central `QMdiArea` + `QStatusBar`;
+  формы с `placement=mdi` встраиваются в центральную область, формы с
+  `placement=top-level` живут отдельным слоем;
+- **standalone** — `?lua=<script>`: главного окна нет, форма открывается
+  top-level; `mdi=true` в этом режиме коэрсится в top-level.
+
+`App:set_menu`, `App:setToolBar`, `statusMessage` и menu actions
+обрабатываются main-сессией; `mdi` и `modal` — независимые флаги.
+Подробный план/статус: `docs/application-shell-plan.md`.
+
 ### Обработка команд сервера (`app/src/lib.rs`, `on_command`)
 
 | Команда | Действие клиента |
 |---|---|
 | `createForm` | `load_ui(ui_xml)` → дерево виджетов, карточка `QMdiSubWindow`, в `modal_stack` если `modal` |
 | `setProperty` / `setFormProperty` | `tree.set_property(...)` + relayout |
+| `setAppProperty` | `windowTitle` → `document.title`, `windowIcon` → favicon; остальные свойства игнорируются (desktop-host) |
 | `getProperty` / `getFormProperty` | читает локально и отвечает `send_event {command:"getProperty", ref, value}` |
 | `closeForm` / `closeApplication` | убрать форму / все формы |
 | `dialogError` | лог |
@@ -151,13 +167,15 @@ client/
 Топик: **`app:<application_id>`**.
 
 Клиент → сервер:
-- `start_dialog {lua_file, ui_file, modal?, mdi?, open_opts?}` → reply `{form_id}`;
-- `send_event` c `formEvent` или ответом на `getProperty`;
+- `start_app {lua_file, open_opts?}` → reply `{form_id, role:"main"}`;
+- `start_dialog {lua_file, ui_file, mode?, placement?, modal?, modal_scope?, open_opts?}` → reply `{form_id}`;
+- `send_event` c `formEvent`/`menuAction` или ответом на `getProperty`;
 - `phxheartbeat` на топике `"phoenix"`.
 
 Сервер → клиент (всё на событии `command`, payload содержит `application_id` и `form_id`):
-`createForm {ui_xml}`, `setProperty`, `setFormProperty`, `getProperty` (запрос),
-`closeForm`, `closeApplication`, `dialogError`.
+`createForm {ui_xml, role?, mode?, placement?, modal_scope?}`,
+`setProperty`, `setFormProperty`, `setAppProperty` (menu/toolBar/status),
+`getProperty` (запрос), `closeForm`, `closeApplication`, `dialogError`.
 
 Модальные результаты ходят **только сырым `send`/`receive`**
 (`{:modal_result, ref, result}`), никогда `GenServer.call` — иначе вложенные

@@ -161,6 +161,115 @@ defmodule EPlatform.LuaModulesTest do
     }
   end
 
+  test "form resize flag and size constraints are sent", %{socket: socket} do
+    form_id = start_dialog(socket, "test_dialog01.ui", "test_form_resize.lua")
+
+    assert_push "command", %{"command" => "createForm", "form_id" => ^form_id}
+
+    assert_push "command", %{
+      "command" => "setFormProperty",
+      "form_id" => ^form_id,
+      "property" => "resizable",
+      "value" => false
+    }
+
+    assert_push "command", %{
+      "command" => "setFormProperty",
+      "form_id" => ^form_id,
+      "property" => "minimumSize",
+      "value" => %{"w" => 200, "h" => 150}
+    }
+
+    assert_push "command", %{
+      "command" => "setFormProperty",
+      "form_id" => ^form_id,
+      "property" => "maximumSize",
+      "value" => %{"w" => 400, "h" => 300}
+    }
+  end
+
+  test "form move/resize sugar sends position and size", %{socket: socket} do
+    form_id = start_dialog(socket, "test_dialog01.ui", "test_form_move.lua")
+
+    assert_push "command", %{"command" => "createForm", "form_id" => ^form_id}
+
+    assert_push "command", %{
+      "command" => "setFormProperty",
+      "form_id" => ^form_id,
+      "property" => "position",
+      "value" => %{"x" => 40, "y" => 40}
+    }
+
+    assert_push "command", %{
+      "command" => "setFormProperty",
+      "form_id" => ^form_id,
+      "property" => "size",
+      "value" => %{"w" => 320, "h" => 200}
+    }
+  end
+
+  test "app sugar sends browser chrome and reserves desktop-only properties", %{
+    socket: socket,
+    app_id: app_id
+  } do
+    _form_id = start_dialog(socket, "test_dialog01.ui", "test_app_sugar.lua")
+
+    assert_push "command", %{
+      "command" => "setAppProperty",
+      "application_id" => ^app_id,
+      "property" => "windowTitle",
+      "value" => "Sugar title"
+    }
+
+    assert_push "command", %{
+      "command" => "setAppProperty",
+      "property" => "windowIcon",
+      "value" => "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg'/>"
+    }
+
+    assert_push "command", %{
+      "command" => "setAppProperty",
+      "property" => "size",
+      "value" => %{"w" => 640, "h" => 480}
+    }
+
+    assert_push "command", %{
+      "command" => "setAppProperty",
+      "property" => "position",
+      "value" => %{"x" => 10, "y" => 20}
+    }
+
+    assert_push "command", %{
+      "command" => "setAppProperty",
+      "property" => "geometry",
+      "value" => %{"x" => 1, "y" => 2, "w" => 640, "h" => 480}
+    }
+
+    assert_push "command", %{
+      "command" => "setAppProperty",
+      "property" => "centered",
+      "value" => true
+    }
+
+    assert_push "command", %{
+      "command" => "setAppProperty",
+      "property" => "windowState",
+      "value" => "maximized"
+    }
+
+    assert_push "command", %{
+      "command" => "setAppProperty",
+      "property" => "windowState",
+      "value" => "minimized"
+    }
+
+    assert_push "command", %{
+      "command" => "setAppProperty",
+      "property" => "visible",
+      "value" => true
+    }
+  end
+
   test "channel terminate stops open_lua children", %{socket: socket, app_id: app_id} do
     Process.flag(:trap_exit, true)
 

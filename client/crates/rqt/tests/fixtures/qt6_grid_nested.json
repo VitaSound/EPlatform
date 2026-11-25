@@ -1,0 +1,169 @@
+{
+    "font": {
+        "ascent": 13,
+        "descent": 3.296875,
+        "family": "DejaVu Sans",
+        "height": 16.296875,
+        "m_advance": 12.078125,
+        "pixel_size": 14,
+        "textlabel_advance": 66.015625,
+        "x_advance": 8.28125
+    },
+    "form_class": "QDialog",
+    "form_name": "GridDialog",
+    "geometry": {
+        "h": 300,
+        "w": 420,
+        "x": 188,
+        "y": 148
+    },
+    "layout": {
+        "bottom": 11,
+        "left": 11,
+        "right": 11,
+        "spacing": 6,
+        "top": 11
+    },
+    "root_layout_items": [
+        {
+            "class": "QLabel",
+            "h": 24,
+            "hint_h": 17,
+            "hint_w": 40,
+            "i": 0,
+            "w": 129,
+            "widget": "label_1",
+            "x": 11,
+            "y": 59
+        },
+        {
+            "class": "QLineEdit",
+            "h": 24,
+            "hint_h": 24,
+            "hint_w": 142,
+            "i": 1,
+            "w": 263,
+            "widget": "lineEdit_1",
+            "x": 146,
+            "y": 59
+        },
+        {
+            "h": 24,
+            "hint_h": 24,
+            "hint_w": 186,
+            "i": 2,
+            "layout": "QHBoxLayout",
+            "w": 398,
+            "x": 11,
+            "y": 137
+        },
+        {
+            "h": 25,
+            "hint_h": 20,
+            "hint_w": 40,
+            "i": 3,
+            "w": 263,
+            "x": 11,
+            "y": 215
+        },
+        {
+            "class": "QPushButton",
+            "h": 25,
+            "hint_h": 25,
+            "hint_w": 80,
+            "i": 4,
+            "w": 129,
+            "widget": "pushButton_3",
+            "x": 280,
+            "y": 215
+        }
+    ],
+    "scroll_areas": [
+    ],
+    "widgets": [
+        {
+            "class": "QDialog",
+            "h": 300,
+            "hint_h": 107,
+            "hint_w": 210,
+            "min_h": 107,
+            "min_w": 154,
+            "name": "GridDialog",
+            "policy_h": 5,
+            "policy_v": 5,
+            "w": 420,
+            "x": 0,
+            "y": 0
+        },
+        {
+            "class": "QLabel",
+            "h": 24,
+            "hint_h": 17,
+            "hint_w": 40,
+            "min_h": 17,
+            "min_w": 40,
+            "name": "label_1",
+            "policy_h": 5,
+            "policy_v": 5,
+            "w": 129,
+            "x": 11,
+            "y": 59
+        },
+        {
+            "class": "QLineEdit",
+            "h": 24,
+            "hint_h": 24,
+            "hint_w": 142,
+            "min_h": 24,
+            "min_w": 32,
+            "name": "lineEdit_1",
+            "policy_h": 7,
+            "policy_v": 0,
+            "w": 263,
+            "x": 146,
+            "y": 59
+        },
+        {
+            "class": "QLabel",
+            "h": 24,
+            "hint_h": 17,
+            "hint_w": 38,
+            "min_h": 17,
+            "min_w": 38,
+            "name": "label_2",
+            "policy_h": 5,
+            "policy_v": 5,
+            "w": 38,
+            "x": 11,
+            "y": 137
+        },
+        {
+            "class": "QLineEdit",
+            "h": 24,
+            "hint_h": 24,
+            "hint_w": 142,
+            "min_h": 24,
+            "min_w": 32,
+            "name": "lineEdit_2",
+            "policy_h": 7,
+            "policy_v": 0,
+            "w": 354,
+            "x": 55,
+            "y": 137
+        },
+        {
+            "class": "QPushButton",
+            "h": 25,
+            "hint_h": 25,
+            "hint_w": 80,
+            "min_h": 25,
+            "min_w": 80,
+            "name": "pushButton_3",
+            "policy_h": 1,
+            "policy_v": 0,
+            "w": 129,
+            "x": 280,
+            "y": 215
+        }
+    ]
+}

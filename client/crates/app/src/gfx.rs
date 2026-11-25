@@ -56,6 +56,16 @@ pub struct ColoredText {
     pub color: [f32; 4],
 }
 
+/// One homogeneous run of the ordered display list. Rects and text are
+/// kept in painter order; adjacent commands of the same kind are merged,
+/// but a `Rects -> Text -> Rects` sequence is never flattened into two
+/// global pools.
+#[derive(Debug, Clone)]
+pub enum PaintBatch {
+    Rects(Vec<ColoredRect>),
+    Text(Vec<ColoredText>),
+}
+
 /// Font metrics for widget text (labels, inputs, buttons).
 const FONT_SIZE: f32 = 14.0;
 pub(crate) const LINE_HEIGHT: f32 = 18.0;
@@ -66,7 +76,9 @@ struct TextState {
     swash_cache: SwashCache,
     atlas: TextAtlas,
     viewport: Viewport,
-    renderer: TextRenderer,
+    /// One renderer per consecutive text batch. Rendering them in batch
+    /// order inside a single render pass preserves the display list.
+    renderers: Vec<TextRenderer>,
 }
 
 #[repr(C)]
@@ -249,7 +261,7 @@ impl Gfx {
             swash_cache: SwashCache::new(),
             atlas,
             viewport,
-            renderer,
+            renderers: vec![renderer],
         };
 
         Ok(Self {
@@ -302,9 +314,10 @@ impl Gfx {
         &self.queue
     }
 
-    /// Clear the frame, then draw `rects` (one batched pass) and `texts`
-    /// (glyphon) on top of them.
-    pub fn render(&mut self, clear: wgpu::Color, rects: &[ColoredRect], texts: &[ColoredText]) {
+    /// Clear the frame, then replay `batches` in painter order. Rect runs
+    /// share one vertex buffer; each text run is prepared into its own
+    /// glyphon renderer so text can appear between rectangles.
+    pub fn render(&mut self, clear: wgpu::Color, batches: &[PaintBatch]) {
         use wgpu::CurrentSurfaceTexture;
 
         let frame = match self.surface.get_current_texture() {
@@ -324,41 +337,67 @@ impl Gfx {
             a: clear.a,
         };
 
-        // Pixel rects → NDC triangles.
+        // Pixel rects → NDC triangles. Each rect batch keeps a vertex range
+        // into the single shared buffer; batches are replayed in order.
         let surface_w = self.config.width.max(1) as f32;
         let surface_h = self.config.height.max(1) as f32;
         let scale = self.ui_scale;
         self.scratch.clear();
-        for r in rects.iter().take(MAX_RECTS) {
-            let x = (r.x * scale).round();
-            let y = (r.y * scale).round();
-            let w = (r.w * scale).round().max(1.0);
-            let h = (r.h * scale).round().max(1.0);
-            let x0 = x / surface_w * 2.0 - 1.0;
-            let x1 = (x + w) / surface_w * 2.0 - 1.0;
-            let y0 = 1.0 - y / surface_h * 2.0;
-            let y1 = 1.0 - (y + h) / surface_h * 2.0;
-            let c = [
-                srgb_to_linear(r.color[0]),
-                srgb_to_linear(r.color[1]),
-                srgb_to_linear(r.color[2]),
-                r.color[3],
-            ];
-            let v = |p: [f32; 2]| RectVert { pos: p, color: c };
-            // Two triangles: (x0,y0)-(x1,y0)-(x0,y1), (x1,y0)-(x1,y1)-(x0,y1).
-            self.scratch.push(v([x0, y0]));
-            self.scratch.push(v([x1, y0]));
-            self.scratch.push(v([x0, y1]));
-            self.scratch.push(v([x1, y0]));
-            self.scratch.push(v([x1, y1]));
-            self.scratch.push(v([x0, y1]));
+        let mut ranges = Vec::with_capacity(batches.len());
+        let mut text_slots = Vec::with_capacity(batches.len());
+        let mut text_count = 0usize;
+        for batch in batches {
+            match batch {
+                PaintBatch::Rects(rects) => {
+                    let start = self.scratch.len() as u32;
+                    for r in rects
+                        .iter()
+                        .take(MAX_RECTS.saturating_sub(start as usize / 6))
+                    {
+                        let x = (r.x * scale).round();
+                        let y = (r.y * scale).round();
+                        let w = (r.w * scale).round().max(1.0);
+                        let h = (r.h * scale).round().max(1.0);
+                        let x0 = x / surface_w * 2.0 - 1.0;
+                        let x1 = (x + w) / surface_w * 2.0 - 1.0;
+                        let y0 = 1.0 - y / surface_h * 2.0;
+                        let y1 = 1.0 - (y + h) / surface_h * 2.0;
+                        let c = [
+                            srgb_to_linear(r.color[0]),
+                            srgb_to_linear(r.color[1]),
+                            srgb_to_linear(r.color[2]),
+                            r.color[3],
+                        ];
+                        let v = |p: [f32; 2]| RectVert { pos: p, color: c };
+                        // Two triangles per rect.
+                        self.scratch.push(v([x0, y0]));
+                        self.scratch.push(v([x1, y0]));
+                        self.scratch.push(v([x0, y1]));
+                        self.scratch.push(v([x1, y0]));
+                        self.scratch.push(v([x1, y1]));
+                        self.scratch.push(v([x0, y1]));
+                    }
+                    ranges.push(Some((start, self.scratch.len() as u32)));
+                    text_slots.push(None);
+                }
+                PaintBatch::Text(texts) => {
+                    ranges.push(None);
+                    if texts.is_empty() {
+                        text_slots.push(None);
+                    } else {
+                        text_slots.push(Some(text_count));
+                        text_count += 1;
+                    }
+                }
+            }
         }
         if !self.scratch.is_empty() {
             self.queue
                 .write_buffer(&self.rect_buffer, 0, bytemuck::cast_slice(&self.scratch));
         }
 
-        // Shape all text runs and upload glyphs into the atlas.
+        // Shape text runs and upload glyphs into the atlas, one renderer per
+        // text batch so the single pass can replay them in display-list order.
         self.text.viewport.update(
             &self.queue,
             Resolution {
@@ -366,57 +405,77 @@ impl Gfx {
                 height: self.config.height.max(1),
             },
         );
-        let mut buffers: Vec<Buffer> = Vec::with_capacity(texts.len());
+        {
+            let state = &mut self.text;
+            while state.renderers.len() < text_count {
+                let renderer = TextRenderer::new(
+                    &mut state.atlas,
+                    &self.device,
+                    wgpu::MultisampleState::default(),
+                    None,
+                );
+                state.renderers.push(renderer);
+            }
+        }
         let font_size = FONT_SIZE * scale;
         let line_height = LINE_HEIGHT * scale;
-        for t in texts {
-            let mut buffer = Buffer::new(
+        for (batch, slot) in batches.iter().zip(&text_slots) {
+            let PaintBatch::Text(texts) = batch else {
+                continue;
+            };
+            let Some(slot) = slot else {
+                continue;
+            };
+            let mut buffers: Vec<Buffer> = Vec::with_capacity(texts.len());
+            for t in texts {
+                let mut buffer = Buffer::new(
+                    &mut self.text.font_system,
+                    Metrics::new(font_size, line_height),
+                );
+                buffer.set_size(Some(t.wrap_w.max(1.0) * scale), Some(line_height));
+                buffer.set_text(
+                    &t.text,
+                    &Attrs::new().family(Family::Name("DejaVu Sans")),
+                    Shaping::Advanced,
+                    None,
+                );
+                buffer.shape_until_scroll(&mut self.text.font_system, false);
+                buffers.push(buffer);
+            }
+            let areas: Vec<TextArea> = texts
+                .iter()
+                .zip(&buffers)
+                .map(|(t, buffer)| TextArea {
+                    buffer,
+                    left: t.x * scale,
+                    top: t.y * scale,
+                    scale: 1.0,
+                    bounds: TextBounds {
+                        left: (t.clip[0] as f32 * scale) as i32,
+                        top: (t.clip[1] as f32 * scale) as i32,
+                        right: (t.clip[2] as f32 * scale) as i32,
+                        bottom: (t.clip[3] as f32 * scale) as i32,
+                    },
+                    default_color: Color::rgba(
+                        (t.color[0] * 255.0) as u8,
+                        (t.color[1] * 255.0) as u8,
+                        (t.color[2] * 255.0) as u8,
+                        (t.color[3] * 255.0) as u8,
+                    ),
+                    custom_glyphs: &[],
+                })
+                .collect();
+            // Atlas-full errors are transient: the run is retried next frame.
+            let _ = self.text.renderers[*slot].prepare(
+                &self.device,
+                &self.queue,
                 &mut self.text.font_system,
-                Metrics::new(font_size, line_height),
+                &mut self.text.atlas,
+                &self.text.viewport,
+                areas,
+                &mut self.text.swash_cache,
             );
-            buffer.set_size(Some(t.wrap_w.max(1.0) * scale), Some(line_height));
-            buffer.set_text(
-                &t.text,
-                &Attrs::new().family(Family::Name("DejaVu Sans")),
-                Shaping::Advanced,
-                None,
-            );
-            buffer.shape_until_scroll(&mut self.text.font_system, false);
-            buffers.push(buffer);
         }
-        let areas: Vec<TextArea> = texts
-            .iter()
-            .zip(&buffers)
-            .map(|(t, buffer)| TextArea {
-                buffer,
-                left: t.x * scale,
-                top: t.y * scale,
-                scale: 1.0,
-                bounds: TextBounds {
-                    left: (t.clip[0] as f32 * scale) as i32,
-                    top: (t.clip[1] as f32 * scale) as i32,
-                    right: (t.clip[2] as f32 * scale) as i32,
-                    bottom: (t.clip[3] as f32 * scale) as i32,
-                },
-                default_color: Color::rgba(
-                    (t.color[0] * 255.0) as u8,
-                    (t.color[1] * 255.0) as u8,
-                    (t.color[2] * 255.0) as u8,
-                    (t.color[3] * 255.0) as u8,
-                ),
-                custom_glyphs: &[],
-            })
-            .collect();
-        // Atlas-full errors are transient: the run is retried next frame.
-        let _ = self.text.renderer.prepare(
-            &self.device,
-            &self.queue,
-            &mut self.text.font_system,
-            &mut self.text.atlas,
-            &self.text.viewport,
-            areas,
-            &mut self.text.swash_cache,
-        );
 
         let view = frame.texture.create_view(&Default::default());
         let mut encoder = self
@@ -442,16 +501,27 @@ impl Gfx {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            if !self.scratch.is_empty() {
-                pass.set_pipeline(&self.rect_pipeline);
-                pass.set_vertex_buffer(0, self.rect_buffer.slice(..));
-                pass.draw(0..self.scratch.len() as u32, 0..1);
-            }
-            if !texts.is_empty() {
-                let _ =
-                    self.text
-                        .renderer
-                        .render(&mut self.text.atlas, &self.text.viewport, &mut pass);
+            for ((batch, range), slot) in batches.iter().zip(&ranges).zip(&text_slots) {
+                match batch {
+                    PaintBatch::Rects(_) => {
+                        if let Some((start, end)) = range {
+                            if end > start {
+                                pass.set_pipeline(&self.rect_pipeline);
+                                pass.set_vertex_buffer(0, self.rect_buffer.slice(..));
+                                pass.draw(*start..*end, 0..1);
+                            }
+                        }
+                    }
+                    PaintBatch::Text(_) => {
+                        if let Some(slot) = slot {
+                            let _ = self.text.renderers[*slot].render(
+                                &self.text.atlas,
+                                &self.text.viewport,
+                                &mut pass,
+                            );
+                        }
+                    }
+                }
             }
         }
 

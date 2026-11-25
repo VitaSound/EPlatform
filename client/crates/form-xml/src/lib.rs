@@ -1,17 +1,19 @@
 //! Qt Designer `.ui` XML → widget specification tree.
 //!
 //! Only the subset used by the platform's forms is parsed: widgets,
-//! box layouts (`QVBoxLayout`/`QHBoxLayout`), spacers and the common
-//! property value tags (`string`, `number`, `bool`, `enum`, `rect`,
-//! `size`). Unknown constructs are tolerated rather than fatal.
+//! layouts (`QVBoxLayout`/`QHBoxLayout`/`QGridLayout`/`QFormLayout`),
+//! spacers and the common property value tags (`string`, `number`, `bool`,
+//! `enum`, `rect`, `size`, `set`, `sizepolicy`). Unknown constructs are
+//! tolerated rather than fatal.
 
 use roxmltree::Node;
 
 /// Single property value, typed by the Qt XML tag that carried it.
 ///
-/// `Map`/`List` are wire-only variants: they carry the JSON
-/// objects/arrays the server pushes (e.g. `tableHeaders`/`tableData`
-/// configs) and are never produced by XML parsing.
+/// `Map` is produced by `<iconset>` and `<sizepolicy>` and also carries the
+/// JSON objects the server pushes (e.g. `tableHeaders`/`tableData`).
+/// `List` is produced by `<set>` (Qt window flags) and can also arrive from
+/// the server.
 #[derive(Debug, Clone, PartialEq)]
 pub enum PropValue {
     Str(String),
@@ -109,11 +111,49 @@ pub struct Layout {
     pub items: Vec<LayoutItem>,
 }
 
+/// `Qt::AlignLeft` (and the other alignment flags), as written on `<item>`.
+pub const ALIGN_LEFT: u32 = 0x1;
+pub const ALIGN_RIGHT: u32 = 0x2;
+pub const ALIGN_HCENTER: u32 = 0x4;
+pub const ALIGN_TOP: u32 = 0x20;
+pub const ALIGN_BOTTOM: u32 = 0x40;
+pub const ALIGN_VCENTER: u32 = 0x80;
+pub const ALIGN_HORIZONTAL_MASK: u32 = 0x0f;
+pub const ALIGN_VERTICAL_MASK: u32 = 0xf0;
+
+/// Cell of an item inside a layout.
+///
+/// Qt Designer writes `row` / `column` / `rowspan` / `colspan` and optionally
+/// `alignment` directly on `<item>` (grid and form layouts). Box layouts leave
+/// the attributes unset, so the default is `(0, 0)` with a `1x1` span and no
+/// alignment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LayoutCell {
+    pub row: i64,
+    pub column: i64,
+    pub row_span: i64,
+    pub column_span: i64,
+    /// Qt alignment flags for the item inside its cell (`0` → Qt defaults).
+    pub alignment: u32,
+}
+
+impl Default for LayoutCell {
+    fn default() -> Self {
+        Self {
+            row: 0,
+            column: 0,
+            row_span: 1,
+            column_span: 1,
+            alignment: 0,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum LayoutItem {
-    Widget(Widget),
-    Layout(Layout),
-    Spacer(Spacer),
+    Widget(Widget, LayoutCell),
+    Layout(Layout, LayoutCell),
+    Spacer(Spacer, LayoutCell),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -232,14 +272,15 @@ fn parse_layout(node: Node<'_, '_>) -> Result<Layout, ParseError> {
                 }
             }
             "item" => {
+                let cell = parse_cell(child);
                 let inner = child
                     .children()
                     .find(|n| n.is_element())
                     .ok_or_else(|| ParseError("<item> without content".into()))?;
                 match inner.tag_name().name() {
-                    "widget" => items.push(LayoutItem::Widget(parse_widget(inner)?)),
-                    "layout" => items.push(LayoutItem::Layout(parse_layout(inner)?)),
-                    "spacer" => items.push(LayoutItem::Spacer(parse_spacer(inner)?)),
+                    "widget" => items.push(LayoutItem::Widget(parse_widget(inner)?, cell)),
+                    "layout" => items.push(LayoutItem::Layout(parse_layout(inner)?, cell)),
+                    "spacer" => items.push(LayoutItem::Spacer(parse_spacer(inner)?, cell)),
                     other => return Err(ParseError(format!("unsupported item type <{other}>"))),
                 }
             }
@@ -254,6 +295,46 @@ fn parse_layout(node: Node<'_, '_>) -> Result<Layout, ParseError> {
         margins,
         items,
     })
+}
+
+/// Read grid cell attributes from `<item>`; box layouts leave them unset.
+fn parse_cell(item: Node<'_, '_>) -> LayoutCell {
+    let int = |name: &str, default: i64| -> i64 {
+        item.attribute(name)
+            .and_then(|value| value.trim().parse().ok())
+            .unwrap_or(default)
+    };
+
+    LayoutCell {
+        row: int("row", 0).max(0),
+        column: int("column", 0).max(0),
+        row_span: int("rowspan", 1).max(1),
+        column_span: int("colspan", 1).max(1),
+        alignment: item
+            .attribute("alignment")
+            .map(parse_alignment)
+            .unwrap_or(0),
+    }
+}
+
+/// `Qt::AlignRight|Qt::AlignmentFlag::AlignVCenter` → alignment bitmask.
+fn parse_alignment(value: &str) -> u32 {
+    value
+        .split('|')
+        .map(str::trim)
+        .filter(|flag| !flag.is_empty())
+        .fold(0, |mask, flag| {
+            let tail = flag.rsplit("::").next().unwrap_or(flag);
+            mask | match tail {
+                "AlignLeft" => ALIGN_LEFT,
+                "AlignRight" => ALIGN_RIGHT,
+                "AlignHCenter" => ALIGN_HCENTER,
+                "AlignTop" => ALIGN_TOP,
+                "AlignBottom" => ALIGN_BOTTOM,
+                "AlignVCenter" => ALIGN_VCENTER,
+                _ => 0,
+            }
+        })
 }
 
 fn set_margin(margins: &mut Option<(i64, i64, i64, i64)>, index: usize, value: i64) {
@@ -337,6 +418,28 @@ fn parse_value(node: Node<'_, '_>) -> Option<PropValue> {
                 h: rect[3],
             })
         }
+        // `QWidget::sizePolicy` is written as named type tags plus stretch
+        // factors. Geometry code needs the two policy types, so keep them in
+        // a map instead of degrading the whole property to text.
+        "sizepolicy" => {
+            let mut entries = Vec::new();
+            for key in ["hsizetype", "vsizetype"] {
+                if let Some(text) = node.attribute(key) {
+                    entries.push((key.to_string(), PropValue::Str(text.trim().to_string())));
+                }
+            }
+            for child in node.children().filter(|child| child.is_element()) {
+                let key = child.tag_name().name().to_string();
+                let Some(value) = child
+                    .text()
+                    .and_then(|text| text.trim().parse::<i64>().ok())
+                else {
+                    continue;
+                };
+                entries.push((key, PropValue::Int(value)));
+            }
+            Some(PropValue::Map(entries))
+        }
         "size" => {
             let mut size = [0i64; 2];
             for child in node.children().filter(|n| n.is_element()) {
@@ -356,6 +459,22 @@ fn parse_value(node: Node<'_, '_>) -> Option<PropValue> {
                 w: size[0],
                 h: size[1],
             })
+        }
+        // Qt Designer writes flag sets as either `<set>Qt::...Flag</set>`
+        // with text, or as a `<set>` with child elements. Keep both forms
+        // so `windowFlags` can be inspected without a dedicated parser.
+        "set" => {
+            let items: Vec<PropValue> = node
+                .children()
+                .filter(|child| child.is_element())
+                .map(|child| PropValue::Str(child.text().unwrap_or("").trim().to_string()))
+                .filter(|value| !matches!(value, PropValue::Str(text) if text.is_empty()))
+                .collect();
+            if items.is_empty() {
+                Some(PropValue::Str(node.text().unwrap_or("").trim().to_string()))
+            } else {
+                Some(PropValue::List(items))
+            }
         }
         "iconset" => {
             let entries = node
@@ -412,11 +531,11 @@ mod tests {
         assert_eq!(layout.items.len(), 5);
 
         match &layout.items[0] {
-            LayoutItem::Layout(row) => {
+            LayoutItem::Layout(row, _) => {
                 assert_eq!(row.class, "QHBoxLayout");
                 assert_eq!(row.items.len(), 3);
                 match &row.items[0] {
-                    LayoutItem::Widget(w) => {
+                    LayoutItem::Widget(w, _) => {
                         assert_eq!(w.class, "QLabel");
                         assert_eq!(w.name, "label_1");
                         assert_eq!(
@@ -427,14 +546,14 @@ mod tests {
                     other => panic!("expected label, got {other:?}"),
                 }
                 match &row.items[1] {
-                    LayoutItem::Spacer(s) => {
+                    LayoutItem::Spacer(s, _) => {
                         assert!(s.horizontal);
                         assert_eq!(s.hint, (40, 20));
                     }
                     other => panic!("expected spacer, got {other:?}"),
                 }
                 match &row.items[2] {
-                    LayoutItem::Widget(w) => {
+                    LayoutItem::Widget(w, _) => {
                         assert_eq!(w.class, "QLineEdit");
                         assert_eq!(w.name, "lineEdit_1");
                         assert!(w.properties.is_empty());
@@ -446,7 +565,7 @@ mod tests {
         }
 
         match &layout.items[3] {
-            LayoutItem::Spacer(s) => {
+            LayoutItem::Spacer(s, _) => {
                 assert!(!s.horizontal);
                 assert_eq!(s.hint, (20, 71));
             }
@@ -454,13 +573,13 @@ mod tests {
         }
 
         match &layout.items[4] {
-            LayoutItem::Layout(row) => {
+            LayoutItem::Layout(row, _) => {
                 assert_eq!(row.items.len(), 3);
                 let button_texts: Vec<_> = row
                     .items
                     .iter()
                     .filter_map(|item| match item {
-                        LayoutItem::Widget(w) => w.property("text").cloned(),
+                        LayoutItem::Widget(w, _) => w.property("text").cloned(),
                         _ => None,
                     })
                     .collect();
@@ -474,6 +593,217 @@ mod tests {
             }
             other => panic!("expected button row, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn parses_window_flag_sets() {
+        let xml = r#"<ui version="4.0"><class>Dialog</class><widget class="QDialog" name="Dialog">
+            <property name="windowFlags"><set>Qt::WindowType::MSWindowsFixedSizeDialogHint</set></property>
+        </widget></ui>"#;
+        let form = parse(xml).expect("ui parses");
+        assert_eq!(
+            form.root.property("windowFlags"),
+            Some(&PropValue::Str(
+                "Qt::WindowType::MSWindowsFixedSizeDialogHint".into()
+            ))
+        );
+
+        let xml = r#"<ui version="4.0"><class>Dialog</class><widget class="QDialog" name="Dialog">
+            <property name="windowFlags"><set><enum>Qt::WindowType::MSWindowsFixedSizeDialogHint</enum></set></property>
+        </widget></ui>"#;
+        let form = parse(xml).expect("ui parses");
+        assert_eq!(
+            form.root.property("windowFlags"),
+            Some(&PropValue::List(vec![PropValue::Str(
+                "Qt::WindowType::MSWindowsFixedSizeDialogHint".into()
+            )]))
+        );
+    }
+
+    #[test]
+    fn parses_item_cells_from_grid_layouts() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0"><class>Dialog</class>
+ <widget class="QDialog" name="Dialog">
+  <layout class="QGridLayout" name="grid">
+   <item row="0" column="1">
+    <widget class="QLabel" name="a"/>
+   </item>
+   <item row="1" column="0" rowspan="2" colspan="3">
+    <layout class="QVBoxLayout" name="inner">
+     <item><widget class="QLabel" name="b"/></item>
+    </layout>
+   </item>
+   <item row="2" column="2" colspan="2">
+    <spacer name="s">
+     <property name="orientation"><enum>Qt::Orientation::Horizontal</enum></property>
+    </spacer>
+   </item>
+  </layout>
+ </widget>
+</ui>"#;
+        let form = parse(xml).expect("grid parses");
+        let layout = form.root.layout.as_ref().expect("root layout");
+
+        match &layout.items[0] {
+            LayoutItem::Widget(widget, cell) => {
+                assert_eq!(widget.name, "a");
+                assert_eq!(
+                    *cell,
+                    LayoutCell {
+                        row: 0,
+                        column: 1,
+                        row_span: 1,
+                        column_span: 1,
+                        alignment: 0,
+                    }
+                );
+            }
+            other => panic!("expected widget item, got {other:?}"),
+        }
+
+        match &layout.items[1] {
+            LayoutItem::Layout(inner, cell) => {
+                assert_eq!(inner.class, "QVBoxLayout");
+                assert_eq!(
+                    *cell,
+                    LayoutCell {
+                        row: 1,
+                        column: 0,
+                        row_span: 2,
+                        column_span: 3,
+                        alignment: 0,
+                    }
+                );
+                match &inner.items[0] {
+                    LayoutItem::Widget(widget, inner_cell) => {
+                        assert_eq!(widget.name, "b");
+                        assert_eq!(*inner_cell, LayoutCell::default());
+                    }
+                    other => panic!("expected nested widget, got {other:?}"),
+                }
+            }
+            other => panic!("expected nested layout, got {other:?}"),
+        }
+
+        match &layout.items[2] {
+            LayoutItem::Spacer(spacer, cell) => {
+                assert!(spacer.horizontal);
+                assert_eq!(
+                    *cell,
+                    LayoutCell {
+                        row: 2,
+                        column: 2,
+                        row_span: 1,
+                        column_span: 2,
+                        alignment: 0,
+                    }
+                );
+            }
+            other => panic!("expected spacer, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_item_alignment_flags() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0"><class>Dialog</class>
+ <widget class="QDialog" name="Dialog">
+  <layout class="QGridLayout" name="grid">
+   <item row="0" column="0" alignment="Qt::AlignRight|Qt::AlignmentFlag::AlignVCenter">
+    <widget class="QPushButton" name="ok"/>
+   </item>
+   <item row="0" column="1" alignment="Qt::AlignLeft">
+    <widget class="QPushButton" name="cancel"/>
+   </item>
+   <item row="1" column="0">
+    <widget class="QPushButton" name="plain"/>
+   </item>
+  </layout>
+ </widget>
+</ui>"#;
+        let form = parse(xml).expect("parses");
+        let layout = form.root.layout.as_ref().expect("root layout");
+        let alignment = |item: &LayoutItem| match item {
+            LayoutItem::Widget(_, cell) => cell.alignment,
+            other => panic!("expected widget, got {other:?}"),
+        };
+        assert_eq!(alignment(&layout.items[0]), ALIGN_RIGHT | ALIGN_VCENTER);
+        assert_eq!(alignment(&layout.items[1]), ALIGN_LEFT);
+        assert_eq!(alignment(&layout.items[2]), 0);
+    }
+
+    #[test]
+    fn box_layout_items_default_to_single_cell() {
+        let form = parse(FIXTURE).expect("fixture parses");
+        let layout = form.root.layout.as_ref().expect("root layout");
+
+        match &layout.items[0] {
+            LayoutItem::Layout(_, cell) => assert_eq!(*cell, LayoutCell::default()),
+            other => panic!("expected row layout, got {other:?}"),
+        }
+        match &layout.items[3] {
+            LayoutItem::Spacer(_, cell) => assert_eq!(*cell, LayoutCell::default()),
+            other => panic!("expected spacer, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn invalid_cell_attributes_fall_back_to_defaults() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0"><class>Dialog</class>
+ <widget class="QDialog" name="Dialog">
+  <layout class="QGridLayout" name="grid">
+   <item row="-5" column="nope" rowspan="0" colspan="-2">
+    <widget class="QLabel" name="a"/>
+   </item>
+  </layout>
+ </widget>
+</ui>"#;
+        let form = parse(xml).expect("parses");
+        let layout = form.root.layout.as_ref().expect("root layout");
+        match &layout.items[0] {
+            LayoutItem::Widget(_, cell) => assert_eq!(*cell, LayoutCell::default()),
+            other => panic!("expected widget, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_size_policy_types() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0"><class>Dialog</class>
+ <widget class="QDialog" name="Dialog">
+  <layout class="QGridLayout" name="grid">
+   <item row="0" column="0">
+    <widget class="QPushButton" name="ok">
+     <property name="sizePolicy">
+      <sizepolicy hsizetype="Fixed" vsizetype="MinimumExpanding">
+       <horstretch>0</horstretch>
+       <verstretch>2</verstretch>
+      </sizepolicy>
+     </property>
+    </widget>
+   </item>
+  </layout>
+ </widget>
+</ui>"#;
+        let form = parse(xml).expect("ui parses");
+        let layout = form.root.layout.as_ref().expect("root layout");
+        let widget = match &layout.items[0] {
+            LayoutItem::Widget(widget, _) => widget,
+            other => panic!("expected widget, got {other:?}"),
+        };
+        let policy = widget.property("sizePolicy").expect("sizePolicy");
+        assert_eq!(
+            policy.get("hsizetype"),
+            Some(&PropValue::Str("Fixed".into()))
+        );
+        assert_eq!(
+            policy.get("vsizetype"),
+            Some(&PropValue::Str("MinimumExpanding".into()))
+        );
+        assert_eq!(policy.get("horstretch"), Some(&PropValue::Int(0)));
+        assert_eq!(policy.get("verstretch"), Some(&PropValue::Int(2)));
     }
 
     #[test]

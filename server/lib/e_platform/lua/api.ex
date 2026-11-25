@@ -12,28 +12,27 @@ defmodule EPlatform.Lua.Api do
   deflua(double(v), do: 2 * v)
 
   deflua create_form(application_id, form_id, form_file) do
+    session = Process.get(:e_platform_session, %{})
     priv_dir = :code.priv_dir(:e_platform)
     path = "#{priv_dir}/qt_forms/#{form_file}"
 
     case File.read(path) do
       {:ok, content} ->
+        mdi = Map.get(session, :mdi, true)
+        placement = if mdi, do: "mdi", else: "top-level"
+
         payload = %{
           "command" => "createForm",
           "application_id" => application_id,
           "form_id" => form_id,
-          "ui_xml" => content
+          "ui_xml" => content,
+          "role" => session |> Map.get(:role, :form) |> Atom.to_string(),
+          "mode" => session |> Map.get(:mode, :standalone) |> Atom.to_string(),
+          "placement" => placement,
+          "mdi" => mdi,
+          "modal" => Map.get(session, :modal, false),
+          "modal_scope" => Map.get(session, :modal_scope, "none")
         }
-
-        # The child session advertises its modal/mdi flags from the process
-        # dictionary set by `DialogSession.init/1`.
-        payload =
-          case Process.get(:e_platform_modal) do
-            %{mdi: mdi} ->
-              Map.merge(payload, %{"modal" => true, "mdi" => mdi})
-
-            _ ->
-              payload
-          end
 
         DialogSession.broadcast(application_id, payload)
 
@@ -46,16 +45,27 @@ defmodule EPlatform.Lua.Api do
 
   deflua close_form(application_id, form_id) do
     Process.put(:e_platform_closing, true)
+    session = Process.get(:e_platform_session, %{})
 
-    DialogSession.broadcast(application_id, %{
-      "command" => "closeForm",
-      "application_id" => application_id,
-      "form_id" => form_id
-    })
+    if Map.get(session, :role, :form) == :main do
+      DialogSession.broadcast(application_id, %{
+        "command" => "closeApplication",
+        "application_id" => application_id
+      })
 
-    notify_modal(nil)
-    send(self(), :stop_form)
-    0
+      _ = Task.start(fn -> EPlatform.DialogManager.stop_application(application_id) end)
+      0
+    else
+      DialogSession.broadcast(application_id, %{
+        "command" => "closeForm",
+        "application_id" => application_id,
+        "form_id" => form_id
+      })
+
+      notify_modal(nil)
+      send(self(), :stop_form)
+      0
+    end
   end
 
   deflua close_modal(application_id, form_id, result), state do
@@ -77,6 +87,8 @@ defmodule EPlatform.Lua.Api do
     opts = normalize_opts(decode_value(state, opts))
     ui_file = Map.get(opts, "ui_file", "")
     mdi = Map.get(opts, "mdi", true)
+    modal_scope = Map.get(opts, "modal_scope", "application")
+    session = Process.get(:e_platform_session, %{})
     ref = EPlatform.ID.generate()
     parent = self()
 
@@ -85,6 +97,9 @@ defmodule EPlatform.Lua.Api do
       modal_ref: ref,
       modal_parent_form_id: form_id,
       mdi: mdi,
+      mode: session |> Map.get(:mode, :standalone),
+      role: :form,
+      modal_scope: modal_scope,
       open_opts: opts
     }
 
@@ -126,10 +141,14 @@ defmodule EPlatform.Lua.Api do
 
   deflua open_lua(application_id, lua_file, opts), state do
     opts = normalize_opts(decode_value(state, opts))
+    session = Process.get(:e_platform_session, %{})
     ui_file = Map.get(opts, "ui_file", "")
 
     start_opts = %{
       mdi: Map.get(opts, "mdi", true),
+      mode: session |> Map.get(:mode, :standalone),
+      role: :form,
+      modal_scope: "none",
       open_opts: opts
     }
 
@@ -181,6 +200,26 @@ defmodule EPlatform.Lua.Api do
     })
 
     send(self(), {:form_property, form_id, property, to_map(value)})
+
+    0
+  end
+
+  # Application-level (main window/browser chrome) property.
+  #
+  # The browser client applies menu/toolbar/status/title/icon in full mode;
+  # native-window geometry/state stays in the protocol for a desktop host.
+  deflua set_app_property(application_id, property, value), state do
+    value = decode_value(state, value)
+    session = Process.get(:e_platform_session, %{})
+
+    DialogSession.broadcast(application_id, %{
+      "command" => "setAppProperty",
+      "application_id" => application_id,
+      "source_form_id" => Map.get(session, :form_id, ""),
+      "role" => session |> Map.get(:role, :form) |> Atom.to_string(),
+      "property" => property,
+      "value" => to_map(value)
+    })
 
     0
   end

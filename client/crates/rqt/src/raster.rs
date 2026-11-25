@@ -68,20 +68,35 @@ impl QRasterImage {
     }
 
     pub fn save_png(&self, path: impl AsRef<Path>) -> Result<(), String> {
-        let file = std::fs::File::create(path).map_err(|error| error.to_string())?;
-        let writer = std::io::BufWriter::new(file);
-        let mut encoder = png::Encoder::new(writer, self.width, self.height);
-        encoder.set_color(png::ColorType::Rgba);
-        encoder.set_depth(png::BitDepth::Eight);
-        let mut writer = encoder.write_header().map_err(|error| error.to_string())?;
-        writer
-            .write_image_data(&self.pixels)
-            .map_err(|error| error.to_string())
+        std::fs::write(path, self.to_png_bytes()?).map_err(|error| error.to_string())
+    }
+
+    pub fn to_png_bytes(&self) -> Result<Vec<u8>, String> {
+        let mut buffer = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut buffer, self.width, self.height);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            let mut writer = encoder.write_header().map_err(|error| error.to_string())?;
+            writer
+                .write_image_data(&self.pixels)
+                .map_err(|error| error.to_string())?;
+        }
+        Ok(buffer)
     }
 
     pub fn from_png(path: impl AsRef<Path>) -> Result<Self, String> {
         let file = std::fs::File::open(path).map_err(|error| error.to_string())?;
-        let decoder = png::Decoder::new(file);
+        Self::read_png(file)
+    }
+
+    /// Decode PNG from memory (works on `wasm32` where `std::fs` is unusable).
+    pub fn from_png_bytes(bytes: &[u8]) -> Result<Self, String> {
+        Self::read_png(std::io::Cursor::new(bytes))
+    }
+
+    fn read_png<R: std::io::Read>(reader: R) -> Result<Self, String> {
+        let decoder = png::Decoder::new(reader);
         let mut reader = decoder.read_info().map_err(|error| error.to_string())?;
         let mut buffer = vec![0; reader.output_buffer_size()];
         let info = reader
@@ -844,6 +859,95 @@ mod tests {
         );
         assert!(mean < 12.0, "mean diff {mean}");
         assert!(different < (image.width * image.height) as u64 / 8);
+    }
+
+    /// Paint a grid fixture and compare it with the Qt6 offscreen raster.
+    fn compare_grid_raster_with_qt6(ui: &str, reference: &[u8], name: &str) {
+        use crate::gui::QPainter;
+        use crate::paint::paint_widget_tree;
+        use crate::style::QFusionStyle;
+        use crate::widgets::load_ui;
+
+        let reference = QRasterImage::from_png_bytes(reference).expect("reference png");
+        let (mut tree, root) = load_ui(ui).expect("loads ui");
+        tree.focus_first(root);
+        let mut painter = QPainter::new();
+        paint_widget_tree(&tree, root, &QFusionStyle::default(), &mut painter);
+        let image = rasterize(
+            painter.commands(),
+            reference.width,
+            reference.height,
+            QColor::rgb(0xef, 0xef, 0xef),
+        );
+        let _ = image.save_png(format!("/tmp/rust_{name}.png"));
+        assert_eq!(image.width, reference.width);
+        assert_eq!(image.height, reference.height);
+
+        let mut total = 0u64;
+        let mut count = 0u64;
+        let mut different = 0u64;
+        for (left, right) in image
+            .pixels
+            .chunks_exact(4)
+            .zip(reference.pixels.chunks_exact(4))
+        {
+            let mut pixel_diff = 0u32;
+            for channel in 0..3 {
+                let diff = u32::from(left[channel].abs_diff(right[channel]));
+                total += u64::from(diff);
+                pixel_diff = pixel_diff.max(diff);
+                count += 1;
+            }
+            if pixel_diff > 30 {
+                different += 1;
+            }
+        }
+        let mean = total as f64 / count as f64;
+        eprintln!(
+            "{name} mean channel diff {mean:.2}, pixels >30: {different} / {}",
+            image.width * image.height
+        );
+        assert!(mean < 12.0, "{name} mean diff {mean}");
+        assert!(
+            different < (image.width * image.height) as u64 / 8,
+            "{name} pixels >30: {different}"
+        );
+    }
+
+    #[test]
+    fn grid_2x2_raster_compared_to_qt6() {
+        compare_grid_raster_with_qt6(
+            include_str!("../tests/fixtures/grid_2x2.ui"),
+            include_bytes!("../tests/fixtures/qt6_grid_2x2.png"),
+            "grid_2x2",
+        );
+    }
+
+    #[test]
+    fn grid_spans_raster_compared_to_qt6() {
+        compare_grid_raster_with_qt6(
+            include_str!("../tests/fixtures/grid_spans.ui"),
+            include_bytes!("../tests/fixtures/qt6_grid_spans.png"),
+            "grid_spans",
+        );
+    }
+
+    #[test]
+    fn grid_nested_raster_compared_to_qt6() {
+        compare_grid_raster_with_qt6(
+            include_str!("../tests/fixtures/grid_nested.ui"),
+            include_bytes!("../tests/fixtures/qt6_grid_nested.png"),
+            "grid_nested",
+        );
+    }
+
+    #[test]
+    fn grid_policies_raster_compared_to_qt6() {
+        compare_grid_raster_with_qt6(
+            include_str!("../tests/fixtures/grid_policies.ui"),
+            include_bytes!("../tests/fixtures/qt6_grid_policies.png"),
+            "grid_policies",
+        );
     }
 
     #[test]

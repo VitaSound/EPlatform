@@ -125,6 +125,60 @@ function Form:setGeometry(geometry)
     self:set_prop("geometry", geometry or {})
 end
 
+-- Move the form subwindow, keeping its size.
+function Form:move(pos_or_x, y)
+    local pos
+    if type(pos_or_x) == "table" then
+        pos = pos_or_x
+    else
+        pos = { x = pos_or_x, y = y }
+    end
+    self:set_prop("position", pos)
+end
+
+-- Resize the form subwindow, keeping its position.
+function Form:resize(size_or_w, h)
+    local size
+    if type(size_or_w) == "table" then
+        size = size_or_w
+    else
+        size = { w = size_or_w, h = h }
+    end
+    self:set_prop("size", size)
+end
+
+-- Enable/disable interactive resizing (MDI grip and borders).
+function Form:setResizable(enabled)
+    self:set_prop("resizable", enabled ~= false)
+end
+
+-- QDialog compatibility alias.
+function Form:setSizeGripEnabled(enabled)
+    self:setResizable(enabled)
+end
+
+-- Minimum content size; accepts (w, h) or { w = ..., h = ... }.
+function Form:setMinimumSize(size_or_w, h)
+    local size
+    if type(size_or_w) == "table" then
+        size = size_or_w
+    else
+        size = { w = size_or_w, h = h }
+    end
+    self:set_prop("minimumSize", size)
+end
+
+-- Maximum content size; accepts (w, h) or { w = ..., h = ... }.
+function Form:setMaximumSize(size_or_w, h)
+    local size
+    if type(size_or_w) == "table" then
+        size = size_or_w
+    else
+        size = { w = size_or_w, h = h }
+    end
+    self:set_prop("maximumSize", size)
+end
+
 function Form:setText(object_name, text)
     self:set_prop(object_name, "text", tostring(text or ""))
 end

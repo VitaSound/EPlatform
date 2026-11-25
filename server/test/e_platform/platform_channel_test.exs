@@ -35,6 +35,96 @@ defmodule EPlatform.PlatformChannelTest do
     end
   end
 
+  test "start_app boots the main session and applies menu/toolbar/status", %{socket: socket} do
+    ref = push(socket, "start_app", %{"lua_file" => "test_main.lua"})
+    assert_reply ref, :ok, %{"form_id" => main_id, "role" => "main"}
+
+    assert_push "command", %{
+      "command" => "setAppProperty",
+      "property" => "windowTitle",
+      "source_form_id" => ^main_id,
+      "role" => "main"
+    }
+
+    assert_push "command", %{"command" => "setAppProperty", "property" => "statusVisible"}
+    assert_push "command", %{"command" => "setAppProperty", "property" => "statusMessage"}
+
+    assert_push "command", %{
+      "command" => "setAppProperty",
+      "property" => "menu",
+      "source_form_id" => ^main_id
+    }
+
+    assert_push "command", %{
+      "command" => "setAppProperty",
+      "property" => "toolBar",
+      "source_form_id" => ^main_id
+    }
+  end
+
+  test "main session menu action opens an MDI form", %{socket: socket} do
+    ref = push(socket, "start_app", %{"lua_file" => "test_main.lua"})
+    assert_reply ref, :ok, %{"form_id" => main_id}
+
+    # Drain the main window initialization commands.
+    for _ <- 1..5 do
+      assert_push "command", %{"command" => "setAppProperty"}
+    end
+
+    push(socket, "send_event", %{
+      "command" => "menuAction",
+      "form_id" => main_id,
+      "action" => "open_lua",
+      "lua_file" => "test_form_move.lua",
+      "mdi" => true,
+      "modal" => false,
+      "modal_scope" => "none"
+    })
+
+    assert_push "command", %{
+      "command" => "createForm",
+      "mode" => "full",
+      "placement" => "mdi",
+      "role" => "form",
+      "mdi" => true
+    }
+  end
+
+  test "main menu exit closes the application", %{socket: socket} do
+    ref = push(socket, "start_app", %{"lua_file" => "test_main.lua"})
+    assert_reply ref, :ok, %{"form_id" => main_id}
+
+    for _ <- 1..5 do
+      assert_push "command", %{"command" => "setAppProperty"}
+    end
+
+    push(socket, "send_event", %{
+      "command" => "menuAction",
+      "form_id" => main_id,
+      "action" => "exit"
+    })
+
+    assert_push "command", %{"command" => "closeApplication"}
+  end
+
+  test "standalone start_dialog sends top-level placement", %{socket: socket} do
+    ref =
+      push(socket, "start_dialog", %{
+        "lua_file" => "test_form_move.lua",
+        "ui_file" => "test_dialog01.ui",
+        "mode" => "standalone"
+      })
+
+    assert_reply ref, :ok, %{"form_id" => form_id}
+
+    assert_push "command", %{
+      "command" => "createForm",
+      "form_id" => ^form_id,
+      "placement" => "top-level",
+      "mode" => "standalone"
+    }
+  end
+
   test "start_dialog creates the form and Lua drives widgets", %{socket: socket} do
     form_id = start_dialog(socket, "test_dialog01.ui")
 

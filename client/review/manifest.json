@@ -530,5 +530,33 @@
     "title": "Scroll policy_as_needed",
     "description": "scrollbar policy Qt::ScrollBarAsNeeded / Qt::ScrollBarAsNeeded",
     "path": "review/forms/scroll/75_policy_as_needed.ui"
+  },
+  {
+    "id": "grid/76_2x2",
+    "category": "grid",
+    "title": "Grid 2x2",
+    "description": "simple 2x2 grid, label/field pairs",
+    "path": "review/forms/grid/76_2x2.ui"
+  },
+  {
+    "id": "grid/77_spans",
+    "category": "grid",
+    "title": "Grid spans",
+    "description": "rowspan/colspan with item alignment",
+    "path": "review/forms/grid/77_spans.ui"
+  },
+  {
+    "id": "grid/78_nested",
+    "category": "grid",
+    "title": "Grid nested",
+    "description": "nested box layout and spacer inside grid cells",
+    "path": "review/forms/grid/78_nested.ui"
+  },
+  {
+    "id": "grid/79_policies",
+    "category": "grid",
+    "title": "Grid policies",
+    "description": "explicit sizePolicy Expanding/Fixed in a grid",
+    "path": "review/forms/grid/79_policies.ui"
   }
 ]

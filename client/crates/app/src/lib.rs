@@ -4,13 +4,15 @@
 //! the virtualized `QTableWidget`.
 
 mod gfx;
+mod shell;
 mod socket;
 
 use rqt::item_model::{QTABLE_HEADER_H, QTABLE_ROW_H};
 use rqt::mdi::{QMdiArea, QMdiSubWindow, QMdiSubWindowButton, QMdiSubWindowHit, QMDI_TITLE_H};
 use rqt::widgets::{QWidgetId, QWidgetTree};
+use shell::Shell;
 use socket::{PhoenixSocket, SocketEvent};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::mpsc::{channel, Receiver};
@@ -19,7 +21,7 @@ use winit::{
     application::ApplicationHandler,
     event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent},
     event_loop::{ActiveEventLoop, EventLoop},
-    window::{Window, WindowId},
+    window::{CursorIcon, Window, WindowId},
 };
 
 /// In-progress cell edit of a `QTableWidget`: the buffer lives on the
@@ -33,14 +35,24 @@ struct CellEdit {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MdiDragMode {
     Move,
-    Resize,
+    Resize(QMdiSubWindowHit),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WindowLayer {
+    Mdi,
+    Floating,
 }
 
 #[derive(Debug, Clone)]
 struct Drag {
+    layer: WindowLayer,
     index: usize,
     mode: MdiDragMode,
     last: (f32, f32),
+    /// Frame and cursor at press time, used for anchored border resizing.
+    origin_frame: rqt::gui::QRectF,
+    origin_cursor: (f32, f32),
 }
 
 #[derive(Debug, Clone)]
@@ -60,6 +72,7 @@ struct LineSelect {
 struct QtForm {
     tree: QWidgetTree,
     root: QWidgetId,
+    under_mouse_widget: Option<QWidgetId>,
 }
 
 #[derive(Debug, Clone)]
@@ -70,11 +83,15 @@ struct TablePress {
 }
 
 #[derive(Clone, Debug)]
-struct Params {
+pub struct Params {
     backend: String,
     app: String,
     lua: String,
     ui: String,
+    /// Full application shell (`true`) or standalone form (`false`).
+    full: bool,
+    /// Lua script for the main session when `full` is true.
+    main_lua: Option<String>,
 }
 
 impl Default for Params {
@@ -84,6 +101,8 @@ impl Default for Params {
             app: "demo".into(),
             lua: "test_01.lua".into(),
             ui: "test_dialog01.ui".into(),
+            full: false,
+            main_lua: None,
         }
     }
 }
@@ -111,12 +130,25 @@ impl Params {
                         }
                         "lua" => params.lua = value,
                         "ui" => params.ui = value,
+                        "main" => {
+                            params.main_lua = Some(value);
+                            params.full = true;
+                        }
+                        "mode" if value == "full" => {
+                            params.full = true;
+                        }
+                        "mode" if value == "standalone" => {
+                            params.full = false;
+                        }
                         _ => {}
                     }
                 }
             }
             if !has_app {
                 params.app = unique_app_id();
+            }
+            if params.full && params.main_lua.is_none() {
+                params.main_lua = Some(params.lua.clone());
             }
             if params.backend.starts_with("ws://127.0.0.1") {
                 // Default backend follows the page host so remote browsers work.
@@ -168,6 +200,140 @@ fn unique_app_id() -> String {
     )
 }
 
+#[cfg(any(target_arch = "wasm32", test))]
+fn base64_encode(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = *chunk.get(1).unwrap_or(&0) as u32;
+        let b2 = *chunk.get(2).unwrap_or(&0) as u32;
+        let n = (b0 << 16) | (b1 << 8) | b2;
+        out.push(TABLE[(n >> 18) as usize & 63] as char);
+        out.push(TABLE[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 {
+            TABLE[(n >> 6) as usize & 63] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            TABLE[n as usize & 63] as char
+        } else {
+            '='
+        });
+    }
+    out
+}
+
+/// Data URL is more reliable than a Blob URL for dynamically set favicons:
+/// no MIME/ownership issues and no object URLs to revoke.
+#[cfg(any(target_arch = "wasm32", test))]
+fn png_data_url(png: &[u8]) -> String {
+    format!("data:image/png;base64,{}", base64_encode(png))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn set_favicon(href: &str) {
+    use wasm_bindgen::JsCast;
+
+    let Some(document) = web_sys::window().and_then(|window| window.document()) else {
+        return;
+    };
+    let Some(head) = document.head() else {
+        return;
+    };
+
+    // Replace the link so the browser re-fetches the favicon instead of
+    // keeping the previously parsed one.
+    if let Ok(Some(existing)) = document.query_selector("link[rel~='icon']") {
+        existing.remove();
+    }
+
+    let Ok(element) = document.create_element("link") else {
+        return;
+    };
+    let Ok(link) = element.dyn_into::<web_sys::HtmlLinkElement>() else {
+        return;
+    };
+    link.set_rel("icon");
+    link.set_type("image/png");
+    link.set_href(href);
+    let _ = head.append_child(&link);
+}
+
+/// Browser-chrome state for the application (the old `App:` sugar).
+///
+/// `windowTitle`/`windowIcon` are applied by the browser client. The
+/// application shell applies `menu`, `toolBar`, `statusMessage` and status
+/// visibility when running in full mode; native-window geometry
+/// (`size`, `position`, `geometry`, `centered`, `windowState`, `visible`) is
+/// accepted but intentionally ignored in the browser.
+#[derive(Debug, Default)]
+struct AppChrome {
+    window_title: Option<String>,
+    window_icon: Option<String>,
+}
+
+#[derive(Debug, PartialEq)]
+enum AppChromeAction {
+    None,
+    Title(String),
+    /// URL / `data:` URI that the browser can use directly.
+    Icon(String),
+    /// Legacy `img24:N` sprite cell, encoded as a PNG data URL.
+    IconPng(Vec<u8>),
+}
+
+impl AppChrome {
+    fn apply(&mut self, property: &str, value: &form_xml::PropValue) -> AppChromeAction {
+        match property {
+            "windowTitle" => match value.as_str() {
+                Some(title) => {
+                    self.window_title = Some(title.to_string());
+                    AppChromeAction::Title(title.to_string())
+                }
+                None => AppChromeAction::None,
+            },
+            "windowIcon" => match value.as_str() {
+                Some(icon) => {
+                    self.window_icon = Some(icon.to_string());
+                    if let Some(url) = icon_url(icon) {
+                        AppChromeAction::Icon(url.to_string())
+                    } else if let Some(png) = rqt::icons::png_bytes(icon) {
+                        AppChromeAction::IconPng(png)
+                    } else {
+                        AppChromeAction::None
+                    }
+                }
+                None => AppChromeAction::None,
+            },
+            _ => AppChromeAction::None,
+        }
+    }
+}
+
+/// Icon spec → URL usable as a browser favicon.
+///
+/// Legacy Qt specs (`img24:N`, `img24d:N`, `:/icons/...`) cannot be resolved
+/// in the browser and are left for a desktop host.
+fn icon_url(spec: &str) -> Option<&str> {
+    let spec = spec.trim();
+    if spec.is_empty()
+        || spec.starts_with("img24:")
+        || spec.starts_with("img24d:")
+        || spec.starts_with(":/")
+    {
+        return None;
+    }
+    if spec.starts_with("data:") || spec.starts_with("http://") || spec.starts_with("https://") {
+        return Some(spec);
+    }
+    if spec.starts_with('/') || spec.contains('/') {
+        return Some(spec);
+    }
+    None
+}
+
 struct App {
     params: Params,
     window: Option<Arc<Window>>,
@@ -193,22 +359,46 @@ struct App {
     forms: HashMap<String, QtForm>,
     /// Stack of currently open modal forms. The last one owns input.
     modal_stack: Vec<String>,
+    /// Modal scope by form id (`window` / `application`).
+    modal_scopes: HashMap<String, String>,
     mdi: QMdiArea<String>,
+    /// Top-level forms (`placement=top-level`) live outside the central MDI.
+    floating: QMdiArea<String>,
+    /// Application chrome (menu/toolbar/status) when running in full mode.
+    shell: Shell,
+    /// `form_id` of the main session returned by `start_app`.
+    main_form_id: Option<String>,
+    /// Last activated form, independent of its layer.
+    active_form: Option<String>,
     dragging: Option<Drag>,
     column_drag: Option<ColumnDrag>,
     line_select: Option<LineSelect>,
     left_down: bool,
+    /// A press was consumed by the menu/toolbar, so its release must not
+    /// fall through to the form under the cursor.
+    shell_press: bool,
     shift: bool,
     ctrl: bool,
     caret_epoch: f64,
     table_press: Option<TablePress>,
     scroll_click: bool,
-    mdi_hover: Option<(usize, QMdiSubWindowHit)>,
+    mdi_hover: Option<(WindowLayer, usize, QMdiSubWindowHit)>,
+    /// Active resize cursor; `None` means the default arrow.
+    cursor_hit: Option<QMdiSubWindowHit>,
+    /// Application-level (browser chrome) properties from `setAppProperty`.
+    chrome: AppChrome,
+    /// Last size reported by `WindowEvent::Resized`.
+    ///
+    /// winit-web can deliver `Resized` before `Gfx` is ready and then keep
+    /// `Window::inner_size()` at the initial 1x1 canvas size, so the pending
+    /// size must be applied when the surface appears.
+    last_size: Rc<Cell<Option<(u32, u32)>>>,
 }
 
 impl App {
     fn new(params: Params) -> Self {
         let (_tx, rx) = channel();
+        let full = params.full;
         Self {
             params,
             window: None,
@@ -224,18 +414,60 @@ impl App {
             editing: None,
             forms: HashMap::new(),
             modal_stack: Vec::new(),
+            modal_scopes: HashMap::new(),
             mdi: QMdiArea::new(rqt::gui::QRectF::new(0.0, 0.0, 1280.0, 800.0)),
+            floating: QMdiArea::new(rqt::gui::QRectF::new(0.0, 0.0, 1280.0, 800.0)),
+            shell: Shell {
+                visible: full,
+                status_visible: full,
+                ..Shell::default()
+            },
+            main_form_id: None,
+            active_form: None,
             dragging: None,
             column_drag: None,
             line_select: None,
             left_down: false,
+            shell_press: false,
             shift: false,
             ctrl: false,
             caret_epoch: now_ms(),
             table_press: None,
             scroll_click: false,
             mdi_hover: None,
+            cursor_hit: None,
+            chrome: AppChrome::default(),
+            last_size: Rc::new(Cell::new(None)),
         }
+    }
+
+    fn apply_window_title(&self, title: &str) {
+        #[cfg(target_arch = "wasm32")]
+        {
+            if let Some(document) = web_sys::window().and_then(|window| window.document()) {
+                document.set_title(title);
+            }
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if let Some(window) = &self.window {
+                window.set_title(title);
+            }
+        }
+    }
+
+    fn apply_window_icon(&self, url: &str) {
+        #[cfg(target_arch = "wasm32")]
+        set_favicon(url);
+        #[cfg(not(target_arch = "wasm32"))]
+        let _ = url;
+    }
+
+    fn apply_window_icon_png(&self, png: &[u8]) {
+        #[cfg(target_arch = "wasm32")]
+        set_favicon(&png_data_url(png));
+        #[cfg(not(target_arch = "wasm32"))]
+        let _ = png;
     }
 
     fn ui_scale(&self) -> f32 {
@@ -277,6 +509,18 @@ impl App {
                     Self::log("channel joined");
                     self.joined = true;
                 }
+                SocketEvent::Reply(payload) => {
+                    if payload.get("role").and_then(|v| v.as_str()) == Some("main") {
+                        self.main_form_id = payload
+                            .get("form_id")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_string);
+                        Self::log(format!(
+                            "main session form_id={}",
+                            self.main_form_id.as_deref().unwrap_or("")
+                        ));
+                    }
+                }
                 SocketEvent::Command(payload) => {
                     Self::log(format!("command: {payload}"));
                     self.on_command(&payload);
@@ -290,17 +534,37 @@ impl App {
             }
         }
 
-        // Once joined, ask the server to start the demo dialog.
+        // Once joined, ask the server to start the main session or a
+        // standalone form. In full mode the main Lua script owns the menu and
+        // opens forms later; it does not create a form itself.
         if self.joined && !self.start_sent {
             if let Some(socket) = &self.socket {
-                socket.send(
-                    "start_dialog",
-                    serde_json::json!({
-                        "lua_file": self.params.lua,
-                        "ui_file": self.params.ui,
-                    }),
-                );
-                Self::log("start_dialog sent");
+                if self.params.full {
+                    let main = self
+                        .params
+                        .main_lua
+                        .clone()
+                        .unwrap_or_else(|| self.params.lua.clone());
+                    socket.send(
+                        "start_app",
+                        serde_json::json!({
+                            "lua_file": main,
+                            "mode": "full",
+                        }),
+                    );
+                    Self::log(format!("start_app sent lua_file={main}"));
+                } else {
+                    socket.send(
+                        "start_dialog",
+                        serde_json::json!({
+                            "lua_file": self.params.lua,
+                            "ui_file": self.params.ui,
+                            "mode": "standalone",
+                            "placement": "top-level",
+                        }),
+                    );
+                    Self::log("start_dialog sent (standalone)");
+                }
                 self.start_sent = true;
             }
         }
@@ -397,15 +661,68 @@ impl App {
                     return;
                 };
                 let mut title = None;
-                if let Some(form) = self.forms.get_mut(form_id) {
-                    if let form_xml::PropValue::Rect { x, y, w, h } = &value {
-                        let rect =
-                            rqt::gui::QRectF::new(*x as f32, *y as f32, *w as f32, *h as f32);
-                        if let Some(index) = self.mdi.index_of(|payload| payload == form_id) {
-                            self.mdi.set_content_geometry(index, rect);
+                if let Some((layer, index)) = self.find_window(form_id) {
+                    let current = self
+                        .forms
+                        .get(form_id)
+                        .and_then(|form| form.tree.widget(form.root))
+                        .map(|widget| widget.geometry)
+                        .unwrap_or_default();
+                    let (rect, form_local) = match &value {
+                        form_xml::PropValue::Rect { x, y, w, h } => (
+                            Some(rqt::gui::QRectF::new(
+                                *x as f32, *y as f32, *w as f32, *h as f32,
+                            )),
+                            true,
+                        ),
+                        // `size` keeps the current (already absolute) position.
+                        form_xml::PropValue::Size { w, h } if property == "size" => (
+                            Some(rqt::gui::QRectF::new(
+                                current.x, current.y, *w as f32, *h as f32,
+                            )),
+                            false,
+                        ),
+                        form_xml::PropValue::Map(_) if property == "position" => {
+                            let x = value.get("x").and_then(|x| x.as_i64());
+                            let y = value.get("y").and_then(|y| y.as_i64());
+                            (
+                                Some(rqt::gui::QRectF::new(
+                                    x.map(|x| x as f32).unwrap_or(current.x),
+                                    y.map(|y| y as f32).unwrap_or(current.y),
+                                    current.width,
+                                    current.height,
+                                )),
+                                x.is_some() && y.is_some(),
+                            )
                         }
-                        form.tree.set_geometry(form.root, rect);
-                    } else {
+                        _ => (None, false),
+                    };
+                    if let Some(rect) = rect {
+                        // Qt form-level geometry is relative to the window
+                        // manager: MDI content coordinates are inside the
+                        // central QMdiArea, top-level ones are screen coords.
+                        // `size` already carries an absolute current position.
+                        let rect = if layer == WindowLayer::Mdi && form_local {
+                            let offset = self.mdi.viewport();
+                            rqt::gui::QRectF::new(
+                                rect.x + offset.x,
+                                rect.y + offset.y,
+                                rect.width,
+                                rect.height,
+                            )
+                        } else {
+                            rect
+                        };
+                        let area = self.area_mut(layer);
+                        area.set_content_geometry(index, rect);
+                        let content = area
+                            .subwindow(index)
+                            .map(|subwindow| subwindow.content_rect())
+                            .unwrap_or(rect);
+                        if let Some(form) = self.forms.get_mut(form_id) {
+                            form.tree.set_geometry(form.root, content);
+                        }
+                    } else if let Some(form) = self.forms.get_mut(form_id) {
                         form.tree.set_property(
                             form.root,
                             property,
@@ -413,15 +730,109 @@ impl App {
                         );
                         form.tree.relayout(form.root);
                     }
-                    title = Some(form_title(&form.tree, form.root, form_id));
+
+                    if property == "minimumSize" || property == "maximumSize" {
+                        let (min, max) = self
+                            .forms
+                            .get(form_id)
+                            .and_then(|form| form.tree.widget(form.root))
+                            .map(|widget| (widget.minimum_size, widget.maximum_size))
+                            .unwrap_or_default();
+                        let area = self.area_mut(layer);
+                        area.set_size_constraints(index, min, max);
+                        if let Some(content) = area
+                            .subwindow(index)
+                            .map(|subwindow| subwindow.content_rect())
+                        {
+                            if let Some(form) = self.forms.get_mut(form_id) {
+                                form.tree.set_geometry(form.root, content);
+                            }
+                        }
+                    }
+                    if property == "resizable" {
+                        if let Some(enabled) = value.as_bool() {
+                            self.area_mut(layer).set_resizable(index, enabled);
+                        }
+                    }
+                    title = self
+                        .forms
+                        .get(form_id)
+                        .map(|form| form_title(&form.tree, form.root, form_id));
                     Self::log(format!("apply form.{property}={}", prop_brief(&value)));
                 }
                 if property == "windowTitle" {
-                    if let (Some(title), Some(index)) =
-                        (title, self.mdi.index_of(|payload| payload == form_id))
+                    if let (Some(title), Some((layer, index))) = (title, self.find_window(form_id))
                     {
-                        self.mdi.set_title(index, title);
+                        self.area_mut(layer).set_title(index, title);
                     }
+                }
+            }
+            "setAppProperty" => {
+                let property = str_field(payload, "property");
+                if payload.get("role").and_then(|v| v.as_str()) == Some("main") {
+                    if let Some(main_id) = payload.get("source_form_id").and_then(|v| v.as_str()) {
+                        self.main_form_id = Some(main_id.to_string());
+                    }
+                }
+                let Some(value) = prop_from_json(payload.get("value")) else {
+                    return;
+                };
+                match property {
+                    "menu" => {
+                        self.shell.set_menu(&value);
+                        Self::log(format!("apply app.menu items={}", self.shell.menu.len()));
+                    }
+                    "toolBar" | "toolbar" => {
+                        self.shell.set_toolbar(&value);
+                        Self::log(format!(
+                            "apply app.toolBar items={}",
+                            self.shell.toolbar.len()
+                        ));
+                    }
+                    "toolBarVisible" | "toolbarVisible" => {
+                        if let Some(visible) = value.as_bool() {
+                            self.shell.toolbar_visible = visible;
+                        }
+                    }
+                    "statusMessage" | "status" => {
+                        let text = value.as_str().map(str::to_string).or_else(|| {
+                            value
+                                .get("text")
+                                .and_then(|v| v.as_str())
+                                .map(str::to_string)
+                        });
+                        let timeout = value
+                            .get("timeout")
+                            .and_then(|value| value.as_i64())
+                            .map(|value| value as f64);
+                        self.shell.set_status_message(text, timeout, now_ms());
+                    }
+                    "statusInfo" => {
+                        self.shell
+                            .set_status_info(value.as_str().map(str::to_string));
+                    }
+                    "statusVisible" | "statusbar" => {
+                        if let Some(visible) = value.as_bool() {
+                            self.shell.status_visible = visible;
+                        }
+                    }
+                    _ => match self.chrome.apply(property, &value) {
+                        AppChromeAction::Title(title) => {
+                            self.apply_window_title(&title);
+                            Self::log(format!("apply app.windowTitle={title}"));
+                        }
+                        AppChromeAction::Icon(url) => {
+                            self.apply_window_icon(&url);
+                            Self::log(format!("apply app.windowIcon={url}"));
+                        }
+                        AppChromeAction::IconPng(png) => {
+                            self.apply_window_icon_png(&png);
+                            Self::log(format!("apply app.windowIcon=png:{} bytes", png.len()));
+                        }
+                        AppChromeAction::None => {
+                            Self::log(format!("ignore app.{property}"));
+                        }
+                    },
                 }
             }
             // Lua is blocked waiting for the current widget value.
@@ -489,6 +900,9 @@ impl App {
             }
             "closeApplication" => {
                 self.remove_all_forms();
+                self.main_form_id = None;
+                self.shell.visible = false;
+                self.shell.close_menu();
                 Self::log("closeApplication");
             }
             _ => {}
@@ -500,8 +914,12 @@ impl App {
         self.forms.remove(form_id);
         let was_modal = self.modal_stack.iter().any(|id| id == form_id);
         self.modal_stack.retain(|id| id != form_id);
-        if let Some(index) = self.mdi.index_of(|payload| payload == form_id) {
-            self.mdi.remove(index);
+        self.modal_scopes.remove(form_id);
+        if let Some((layer, index)) = self.find_window(form_id) {
+            self.area_mut(layer).remove(index);
+        }
+        if self.active_form.as_deref() == Some(form_id) {
+            self.active_form = None;
         }
         if self.focused.as_ref().is_some_and(|(f, _)| f == form_id) {
             self.focused = None;
@@ -527,7 +945,7 @@ impl App {
             self.line_select = None;
         }
         if was_modal {
-            if let Some(active) = self.mdi.active_payload().cloned() {
+            if let Some(active) = self.active_form_id() {
                 self.focus_initial_form(&active);
             }
         }
@@ -537,7 +955,10 @@ impl App {
         self.mdi_hover = None;
         self.forms.clear();
         self.modal_stack.clear();
+        self.modal_scopes.clear();
         self.mdi.clear();
+        self.floating.clear();
+        self.active_form = None;
         self.focused = None;
         self.table_focus = None;
         self.editing = None;
@@ -545,8 +966,45 @@ impl App {
         self.line_select = None;
     }
 
-    /// Parse the Qt `.ui` XML into the Qt widget tree, place it in the
-    /// MDI area and keep it for rendering and event routing.
+    fn area(&self, layer: WindowLayer) -> &QMdiArea<String> {
+        match layer {
+            WindowLayer::Mdi => &self.mdi,
+            WindowLayer::Floating => &self.floating,
+        }
+    }
+
+    fn area_mut(&mut self, layer: WindowLayer) -> &mut QMdiArea<String> {
+        match layer {
+            WindowLayer::Mdi => &mut self.mdi,
+            WindowLayer::Floating => &mut self.floating,
+        }
+    }
+
+    fn find_window(&self, form_id: &str) -> Option<(WindowLayer, usize)> {
+        if let Some(index) = self.mdi.index_of(|payload| payload == form_id) {
+            return Some((WindowLayer::Mdi, index));
+        }
+        self.floating
+            .index_of(|payload| payload == form_id)
+            .map(|index| (WindowLayer::Floating, index))
+    }
+
+    fn active_form_id(&self) -> Option<String> {
+        if let Some(active) = &self.active_form {
+            if self.forms.contains_key(active) {
+                return Some(active.clone());
+            }
+        }
+        self.mdi
+            .active_payload()
+            .cloned()
+            .or_else(|| self.floating.active_payload().cloned())
+    }
+
+    /// Parse the Qt `.ui` XML into the Qt widget tree and place it either
+    /// into the central MDI area (`placement=mdi`) or into the top-level
+    /// layer (`placement=top-level`). Standalone mode coerces every form to
+    /// top-level: there is no main window / MDI area to attach to.
     fn on_create_form(&mut self, payload: &serde_json::Value) {
         let form_id = payload
             .get("form_id")
@@ -558,6 +1016,18 @@ impl App {
             .get("modal")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
+        let modal_scope = payload
+            .get("modal_scope")
+            .and_then(|v| v.as_str())
+            .unwrap_or("application")
+            .to_string();
+        let standalone = payload.get("mode").and_then(|v| v.as_str()) == Some("standalone");
+        let placement = payload.get("placement").and_then(|v| v.as_str());
+        let layer = if standalone || placement == Some("top-level") {
+            WindowLayer::Floating
+        } else {
+            WindowLayer::Mdi
+        };
 
         let (mut tree, root) = match rqt::widgets::load_ui(xml) {
             Ok(form) => form,
@@ -566,43 +1036,113 @@ impl App {
                 return;
             }
         };
-        let area = tree
+        let form_area = tree
             .widget(root)
             .map(|widget| widget.geometry)
             .unwrap_or_default();
         let title = form_title(&tree, root, &form_id);
 
-        if let Some(index) = self.mdi.index_of(|payload| payload == &form_id) {
-            self.mdi.remove(index);
+        if let Some((old_layer, index)) = self.find_window(&form_id) {
+            self.area_mut(old_layer).remove(index);
         }
         self.modal_stack.retain(|id| id != &form_id);
+        self.modal_scopes.remove(&form_id);
         if modal {
             self.modal_stack.push(form_id.clone());
+            self.modal_scopes.insert(form_id.clone(), modal_scope);
         }
-        let index = self.mdi.add_subwindow(
+
+        let index = self.area_mut(layer).add_subwindow(
             title,
             form_id.clone(),
-            rqt::gui::QSizeF::new(area.width, area.height),
+            rqt::gui::QSizeF::new(form_area.width, form_area.height),
         );
-        if modal {
-            let _ = self.mdi.activate(index);
+
+        let (min_size, max_size) = tree
+            .widget(root)
+            .map(|widget| (widget.minimum_size, widget.maximum_size))
+            .unwrap_or_default();
+        let size_grip_disabled = matches!(
+            tree.widget(root)
+                .and_then(|widget| widget.property("sizeGripEnabled")),
+            Some(rqt::core::QVariant::Bool(false))
+        );
+        let fixed_size = window_fixed_size(&tree, root);
+
+        {
+            let area = self.area_mut(layer);
+            area.set_size_constraints(index, min_size, max_size);
+            if size_grip_disabled || fixed_size {
+                area.set_resizable(index, false);
+            }
+            if fixed_size {
+                // Qt's MSWindowsFixedSizeDialogHint also removes the maximize button.
+                if let Some(subwindow) = area.subwindow_mut(index) {
+                    subwindow.window_flags.maximize = false;
+                }
+            }
         }
+
+        if layer == WindowLayer::Floating {
+            let viewport = self.floating.viewport();
+            let width = form_area.width.clamp(1.0, viewport.width.max(1.0));
+            let height = form_area.height.clamp(1.0, viewport.height.max(1.0));
+            let x = form_area
+                .x
+                .clamp(viewport.x, (viewport.right() - width).max(viewport.x));
+            let y = form_area
+                .y
+                .clamp(viewport.y, (viewport.bottom() - height).max(viewport.y));
+            self.floating
+                .set_content_geometry(index, rqt::gui::QRectF::new(x, y, width, height));
+        } else {
+            // `QMdiArea::add_subwindow` uses local (32, 28) coordinates; the
+            // central area starts below the menu/toolbar, so offset the frame
+            // by the viewport origin.
+            let viewport = self.mdi.viewport();
+            if let Some(frame) = self.mdi.subwindow(index).map(|subwindow| subwindow.frame) {
+                self.mdi.set_frame(
+                    index,
+                    rqt::gui::QRectF::new(
+                        frame.x + viewport.x,
+                        frame.y + viewport.y,
+                        frame.width,
+                        frame.height,
+                    ),
+                );
+            }
+        }
+
+        if modal || layer == WindowLayer::Floating {
+            let _ = self.area_mut(layer).activate(index);
+        }
+        self.active_form = Some(form_id.clone());
         let content = self
-            .mdi
+            .area(layer)
             .subwindow(index)
             .map(|subwindow| subwindow.content_rect())
-            .unwrap_or(area);
-        tree.translate(root, content.x - area.x, content.y - area.y);
+            .unwrap_or(form_area);
+        tree.translate(root, content.x - form_area.x, content.y - form_area.y);
+        // Size constraints may have widened/narrowed the subwindow; keep the
+        // root widget geometry in sync with its content rect before first paint.
+        tree.set_geometry(root, content);
 
         Self::log(format!(
-            "layout form_id={form_id} nodes={} area=({:.0},{:.0},{:.0},{:.0})",
+            "layout form_id={form_id} layer={layer:?} nodes={} area=({:.0},{:.0},{:.0},{:.0})",
             tree.len(),
-            area.x,
-            area.y,
-            area.width,
-            area.height
+            form_area.x,
+            form_area.y,
+            form_area.width,
+            form_area.height
         ));
-        self.forms.insert(form_id.clone(), QtForm { tree, root });
+        self.forms.insert(
+            form_id.clone(),
+            QtForm {
+                tree,
+                root,
+                under_mouse_widget: None,
+            },
+        );
         if self.focused.as_ref().is_some_and(|(f, _)| f == &form_id) {
             self.focused = None;
         }
@@ -619,42 +1159,51 @@ impl App {
         self.focus_initial_form(&form_id);
     }
 
-    /// Collect the Qt-painted form commands into the flat batches the
-    /// wgpu renderer consumes, interleaving MDI card chrome per form.
-    fn collect_paint(&self) -> (Vec<gfx::ColoredRect>, Vec<gfx::ColoredText>) {
-        let mut rects = Vec::new();
-        let mut texts = Vec::new();
+    /// Collect the Qt-painted form commands into an ordered display list.
+    /// Batches keep the painter order across shell → MDI → top-level →
+    /// popup layers; no text is masked or reordered to fake z-order.
+    fn collect_paint(&self) -> Vec<gfx::PaintBatch> {
+        let mut batches = Vec::new();
         let style = rqt::style::QFusionStyle::default();
-        let active = self.mdi.active_index();
-        for (index, subwindow) in self.mdi.subwindows().iter().enumerate() {
-            let Some(form) = self.forms.get(&subwindow.payload) else {
-                continue;
-            };
-            if !subwindow.minimized {
-                let mut painter = rqt::gui::QPainter::new();
-                rqt::paint::paint_widget_tree(&form.tree, form.root, &style, &mut painter);
-                append_paint_commands(painter.commands(), &mut rects, &mut texts);
+        let viewport = self.floating.viewport();
+        let technical = format!(
+            "{}  ·  app {}  ·  forms {}",
+            if self.joined { "online" } else { "offline" },
+            self.params.app,
+            self.forms.len()
+        );
+
+        let mut base = rqt::gui::QPainter::new();
+        self.shell
+            .paint_base(&mut base, viewport, now_ms(), Some(&technical));
+        append_paint_commands(base.commands(), &mut batches);
+
+        let active_form = self.active_form_id();
+        for layer in [WindowLayer::Mdi, WindowLayer::Floating] {
+            let area = self.area(layer);
+            for (index, subwindow) in area.subwindows().iter().enumerate() {
+                let Some(form) = self.forms.get(&subwindow.payload) else {
+                    continue;
+                };
+                if !subwindow.minimized {
+                    let mut painter = rqt::gui::QPainter::new();
+                    rqt::paint::paint_widget_tree(&form.tree, form.root, &style, &mut painter);
+                    append_paint_commands(painter.commands(), &mut batches);
+                }
+                let active = active_form.as_deref() == Some(subwindow.payload.as_str());
+                let hover = self.mdi_hover.and_then(|(hover_layer, hover_index, hit)| {
+                    (hover_layer == layer && hover_index == index).then_some(hit)
+                });
+                self.push_subwindow_chrome(subwindow, active, hover, &mut batches);
             }
-            let hover = self
-                .mdi_hover
-                .and_then(|(hover_index, hit)| (hover_index == index).then_some(hit));
-            self.push_subwindow_chrome(
-                subwindow,
-                active == Some(index),
-                hover,
-                &mut rects,
-                &mut texts,
-            );
         }
-        (rects, texts)
-    }
 
-    fn collect_rects(&self) -> Vec<gfx::ColoredRect> {
-        self.collect_paint().0
-    }
-
-    fn collect_texts(&self) -> Vec<gfx::ColoredText> {
-        self.collect_paint().1
+        // Popups are last: their opaque backgrounds naturally cover menu,
+        // toolbar and form text underneath, so no masking is needed.
+        let mut overlay = rqt::gui::QPainter::new();
+        self.shell.paint_overlay(&mut overlay, viewport);
+        append_paint_commands(overlay.commands(), &mut batches);
+        batches
     }
 
     fn push_subwindow_chrome(
@@ -662,14 +1211,13 @@ impl App {
         subwindow: &QMdiSubWindow<String>,
         active: bool,
         hover: Option<QMdiSubWindowHit>,
-        rects: &mut Vec<gfx::ColoredRect>,
-        texts: &mut Vec<gfx::ColoredText>,
+        batches: &mut Vec<gfx::PaintBatch>,
     ) {
         use rqt::gui::QPainter;
 
         let mut painter = QPainter::new();
         self.paint_subwindow_chrome(&mut painter, subwindow, active, hover);
-        append_paint_commands(painter.commands(), rects, texts);
+        append_paint_commands(painter.commands(), batches);
     }
 
     fn paint_subwindow_chrome(
@@ -842,7 +1390,7 @@ impl App {
         );
         painter.restore();
 
-        if !subwindow.minimized {
+        if subwindow.can_resize() {
             let resize = subwindow.resize_rect();
             for step in 0..3 {
                 let offset = step as f32 * 4.0;
@@ -856,6 +1404,7 @@ impl App {
         }
     }
 
+    #[cfg(test)]
     fn mdi_hit(&self, point: (f32, f32)) -> Option<(usize, QMdiSubWindowHit)> {
         self.mdi.hit_test(rqt::gui::QPointF::new(point.0, point.1))
     }
@@ -864,8 +1413,19 @@ impl App {
         self.modal_stack.last().map(String::as_str)
     }
 
+    fn is_application_modal(&self) -> bool {
+        self.modal_form().is_some_and(|form_id| {
+            self.modal_scopes
+                .get(form_id)
+                .map(String::as_str)
+                .unwrap_or("application")
+                == "application"
+        })
+    }
+
     /// Like `mdi_hit`, but while a modal form is open only that form's
     /// subwindow may receive mouse input.
+    #[cfg(test)]
     fn mdi_hit_modal(&self) -> Option<(usize, QMdiSubWindowHit)> {
         let hit = self.mdi_hit(self.cursor)?;
         if let Some(modal) = self.modal_form() {
@@ -877,20 +1437,44 @@ impl App {
         Some(hit)
     }
 
+    /// Topmost window under a point. Top-level windows sit above MDI, like
+    /// separate Qt windows; modal filtering is applied separately.
+    fn window_hit(&self, point: (f32, f32)) -> Option<(WindowLayer, usize, QMdiSubWindowHit)> {
+        let point = rqt::gui::QPointF::new(point.0, point.1);
+        for layer in [WindowLayer::Floating, WindowLayer::Mdi] {
+            if let Some((index, hit)) = self.area(layer).hit_test(point) {
+                return Some((layer, index, hit));
+            }
+        }
+        None
+    }
+
+    fn window_hit_modal(&self) -> Option<(WindowLayer, usize, QMdiSubWindowHit)> {
+        let hit = self.window_hit(self.cursor)?;
+        if let Some(modal) = self.modal_form() {
+            let payload = self.area(hit.0).subwindow(hit.1)?.payload.as_str();
+            if payload != modal {
+                return None;
+            }
+        }
+        Some(hit)
+    }
+
     fn activate_form(&mut self, form_id: &str) -> Option<usize> {
         self.mdi_hover = None;
-        let index = self.mdi.index_of(|payload| payload == form_id)?;
-        let activated = self.mdi.activate(index)?;
+        let (layer, index) = self.find_window(form_id)?;
+        let activated = self.area_mut(layer).activate(index)?;
+        self.active_form = Some(form_id.to_string());
         self.focus_initial_form(form_id);
         Some(activated)
     }
 
     fn sync_form_geometry(&mut self, form_id: &str) {
-        let Some(index) = self.mdi.index_of(|payload| payload == form_id) else {
+        let Some((layer, index)) = self.find_window(form_id) else {
             return;
         };
         let Some(content) = self
-            .mdi
+            .area(layer)
             .subwindow(index)
             .map(|subwindow| subwindow.content_rect())
         else {
@@ -901,40 +1485,135 @@ impl App {
         }
     }
 
+    /// Keep the browser cursor in sync with the MDI resize border under the
+    /// mouse. The cursor is only changed when the resize direction changes.
+    fn update_resize_cursor(&mut self, hit: Option<QMdiSubWindowHit>) {
+        let next = hit.filter(|hit| hit.is_resize());
+        if self.cursor_hit == next {
+            return;
+        }
+        self.cursor_hit = next;
+        if let Some(window) = &self.window {
+            window.set_cursor(cursor_icon_for_hit(next));
+        }
+    }
+
     fn cancel_mouse_grabs(&mut self) {
         for form in self.forms.values_mut() {
             form.tree.cancel_mouse_grab();
         }
     }
 
+    fn dispatch_shell_action(&mut self, item: &shell::MenuItem) {
+        let action = item.action.as_deref().unwrap_or("");
+        let Some(main_form_id) = self.main_form_id.clone() else {
+            Self::log(format!(
+                "menu action ignored: no main session (action={action} title={})",
+                item.title
+            ));
+            return;
+        };
+        let Some(socket) = &self.socket else {
+            return;
+        };
+        socket.send(
+            "send_event",
+            serde_json::json!({
+                "command": "menuAction",
+                "form_id": main_form_id,
+                "action_id": item.id,
+                "action": action,
+                "title": item.title,
+                "lua_file": item.lua_file,
+                "ui_file": item.ui_file,
+                "mdi": item.mdi,
+                "modal": item.modal,
+                "modal_scope": item.modal_scope,
+            }),
+        );
+        Self::log(format!(
+            "menuAction {:?} action={action} lua_file={:?}",
+            item.title, item.lua_file
+        ));
+    }
+
     fn dispatch_mouse_press(&mut self) {
         self.cancel_mouse_grabs();
         self.left_down = true;
+        self.shell_press = false;
+        if self.shell.visible && !self.is_application_modal() {
+            let viewport = self.floating.viewport();
+            let shell_hit = self.shell.hit(self.cursor, viewport);
+            let floating_hit = self
+                .floating
+                .hit_test(rqt::gui::QPointF::new(self.cursor.0, self.cursor.1));
+            // An open menu popup is above top-level windows. Otherwise a
+            // top-level window covers the main-window chrome, as in Qt.
+            let popup_open = self.shell.menu_open() && shell_hit.is_some();
+            if popup_open || floating_hit.is_none() {
+                if shell_hit.is_some() {
+                    if let Some(action) = self.shell.click(self.cursor, viewport) {
+                        self.dispatch_shell_action(&action);
+                    }
+                    self.shell_press = true;
+                    return;
+                }
+            }
+            if self.shell.menu_open() {
+                self.shell.close_menu();
+            }
+        }
         self.line_select = None;
         self.caret_epoch = now_ms();
-        let Some((index, hit)) = self.mdi_hit_modal() else {
+        let Some((layer, index, hit)) = self.window_hit_modal() else {
             self.line_select = None;
             return;
         };
         match hit {
             QMdiSubWindowHit::Title => {
                 self.commit_edit();
-                if let Some(index) = self.mdi.activate(index) {
+                if let Some(index) = self.area_mut(layer).activate(index) {
+                    let origin_frame = self
+                        .area(layer)
+                        .subwindow(index)
+                        .map(|subwindow| subwindow.frame)
+                        .unwrap_or_default();
                     self.dragging = Some(Drag {
+                        layer,
                         index,
                         mode: MdiDragMode::Move,
                         last: self.cursor,
+                        origin_frame,
+                        origin_cursor: self.cursor,
                     });
+                    self.active_form = self
+                        .area(layer)
+                        .subwindow(index)
+                        .map(|subwindow| subwindow.payload.clone());
+                    self.update_resize_cursor(None);
                 }
             }
-            QMdiSubWindowHit::ResizeBottomRight => {
+            hit if hit.is_resize() => {
                 self.commit_edit();
-                if let Some(index) = self.mdi.activate(index) {
+                if let Some(index) = self.area_mut(layer).activate(index) {
+                    let origin_frame = self
+                        .area(layer)
+                        .subwindow(index)
+                        .map(|subwindow| subwindow.frame)
+                        .unwrap_or_default();
                     self.dragging = Some(Drag {
+                        layer,
                         index,
-                        mode: MdiDragMode::Resize,
+                        mode: MdiDragMode::Resize(hit),
                         last: self.cursor,
+                        origin_frame,
+                        origin_cursor: self.cursor,
                     });
+                    self.active_form = self
+                        .area(layer)
+                        .subwindow(index)
+                        .map(|subwindow| subwindow.payload.clone());
+                    self.update_resize_cursor(Some(hit));
                 }
             }
             QMdiSubWindowHit::Close
@@ -942,16 +1621,17 @@ impl App {
             | QMdiSubWindowHit::Minimize
             | QMdiSubWindowHit::SystemMenu => {}
             QMdiSubWindowHit::Body => {
-                let Some(index) = self.mdi.activate(index) else {
+                let Some(index) = self.area_mut(layer).activate(index) else {
                     return;
                 };
                 let Some(form_id) = self
-                    .mdi
+                    .area(layer)
                     .subwindow(index)
                     .map(|subwindow| subwindow.payload.clone())
                 else {
                     return;
                 };
+                self.active_form = Some(form_id.clone());
                 self.clear_inactive_focus(&form_id);
                 let Some((_, name, class)) = self.hit_test(self.cursor) else {
                     self.line_select = None;
@@ -1040,7 +1720,9 @@ impl App {
                     self.shift,
                 );
             }
+            _ => {}
         }
+        self.update_resize_cursor(Some(hit));
     }
 
     fn drag_card(&mut self, dx: f32, dy: f32) {
@@ -1050,25 +1732,28 @@ impl App {
         if dx == 0.0 && dy == 0.0 {
             return;
         }
+        let layer = drag.layer;
         let index = drag.index;
         let mode = drag.mode;
+        let origin_frame = drag.origin_frame;
+        let origin_cursor = drag.origin_cursor;
         drag.last = self.cursor;
         match mode {
             MdiDragMode::Move => {
                 let Some(form_id) = self
-                    .mdi
+                    .area(layer)
                     .subwindow(index)
                     .map(|subwindow| subwindow.payload.clone())
                 else {
                     return;
                 };
                 let before = self
-                    .mdi
+                    .area(layer)
                     .subwindow(index)
                     .map(|subwindow| (subwindow.frame.x, subwindow.frame.y));
-                self.mdi.translate(index, dx, dy);
+                self.area_mut(layer).translate(index, dx, dy);
                 let after = self
-                    .mdi
+                    .area(layer)
                     .subwindow(index)
                     .map(|subwindow| (subwindow.frame.x, subwindow.frame.y));
                 if before != after {
@@ -1077,18 +1762,27 @@ impl App {
                     }
                 }
             }
-            MdiDragMode::Resize => {
-                let Some((form_id, frame)) = self
-                    .mdi
-                    .subwindow(index)
-                    .map(|subwindow| (subwindow.payload.clone(), subwindow.frame))
+            MdiDragMode::Resize(hit) => {
+                let Some((form_id, min, max)) =
+                    self.area(layer).subwindow(index).map(|subwindow| {
+                        (
+                            subwindow.payload.clone(),
+                            subwindow.min_content_size(),
+                            subwindow.max_content_size(),
+                        )
+                    })
                 else {
                     return;
                 };
-                let width = (self.cursor.0 - frame.x).max(80.0);
-                let height = (self.cursor.1 - (frame.y + QMDI_TITLE_H)).max(64.0);
-                self.mdi
-                    .resize_content(index, rqt::gui::QSizeF::new(width, height));
+                let frame = resized_frame(
+                    origin_frame,
+                    hit,
+                    self.cursor.0 - origin_cursor.0,
+                    self.cursor.1 - origin_cursor.1,
+                    min,
+                    max,
+                );
+                self.area_mut(layer).set_frame(index, frame);
                 self.sync_form_geometry(&form_id);
             }
         }
@@ -1114,29 +1808,31 @@ impl App {
     fn hit_test(&self, point: (f32, f32)) -> Option<(String, String, String)> {
         let point = rqt::gui::QPointF::new(point.0, point.1);
         let modal = self.modal_form();
-        for subwindow in self.mdi.subwindows().iter().rev() {
-            if let Some(modal) = modal {
-                if subwindow.payload.as_str() != modal {
+        for layer in [WindowLayer::Floating, WindowLayer::Mdi] {
+            for subwindow in self.area(layer).subwindows().iter().rev() {
+                if let Some(modal) = modal {
+                    if subwindow.payload.as_str() != modal {
+                        continue;
+                    }
+                }
+                if !subwindow.content_rect().contains(point) {
                     continue;
                 }
+                let Some(form) = self.forms.get(&subwindow.payload) else {
+                    continue;
+                };
+                let Some(widget) = form.tree.widget_at(form.root, point) else {
+                    continue;
+                };
+                let Some(widget) = form.tree.widget(widget) else {
+                    continue;
+                };
+                return Some((
+                    subwindow.payload.clone(),
+                    widget.object_name.clone(),
+                    widget.class_name.clone(),
+                ));
             }
-            if !subwindow.content_rect().contains(point) {
-                continue;
-            }
-            let Some(form) = self.forms.get(&subwindow.payload) else {
-                continue;
-            };
-            let Some(widget) = form.tree.widget_at(form.root, point) else {
-                continue;
-            };
-            let Some(widget) = form.tree.widget(widget) else {
-                continue;
-            };
-            return Some((
-                subwindow.payload.clone(),
-                widget.object_name.clone(),
-                widget.class_name.clone(),
-            ));
         }
         None
     }
@@ -1150,6 +1846,11 @@ impl App {
             self.cursor.0, self.cursor.1
         ));
         self.left_down = false;
+        if self.shell_press {
+            self.shell_press = false;
+            return;
+        }
+        self.update_resize_cursor(self.window_hit_modal().map(|(_, _, hit)| hit));
         self.line_select = None;
         self.commit_edit();
         if self.dragging.take().is_some() || self.column_drag.is_some() {
@@ -1157,10 +1858,10 @@ impl App {
             return;
         }
 
-        match self.mdi_hit_modal() {
-            Some((index, QMdiSubWindowHit::Close)) => {
+        match self.window_hit_modal() {
+            Some((layer, index, QMdiSubWindowHit::Close)) => {
                 let Some(form_id) = self
-                    .mdi
+                    .area(layer)
                     .subwindow(index)
                     .map(|subwindow| subwindow.payload.clone())
                 else {
@@ -1170,30 +1871,30 @@ impl App {
                 self.close_card(&form_id);
                 return;
             }
-            Some((index, QMdiSubWindowHit::Maximize)) => {
+            Some((layer, index, QMdiSubWindowHit::Maximize)) => {
                 let Some(form_id) = self
-                    .mdi
+                    .area(layer)
                     .subwindow(index)
                     .map(|subwindow| subwindow.payload.clone())
                 else {
                     return;
                 };
                 if let Some(index) = self.activate_form(&form_id) {
-                    self.mdi.toggle_maximized(index);
+                    self.area_mut(layer).toggle_maximized(index);
                     self.sync_form_geometry(&form_id);
                 }
                 return;
             }
-            Some((index, QMdiSubWindowHit::Minimize)) => {
+            Some((layer, index, QMdiSubWindowHit::Minimize)) => {
                 let Some(form_id) = self
-                    .mdi
+                    .area(layer)
                     .subwindow(index)
                     .map(|subwindow| subwindow.payload.clone())
                 else {
                     return;
                 };
                 self.commit_edit();
-                let Some(minimized) = self.mdi.toggle_minimized(index) else {
+                let Some(minimized) = self.area_mut(layer).toggle_minimized(index) else {
                     return;
                 };
                 if minimized {
@@ -1204,10 +1905,10 @@ impl App {
                 }
                 return;
             }
-            Some((_, QMdiSubWindowHit::SystemMenu)) => return,
-            Some((index, QMdiSubWindowHit::Title)) => {
+            Some((_, _, QMdiSubWindowHit::SystemMenu)) => return,
+            Some((layer, index, QMdiSubWindowHit::Title)) => {
                 if let Some(form_id) = self
-                    .mdi
+                    .area(layer)
                     .subwindow(index)
                     .map(|subwindow| subwindow.payload.clone())
                 {
@@ -1215,16 +1916,21 @@ impl App {
                 }
                 return;
             }
-            Some((_, QMdiSubWindowHit::ResizeBottomRight)) => return,
-            Some((index, QMdiSubWindowHit::Body)) => {
-                self.mdi.activate(index);
+            Some((_, _, hit)) if hit.is_resize() => return,
+            Some((layer, index, QMdiSubWindowHit::Body)) => {
+                self.area_mut(layer).activate(index);
+                self.active_form = self
+                    .area(layer)
+                    .subwindow(index)
+                    .map(|subwindow| subwindow.payload.clone());
             }
+            Some((_, _, _)) => return,
             None => {
                 if self.modal_form().is_some() {
                     return;
                 }
                 self.cancel_mouse_grabs();
-                if let Some(form_id) = self.mdi.active_payload().cloned() {
+                if let Some(form_id) = self.active_form_id() {
                     if let Some(form) = self.forms.get_mut(&form_id) {
                         form.tree.clear_focus();
                     }
@@ -1587,6 +2293,11 @@ impl App {
     /// Keyboard half of the event loop: an open cell edit first, then
     /// typing into a selected table cell, then the focused line edit.
     fn dispatch_key(&mut self, event: &winit::event::KeyEvent) {
+        if let Some(modal) = self.modal_form() {
+            if self.active_form_id().as_deref() != Some(modal) {
+                return;
+            }
+        }
         if self.ctrl {
             if let winit::keyboard::Key::Character(text) = &event.logical_key {
                 if text.eq_ignore_ascii_case("a") {
@@ -1719,7 +2430,7 @@ impl App {
                     Self::log("focus cleared");
                 }
                 self.table_focus = None;
-                if let Some(form_id) = self.mdi.active_payload().cloned() {
+                if let Some(form_id) = self.active_form_id() {
                     if let Some(form) = self.forms.get_mut(&form_id) {
                         form.tree.clear_focus();
                     }
@@ -1960,7 +2671,7 @@ impl App {
     }
 
     fn tab_focus(&mut self, backwards: bool) {
-        let Some(form_id) = self.mdi.active_payload().cloned() else {
+        let Some(form_id) = self.active_form_id() else {
             return;
         };
         self.commit_edit();
@@ -2278,6 +2989,83 @@ fn prop_brief(value: &form_xml::PropValue) -> String {
     }
 }
 
+/// Qt's `Qt::MSWindowsFixedSizeDialogHint` (from a `.ui` `windowFlags`
+/// property) disables interactive resizing, just like `QDialog`.
+fn window_fixed_size(tree: &QWidgetTree, root: QWidgetId) -> bool {
+    let Some(widget) = tree.widget(root) else {
+        return false;
+    };
+    let has_hint = |value: &rqt::core::QVariant| match value {
+        rqt::core::QVariant::String(flags) | rqt::core::QVariant::Enum(flags) => {
+            flags.contains("MSWindowsFixedSizeDialogHint")
+        }
+        _ => false,
+    };
+    match widget.property("windowFlags") {
+        Some(rqt::core::QVariant::List(values)) => values.iter().any(has_hint),
+        Some(value) => has_hint(value),
+        None => false,
+    }
+}
+
+fn cursor_icon_for_hit(hit: Option<QMdiSubWindowHit>) -> CursorIcon {
+    match hit {
+        Some(QMdiSubWindowHit::ResizeLeft) => CursorIcon::WResize,
+        Some(QMdiSubWindowHit::ResizeRight) => CursorIcon::EResize,
+        Some(QMdiSubWindowHit::ResizeTop) => CursorIcon::NResize,
+        Some(QMdiSubWindowHit::ResizeBottom) => CursorIcon::SResize,
+        Some(QMdiSubWindowHit::ResizeTopLeft) => CursorIcon::NwResize,
+        Some(QMdiSubWindowHit::ResizeTopRight) => CursorIcon::NeResize,
+        Some(QMdiSubWindowHit::ResizeBottomLeft) => CursorIcon::SwResize,
+        Some(QMdiSubWindowHit::ResizeBottomRight) => CursorIcon::SeResize,
+        _ => CursorIcon::Default,
+    }
+}
+
+/// New frame for an interactive border drag. The edge opposite to `hit`
+/// stays anchored, and `min`/`max` are the form's *content* size limits.
+fn resized_frame(
+    origin: rqt::gui::QRectF,
+    hit: QMdiSubWindowHit,
+    dx: f32,
+    dy: f32,
+    min: rqt::gui::QSizeF,
+    max: rqt::gui::QSizeF,
+) -> rqt::gui::QRectF {
+    use QMdiSubWindowHit::*;
+
+    let min_w = min.width.max(1.0);
+    let max_w = max.width.max(min_w);
+    let min_h = (min.height + QMDI_TITLE_H).max(QMDI_TITLE_H);
+    let max_h = (max.height + QMDI_TITLE_H).max(min_h);
+    let mut frame = origin;
+
+    let left = matches!(hit, ResizeLeft | ResizeTopLeft | ResizeBottomLeft);
+    let right = matches!(hit, ResizeRight | ResizeTopRight | ResizeBottomRight);
+    let top = matches!(hit, ResizeTop | ResizeTopLeft | ResizeTopRight);
+    let bottom = matches!(hit, ResizeBottom | ResizeBottomLeft | ResizeBottomRight);
+
+    if left {
+        let right_edge = origin.right();
+        let width = (origin.width - dx).clamp(min_w, max_w);
+        frame.x = right_edge - width;
+        frame.width = width;
+    } else if right {
+        frame.width = (origin.width + dx).clamp(min_w, max_w);
+    }
+
+    if top {
+        let bottom_edge = origin.bottom();
+        let height = (origin.height - dy).clamp(min_h, max_h);
+        frame.y = bottom_edge - height;
+        frame.height = height;
+    } else if bottom {
+        frame.height = (origin.height + dy).clamp(min_h, max_h);
+    }
+
+    frame
+}
+
 fn form_title(tree: &QWidgetTree, root: QWidgetId, fallback: &str) -> String {
     match tree.property(root, "windowTitle") {
         Some(rqt::core::QVariant::String(title)) | Some(rqt::core::QVariant::Enum(title))
@@ -2289,15 +3077,13 @@ fn form_title(tree: &QWidgetTree, root: QWidgetId, fallback: &str) -> String {
     }
 }
 
-fn append_paint_commands(
-    commands: &[rqt::gui::QPaintCommand],
-    rects: &mut Vec<gfx::ColoredRect>,
-    texts: &mut Vec<gfx::ColoredText>,
-) {
+fn append_paint_commands(commands: &[rqt::gui::QPaintCommand], batches: &mut Vec<gfx::PaintBatch>) {
     use rqt::gui::{QPaintCommand, QRectF};
 
     let mut clip: Option<QRectF> = None;
     let mut stack: Vec<Option<QRectF>> = Vec::new();
+    let mut rects: Vec<gfx::ColoredRect> = Vec::new();
+    let mut texts: Vec<gfx::ColoredText> = Vec::new();
     let push_rect = |rects: &mut Vec<gfx::ColoredRect>,
                      clip: Option<QRectF>,
                      rect: QRectF,
@@ -2313,17 +3099,37 @@ fn append_paint_commands(
         }
     };
     for command in commands {
+        // Keep the command stream ordered: a rect drawn after text belongs
+        // in a later batch, not in a global rect pool.
+        let draws_rect = matches!(
+            command,
+            QPaintCommand::FillRect { .. }
+                | QPaintCommand::StrokeRect { .. }
+                | QPaintCommand::StrokeRoundedRect { .. }
+                | QPaintCommand::FillRoundedRect { .. }
+                | QPaintCommand::DrawLine { .. }
+                | QPaintCommand::FillLinearGradientRect { .. }
+                | QPaintCommand::FillEllipse { .. }
+                | QPaintCommand::StrokeEllipse { .. }
+                | QPaintCommand::FillTriangle { .. }
+                | QPaintCommand::DrawPixmap { .. }
+        );
+        if draws_rect {
+            flush_text_batch(batches, &mut texts);
+        } else if matches!(command, QPaintCommand::DrawText { .. }) {
+            flush_rect_batch(batches, &mut rects);
+        }
         match command {
             QPaintCommand::Save => stack.push(clip),
             QPaintCommand::Restore => clip = stack.pop().unwrap_or(None),
             QPaintCommand::SetClip { rect } => clip = *rect,
             QPaintCommand::Translate { .. } => {}
-            QPaintCommand::FillRect { rect, color } => push_rect(rects, clip, *rect, *color),
+            QPaintCommand::FillRect { rect, color } => push_rect(&mut rects, clip, *rect, *color),
             QPaintCommand::FillRoundedRect {
                 rect,
                 radius,
                 color,
-            } => push_rounded_rect(rects, clip, *rect, *radius, *color),
+            } => push_rounded_rect(&mut rects, clip, *rect, *radius, *color),
             QPaintCommand::FillLinearGradientRect {
                 rect, start, end, ..
             } => {
@@ -2333,7 +3139,7 @@ fn append_paint_commands(
                 for y in top..bottom {
                     let t = ((y as f32 + 0.5 - top as f32) / span).clamp(0.0, 1.0);
                     push_rect(
-                        rects,
+                        &mut rects,
                         clip,
                         QRectF::new(rect.x, y as f32, rect.width, 1.0),
                         start.lerp(*end, t),
@@ -2356,7 +3162,7 @@ fn append_paint_commands(
                         let d = (dx * dx + dy * dy).sqrt();
                         if d <= radius && d >= inner {
                             push_rect(
-                                rects,
+                                &mut rects,
                                 clip,
                                 QRectF::new(
                                     left as f32 + x as f32,
@@ -2385,7 +3191,7 @@ fn append_paint_commands(
                         let dy = (top as f32 + y as f32 + 0.5 - cy) / ry;
                         if dx * dx + dy * dy <= 1.0 {
                             push_rect(
-                                rects,
+                                &mut rects,
                                 clip,
                                 QRectF::new(
                                     left as f32 + x as f32,
@@ -2418,7 +3224,7 @@ fn append_paint_commands(
                             || (e0 <= 0.0 && e1 <= 0.0 && e2 <= 0.0)
                         {
                             push_rect(
-                                rects,
+                                &mut rects,
                                 clip,
                                 QRectF::new(x as f32, y as f32, 1.0, 1.0),
                                 *color,
@@ -2453,7 +3259,7 @@ fn append_paint_commands(
                             let color = rqt::gui::QColor::rgba8(red, green, blue, alpha)
                                 .with_alpha(alpha as f32 / 255.0 * *opacity);
                             push_rect(
-                                rects,
+                                &mut rects,
                                 clip,
                                 QRectF::new(
                                     left as f32 + x as f32,
@@ -2468,12 +3274,12 @@ fn append_paint_commands(
                 }
             }
             QPaintCommand::StrokeRect { rect, width, color } => {
-                push_stroke_rect(rects, clip, *rect, *width, *color);
+                push_stroke_rect(&mut rects, clip, *rect, *width, *color);
             }
             QPaintCommand::StrokeRoundedRect {
                 rect, width, color, ..
             } => {
-                push_stroke_rect(rects, clip, *rect, *width, *color);
+                push_stroke_rect(&mut rects, clip, *rect, *width, *color);
             }
             QPaintCommand::DrawLine {
                 from,
@@ -2507,7 +3313,7 @@ fn append_paint_commands(
                         let distance = ((px - qx) * (px - qx) + (py - qy) * (py - qy)).sqrt();
                         if distance <= half {
                             push_rect(
-                                rects,
+                                &mut rects,
                                 clip,
                                 QRectF::new(x as f32, y as f32, 1.0, 1.0),
                                 *color,
@@ -2539,6 +3345,28 @@ fn append_paint_commands(
                 }
             }
         }
+    }
+    flush_rect_batch(batches, &mut rects);
+    flush_text_batch(batches, &mut texts);
+}
+
+fn flush_rect_batch(batches: &mut Vec<gfx::PaintBatch>, rects: &mut Vec<gfx::ColoredRect>) {
+    if rects.is_empty() {
+        return;
+    }
+    match batches.last_mut() {
+        Some(gfx::PaintBatch::Rects(previous)) => previous.append(rects),
+        _ => batches.push(gfx::PaintBatch::Rects(std::mem::take(rects))),
+    }
+}
+
+fn flush_text_batch(batches: &mut Vec<gfx::PaintBatch>, texts: &mut Vec<gfx::ColoredText>) {
+    if texts.is_empty() {
+        return;
+    }
+    match batches.last_mut() {
+        Some(gfx::PaintBatch::Text(previous)) => previous.append(texts),
+        _ => batches.push(gfx::PaintBatch::Text(std::mem::take(texts))),
     }
 }
 
@@ -2728,12 +3556,25 @@ impl ApplicationHandler for App {
             let gfx = self.gfx.clone();
             let gfx_window = window.clone();
             #[cfg(target_arch = "wasm32")]
+            let last_size = self.last_size.clone();
+            #[cfg(target_arch = "wasm32")]
             wasm_bindgen_futures::spawn_local(async move {
                 App::log("gfx task started");
-                match gfx::Gfx::new(gfx_window).await {
+                match gfx::Gfx::new(gfx_window.clone()).await {
                     Ok(gfx_state) => {
                         *gfx.borrow_mut() = Some(gfx_state);
                         App::log("gfx ready");
+                        // Apply the size from the earlier `Resized` event:
+                        // `inner_size()` may still report the 1x1 canvas.
+                        let (width, height) = last_size.get().unwrap_or_else(|| {
+                            let size = gfx_window.inner_size();
+                            (size.width, size.height)
+                        });
+                        if let Some(state) = gfx.borrow_mut().as_mut() {
+                            state.resize(width, height);
+                        }
+                        App::log(format!("gfx resized to {width}x{height}"));
+                        gfx_window.request_redraw();
                     }
                     Err(err) => App::log(format!("gpu init failed: {err}")),
                 }
@@ -2741,8 +3582,18 @@ impl ApplicationHandler for App {
             });
             #[cfg(not(target_arch = "wasm32"))]
             {
-                match pollster::block_on(gfx::Gfx::new(gfx_window)) {
-                    Ok(gfx_state) => *gfx.borrow_mut() = Some(gfx_state),
+                match pollster::block_on(gfx::Gfx::new(gfx_window.clone())) {
+                    Ok(gfx_state) => {
+                        *gfx.borrow_mut() = Some(gfx_state);
+                        let (width, height) = self.last_size.get().unwrap_or_else(|| {
+                            let size = gfx_window.inner_size();
+                            (size.width, size.height)
+                        });
+                        if let Some(state) = gfx.borrow_mut().as_mut() {
+                            state.resize(width, height);
+                        }
+                        gfx_window.request_redraw();
+                    }
                     Err(err) => App::log(format!("gpu init failed: {err}")),
                 }
             }
@@ -2758,9 +3609,14 @@ impl ApplicationHandler for App {
         }
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::CursorLeft { .. } => self.update_resize_cursor(None),
             WindowEvent::Resized(size) => {
+                self.last_size.set(Some((size.width, size.height)));
                 if let Some(gfx) = self.gfx.borrow_mut().as_mut() {
                     gfx.resize(size.width, size.height);
+                }
+                if let Some(window) = &self.window {
+                    window.request_redraw();
                 }
             }
             WindowEvent::ModifiersChanged(modifiers) => {
@@ -2769,9 +3625,16 @@ impl ApplicationHandler for App {
                 self.ctrl = state.control_key();
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
-                let size = self.window.as_ref().map(|w| w.inner_size());
-                if let (Some(size), Some(gfx)) = (size, self.gfx.borrow_mut().as_mut()) {
-                    gfx.set_scale_factor(scale_factor, size.width, size.height);
+                let (width, height) = self.last_size.get().unwrap_or_else(|| {
+                    let size = self
+                        .window
+                        .as_ref()
+                        .map(|window| window.inner_size())
+                        .unwrap_or(winit::dpi::PhysicalSize::new(0, 0));
+                    (size.width, size.height)
+                });
+                if let Some(gfx) = self.gfx.borrow_mut().as_mut() {
+                    gfx.set_scale_factor(scale_factor, width, height);
                 }
             }
             WindowEvent::RedrawRequested => {
@@ -2785,7 +3648,8 @@ impl ApplicationHandler for App {
                     })
                 };
                 if let Some(viewport) = viewport {
-                    self.mdi.set_viewport(viewport);
+                    self.floating.set_viewport(viewport);
+                    self.mdi.set_viewport(self.shell.central(viewport));
                 }
                 if let Some((form_id, name)) = self.focused.clone() {
                     let visible = (now_ms() - self.caret_epoch) % 1000.0 < 500.0;
@@ -2795,8 +3659,7 @@ impl ApplicationHandler for App {
                         }
                     }
                 }
-                let rects = self.collect_rects();
-                let texts = self.collect_texts();
+                let batches = self.collect_paint();
                 if let Some(gfx) = self.gfx.borrow_mut().as_mut() {
                     gfx.render(
                         wgpu::Color {
@@ -2805,8 +3668,7 @@ impl ApplicationHandler for App {
                             b: 0.14,
                             a: 1.0,
                         },
-                        &rects,
-                        &texts,
+                        &batches,
                     );
                 }
                 if let Some(window) = &self.window {
@@ -2817,7 +3679,10 @@ impl ApplicationHandler for App {
                 let scale = self.ui_scale();
                 let previous = self.dragging.as_ref().map(|drag| drag.last);
                 self.cursor = (position.x as f32 / scale, position.y as f32 / scale);
-                self.mdi_hover = self.mdi_hit_modal().filter(|(_, hit)| {
+                if self.shell.visible {
+                    self.shell.hover(self.cursor, self.floating.viewport());
+                }
+                self.mdi_hover = self.window_hit_modal().filter(|(_, _, hit)| {
                     matches!(
                         hit,
                         QMdiSubWindowHit::Close
@@ -2826,6 +3691,10 @@ impl ApplicationHandler for App {
                             | QMdiSubWindowHit::SystemMenu
                     )
                 });
+                if self.dragging.is_none() {
+                    let hit = self.window_hit_modal().map(|(_, _, hit)| hit);
+                    self.update_resize_cursor(hit);
+                }
                 if self.left_down {
                     let point = rqt::gui::QPointF::new(self.cursor.0, self.cursor.1);
                     let mut moved = false;
@@ -2875,6 +3744,62 @@ impl ApplicationHandler for App {
                 }
                 if let Some(last) = previous {
                     self.drag_card(self.cursor.0 - last.0, self.cursor.1 - last.1);
+                }
+
+                // Under mouse Enter/Leave handling (following Qt behavior)
+                // Track changes per form and generate events immediately
+                let point = rqt::gui::QPointF::new(self.cursor.0, self.cursor.1);
+
+                // Collect form_ids before iterating (since we borrow forms mutably)
+                let form_ids: Vec<String> = self.forms.keys().cloned().collect();
+
+                for form_id in form_ids {
+                    let form = self.forms.get_mut(&form_id).expect("form exists");
+                    let new_widget = form.tree.widget_at_point(point);
+                    let prev_widget = form.under_mouse_widget;
+
+                    // Generate Leave event if mouse left a widget
+                    if let Some(old) = prev_widget {
+                        // Check if mouse actually left (new_widget is different or None)
+                        if new_widget != Some(old) {
+                            if let Some(widget) = form.tree.widget(old) {
+                                if let Some(socket) = &self.socket {
+                                    socket.send(
+                                        "send_event",
+                                        serde_json::json!({
+                                            "command": "formEvent",
+                                            "form_id": form_id.clone(),
+                                            "event": "Leave",
+                                            "widget_name": widget.object_name,
+                                        }),
+                                    );
+                                }
+                            }
+                        }
+                    }
+
+                    // Generate Enter event if mouse entered a new widget
+                    if let Some(new) = new_widget {
+                        // Check if mouse actually entered (prev was different)
+                        if prev_widget != new_widget {
+                            if let Some(widget) = form.tree.widget(new) {
+                                if let Some(socket) = &self.socket {
+                                    socket.send(
+                                        "send_event",
+                                        serde_json::json!({
+                                            "command": "formEvent",
+                                            "form_id": form_id.clone(),
+                                            "event": "Enter",
+                                            "widget_name": widget.object_name,
+                                        }),
+                                    );
+                                }
+                            }
+                        }
+                    }
+
+                    // Update under_mouse_widget for this form
+                    form.under_mouse_widget = new_widget;
                 }
             }
             WindowEvent::MouseInput {
@@ -2956,7 +3881,11 @@ pub fn run_native(params: Params) {
 
 #[cfg(test)]
 mod tests {
-    use super::{key_edit, App, KeyEdit, Params, QtForm};
+    use super::{
+        append_paint_commands, base64_encode, cursor_icon_for_hit, gfx, icon_url, key_edit, now_ms,
+        png_data_url, resized_frame, shell, App, AppChrome, AppChromeAction, KeyEdit, Params,
+        QtForm, WindowLayer, QMDI_TITLE_H,
+    };
     use rqt::core::QVariant;
     use rqt::gui::QRectF;
     use rqt::widgets::QWidgetTree;
@@ -2969,7 +3898,489 @@ mod tests {
         widget.geometry = QRectF::new(x, y, 300.0, 200.0);
         widget.size_hint = rqt::gui::QSizeF::new(300.0, 200.0);
         widget.set_property("windowTitle", QVariant::String(title.into()));
-        QtForm { tree, root }
+        QtForm {
+            tree,
+            root,
+            under_mouse_widget: None,
+        }
+    }
+
+    #[test]
+    fn app_property_applies_browser_chrome_and_keeps_desktop_sugar_as_noop() {
+        use serde_json::json;
+
+        let mut app = App::new(Params::default());
+
+        app.on_command(&json!({
+            "command": "setAppProperty",
+            "property": "windowTitle",
+            "value": "Измерения"
+        }));
+        assert_eq!(app.chrome.window_title.as_deref(), Some("Измерения"));
+
+        app.on_command(&json!({
+            "command": "setAppProperty",
+            "property": "windowIcon",
+            "value": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg'/>"
+        }));
+        assert_eq!(
+            app.chrome.window_icon.as_deref(),
+            Some("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg'/>")
+        );
+
+        // Legacy Qt icon specs are sliced from the bundled sprite.
+        app.on_command(&json!({
+            "command": "setAppProperty",
+            "property": "windowIcon",
+            "value": "img24:45"
+        }));
+        assert_eq!(app.chrome.window_icon.as_deref(), Some("img24:45"));
+
+        let mut chrome = AppChrome::default();
+        match chrome.apply("windowIcon", &form_xml::PropValue::Str("img24:45".into())) {
+            AppChromeAction::IconPng(png) => assert!(!png.is_empty()),
+            other => panic!("expected IconPng, got {other:?}"),
+        }
+
+        // Desktop-only sugar must be accepted but not disturb browser chrome.
+        app.on_command(&json!({
+            "command": "setAppProperty",
+            "property": "geometry",
+            "value": {"x": 0, "y": 0, "w": 640, "h": 480}
+        }));
+        app.on_command(&json!({
+            "command": "setAppProperty",
+            "property": "windowState",
+            "value": "maximized"
+        }));
+        assert_eq!(app.chrome.window_title.as_deref(), Some("Измерения"));
+
+        assert_eq!(icon_url("img24:45"), None);
+        assert_eq!(icon_url(":/icons/icon_001.svg"), None);
+        assert_eq!(icon_url("icons/app.png"), Some("icons/app.png"));
+        assert_eq!(
+            icon_url("https://example.com/favicon.ico"),
+            Some("https://example.com/favicon.ico")
+        );
+        assert_eq!(icon_url("ok"), None);
+    }
+
+    #[test]
+    fn resized_frame_anchors_opposite_edges_and_clamps() {
+        use rqt::mdi::QMdiSubWindowHit;
+        let origin = rqt::gui::QRectF::new(100.0, 80.0, 300.0, 224.0);
+
+        let frame = resized_frame(
+            origin,
+            QMdiSubWindowHit::ResizeBottomRight,
+            50.0,
+            30.0,
+            rqt::gui::QSizeF::new(100.0, 80.0),
+            rqt::gui::QSizeF::new(400.0, 300.0),
+        );
+        assert_eq!(
+            (frame.x, frame.y, frame.width, frame.height),
+            (100.0, 80.0, 350.0, 254.0)
+        );
+
+        let frame = resized_frame(
+            origin,
+            QMdiSubWindowHit::ResizeLeft,
+            -40.0,
+            0.0,
+            rqt::gui::QSizeF::new(100.0, 80.0),
+            rqt::gui::QSizeF::new(400.0, 300.0),
+        );
+        assert_eq!((frame.x, frame.width), (60.0, 340.0));
+        assert_eq!(frame.right(), origin.right());
+
+        let frame = resized_frame(
+            origin,
+            QMdiSubWindowHit::ResizeTop,
+            0.0,
+            20.0,
+            rqt::gui::QSizeF::new(100.0, 80.0),
+            rqt::gui::QSizeF::new(400.0, 300.0),
+        );
+        assert_eq!((frame.y, frame.height), (100.0, 204.0));
+        assert_eq!(frame.bottom(), origin.bottom());
+
+        let frame = resized_frame(
+            origin,
+            QMdiSubWindowHit::ResizeBottomRight,
+            1000.0,
+            1000.0,
+            rqt::gui::QSizeF::new(100.0, 80.0),
+            rqt::gui::QSizeF::new(400.0, 300.0),
+        );
+        assert_eq!((frame.width, frame.height), (400.0, 300.0 + QMDI_TITLE_H));
+
+        let frame = resized_frame(
+            origin,
+            QMdiSubWindowHit::ResizeLeft,
+            1000.0,
+            0.0,
+            rqt::gui::QSizeF::new(100.0, 80.0),
+            rqt::gui::QSizeF::new(400.0, 300.0),
+        );
+        assert_eq!((frame.x, frame.width), (300.0, 100.0));
+    }
+
+    #[test]
+    fn resize_cursor_follows_the_border_direction() {
+        use rqt::mdi::QMdiSubWindowHit;
+        use winit::window::CursorIcon;
+
+        assert_eq!(
+            cursor_icon_for_hit(Some(QMdiSubWindowHit::ResizeLeft)),
+            CursorIcon::WResize
+        );
+        assert_eq!(
+            cursor_icon_for_hit(Some(QMdiSubWindowHit::ResizeTopLeft)),
+            CursorIcon::NwResize
+        );
+        assert_eq!(
+            cursor_icon_for_hit(Some(QMdiSubWindowHit::ResizeBottomRight)),
+            CursorIcon::SeResize
+        );
+        assert_eq!(cursor_icon_for_hit(None), CursorIcon::Default);
+        assert_eq!(
+            cursor_icon_for_hit(Some(QMdiSubWindowHit::Body)),
+            CursorIcon::Default
+        );
+    }
+
+    #[test]
+    fn form_resize_flag_and_constraints_follow_ui_and_commands() {
+        use rqt::mdi::QMdiSubWindowHit;
+        use serde_json::json;
+
+        let xml = r#"<ui version="4.0"><class>Dialog</class>
+            <widget class="QDialog" name="Dialog">
+              <property name="geometry"><rect><x>0</x><y>0</y><width>300</width><height>200</height></rect></property>
+              <property name="windowTitle"><string>Resize</string></property>
+              <property name="minimumSize"><size><width>200</width><height>150</height></size></property>
+              <property name="maximumSize"><size><width>400</width><height>300</height></size></property>
+            </widget></ui>"#;
+        let mut app = App::new(Params::default());
+        app.on_command(&json!({
+            "command": "createForm",
+            "form_id": "resize",
+            "ui_xml": xml,
+            "modal": false
+        }));
+        let index = app
+            .mdi
+            .index_of(|payload| payload == "resize")
+            .expect("subwindow");
+        assert_eq!(
+            app.mdi.subwindow(index).unwrap().content_rect().size(),
+            rqt::gui::QSizeF::new(300.0, 200.0)
+        );
+        assert!(app.mdi.subwindow(index).unwrap().can_resize());
+
+        let frame = app.mdi.subwindow(index).unwrap().frame;
+        assert_eq!(
+            app.mdi_hit((frame.x + 1.0, frame.y + 100.0))
+                .map(|(_, hit)| hit),
+            Some(QMdiSubWindowHit::ResizeLeft)
+        );
+
+        app.on_command(&json!({
+            "command": "setFormProperty",
+            "form_id": "resize",
+            "property": "minimumSize",
+            "value": {"w": 350, "h": 250}
+        }));
+        let frame = app.mdi.subwindow(index).unwrap().frame;
+        assert_eq!((frame.width, frame.height), (350.0, 250.0 + QMDI_TITLE_H));
+        assert_eq!(
+            app.forms["resize"]
+                .tree
+                .widget(app.forms["resize"].root)
+                .unwrap()
+                .geometry
+                .size(),
+            rqt::gui::QSizeF::new(350.0, 250.0)
+        );
+
+        app.on_command(&json!({
+            "command": "setFormProperty",
+            "form_id": "resize",
+            "property": "resizable",
+            "value": false
+        }));
+        assert!(!app.mdi.subwindow(index).unwrap().can_resize());
+        assert_eq!(
+            app.mdi_hit((frame.x + 1.0, frame.y + 100.0))
+                .map(|(_, hit)| hit),
+            Some(QMdiSubWindowHit::Body)
+        );
+
+        let fixed_xml = r#"<ui version="4.0"><class>Dialog</class>
+            <widget class="QDialog" name="Dialog">
+              <property name="geometry"><rect><x>0</x><y>0</y><width>300</width><height>200</height></rect></property>
+              <property name="windowFlags"><set><enum>Qt::WindowType::MSWindowsFixedSizeDialogHint</enum></set></property>
+            </widget></ui>"#;
+        app.on_command(&json!({
+            "command": "createForm",
+            "form_id": "fixed",
+            "ui_xml": fixed_xml,
+            "modal": false
+        }));
+        let index = app
+            .mdi
+            .index_of(|payload| payload == "fixed")
+            .expect("fixed subwindow");
+        assert!(!app.mdi.subwindow(index).unwrap().can_resize());
+        assert!(!app.mdi.subwindow(index).unwrap().window_flags.maximize);
+    }
+
+    #[test]
+    fn standalone_form_uses_top_level_layer_and_full_form_stays_mdi() {
+        use serde_json::json;
+
+        let xml = r#"<ui version="4.0"><class>Dialog</class>
+            <widget class="QDialog" name="Dialog">
+              <property name="geometry"><rect><x>40</x><y>40</y><width>300</width><height>200</height></rect></property>
+              <property name="windowTitle"><string>Standalone</string></property>
+            </widget></ui>"#;
+        let mut app = App::new(Params::default());
+        app.on_command(&json!({
+            "command": "createForm",
+            "form_id": "standalone",
+            "mode": "standalone",
+            "placement": "top-level",
+            "ui_xml": xml,
+        }));
+        assert!(app.mdi.is_empty());
+        assert_eq!(app.floating.len(), 1);
+        let index = app
+            .floating
+            .index_of(|payload| payload == "standalone")
+            .unwrap();
+        assert_eq!(
+            app.floating.subwindow(index).unwrap().content_rect(),
+            QRectF::new(40.0, 40.0, 300.0, 200.0)
+        );
+
+        let mut full = App::new(Params {
+            full: true,
+            main_lua: Some("main.lua".into()),
+            ..Params::default()
+        });
+        full.on_command(&json!({
+            "command": "createForm",
+            "form_id": "mdi",
+            "mode": "full",
+            "placement": "mdi",
+            "ui_xml": xml,
+        }));
+        assert!(full.floating.is_empty());
+        assert_eq!(full.mdi.len(), 1);
+        assert!(full.shell.visible);
+    }
+
+    #[test]
+    fn mdi_form_position_is_relative_to_the_central_area() {
+        use serde_json::json;
+
+        let xml = r#"<ui version="4.0"><class>Dialog</class>
+            <widget class="QDialog" name="Dialog">
+              <property name="geometry"><rect><x>0</x><y>0</y><width>300</width><height>200</height></rect></property>
+            </widget></ui>"#;
+        let mut app = App::new(Params {
+            full: true,
+            main_lua: Some("main.lua".into()),
+            ..Params::default()
+        });
+        let viewport = QRectF::new(0.0, 0.0, 800.0, 600.0);
+        app.floating.set_viewport(viewport);
+        app.shell
+            .set_menu(&form_xml::PropValue::List(vec![form_xml::PropValue::Map(
+                vec![("title".into(), form_xml::PropValue::Str("File".into()))],
+            )]));
+        app.shell.toolbar_visible = true;
+        app.shell.toolbar = vec![shell::MenuItem {
+            title: "Tool".into(),
+            ..Default::default()
+        }];
+        app.mdi.set_viewport(app.shell.central(viewport));
+        app.on_command(&json!({
+            "command": "createForm",
+            "form_id": "f",
+            "mode": "full",
+            "placement": "mdi",
+            "ui_xml": xml,
+        }));
+        app.on_command(&json!({
+            "command": "setFormProperty",
+            "form_id": "f",
+            "property": "position",
+            "value": { "x": 40, "y": 40 }
+        }));
+        let index = app.mdi.index_of(|payload| payload == "f").unwrap();
+        let content = app.mdi.subwindow(index).unwrap().content_rect();
+        let central = app.mdi.viewport();
+        assert_eq!(content.x, central.x + 40.0);
+        assert_eq!(content.y, central.y + 40.0);
+
+        app.on_command(&json!({
+            "command": "setFormProperty",
+            "form_id": "f",
+            "property": "size",
+            "value": { "w": 320, "h": 200 }
+        }));
+        let content = app.mdi.subwindow(index).unwrap().content_rect();
+        assert_eq!(content.x, central.x + 40.0);
+        assert_eq!(content.y, central.y + 40.0);
+        assert_eq!(content.size(), rqt::gui::QSizeF::new(320.0, 200.0));
+    }
+
+    #[test]
+    fn app_shell_parses_menu_toolbar_and_status_properties() {
+        use serde_json::json;
+
+        let mut app = App::new(Params {
+            full: true,
+            main_lua: Some("main.lua".into()),
+            ..Params::default()
+        });
+        app.on_command(&json!({
+            "command": "setAppProperty",
+            "property": "menu",
+            "value": [
+                { "title": "File", "children": [
+                    { "title": "Exit", "action": "exit" }
+                ] }
+            ]
+        }));
+        app.on_command(&json!({
+            "command": "setAppProperty",
+            "property": "toolBar",
+            "value": [
+                { "title": "Refresh", "action": "open_lua",
+                  "lua_file": "test_form_move.lua", "mdi": true,
+                  "icon": "img24:41" }
+            ]
+        }));
+        app.on_command(&json!({
+            "command": "setAppProperty",
+            "property": "statusMessage",
+            "value": { "text": "Ready", "timeout": 1000 }
+        }));
+        assert_eq!(app.shell.menu.len(), 1);
+        assert_eq!(app.shell.toolbar.len(), 1);
+        assert_eq!(app.shell.status_text(now_ms()), Some("Ready"));
+
+        let viewport = QRectF::new(0.0, 0.0, 800.0, 600.0);
+        let central = app.shell.central(viewport);
+        assert!(central.y > viewport.y);
+        assert!(central.height < viewport.height);
+    }
+
+    #[test]
+    fn create_form_clamps_initial_geometry_to_minimum_size() {
+        use serde_json::json;
+
+        let xml = r#"<ui version="4.0"><class>Dialog</class>
+            <widget class="QDialog" name="Dialog">
+              <property name="geometry"><rect><x>0</x><y>0</y><width>120</width><height>80</height></rect></property>
+              <property name="minimumSize"><size><width>300</width><height>220</height></size></property>
+            </widget></ui>"#;
+        let mut app = App::new(Params::default());
+        app.on_command(&json!({
+            "command": "createForm",
+            "form_id": "clamped",
+            "ui_xml": xml,
+            "modal": false
+        }));
+        let index = app
+            .mdi
+            .index_of(|payload| payload == "clamped")
+            .expect("subwindow");
+        assert_eq!(
+            app.mdi.subwindow(index).unwrap().content_rect().size(),
+            rqt::gui::QSizeF::new(300.0, 220.0)
+        );
+        assert_eq!(
+            app.forms["clamped"]
+                .tree
+                .widget(app.forms["clamped"].root)
+                .unwrap()
+                .geometry
+                .size(),
+            rqt::gui::QSizeF::new(300.0, 220.0)
+        );
+    }
+
+    #[test]
+    fn form_position_and_size_keep_the_other_dimension() {
+        use serde_json::json;
+
+        let mut app = App::new(Params::default());
+        app.forms.insert("a".into(), card_form(32.0, 54.0, "One"));
+        let index = app
+            .mdi
+            .add_subwindow("One", "a".into(), rqt::gui::QSizeF::new(300.0, 200.0));
+        let before = app.forms["a"]
+            .tree
+            .widget(app.forms["a"].root)
+            .unwrap()
+            .geometry;
+
+        app.on_command(&json!({
+            "command": "setFormProperty",
+            "form_id": "a",
+            "property": "position",
+            "value": {"x": 200, "y": 150}
+        }));
+        let content = app.mdi.subwindow(index).unwrap().content_rect();
+        assert_eq!((content.x, content.y), (200.0, 150.0));
+        let geometry = app.forms["a"]
+            .tree
+            .widget(app.forms["a"].root)
+            .unwrap()
+            .geometry;
+        assert_eq!((geometry.x, geometry.y), (200.0, 150.0));
+        assert_eq!(
+            (geometry.width, geometry.height),
+            (before.width, before.height)
+        );
+
+        app.on_command(&json!({
+            "command": "setFormProperty",
+            "form_id": "a",
+            "property": "size",
+            "value": {"w": 420, "h": 210}
+        }));
+        let content = app.mdi.subwindow(index).unwrap().content_rect();
+        assert_eq!(
+            (content.x, content.y, content.width, content.height),
+            (200.0, 150.0, 420.0, 210.0)
+        );
+        let geometry = app.forms["a"]
+            .tree
+            .widget(app.forms["a"].root)
+            .unwrap()
+            .geometry;
+        assert_eq!(
+            (geometry.x, geometry.y, geometry.width, geometry.height),
+            (200.0, 150.0, 420.0, 210.0)
+        );
+    }
+
+    #[test]
+    fn png_data_url_is_base64_and_marked_as_png() {
+        assert_eq!(base64_encode(b""), "");
+        assert_eq!(base64_encode(b"f"), "Zg==");
+        assert_eq!(base64_encode(b"fo"), "Zm8=");
+        assert_eq!(base64_encode(b"foo"), "Zm9v");
+        assert_eq!(base64_encode(b"foobar"), "Zm9vYmFy");
+
+        let png = rqt::icons::png_bytes("img24:22").expect("sprite cell");
+        let url = png_data_url(&png);
+        assert!(url.starts_with("data:image/png;base64,iVBOR"), "{url}");
     }
 
     #[test]
@@ -2985,7 +4396,7 @@ mod tests {
             .add_subwindow("Two", "b".into(), rqt::gui::QSizeF::new(300.0, 200.0));
 
         assert_eq!(
-            app.mdi_hit((40.0, 30.0)).map(|(_, hit)| hit),
+            app.mdi_hit((100.0, 40.0)).map(|(_, hit)| hit),
             Some(QMdiSubWindowHit::Title)
         );
         assert_eq!(
@@ -3005,6 +4416,223 @@ mod tests {
         app.close_card("a");
         assert!(!app.forms.contains_key("a"));
         assert_eq!(app.mdi.active_payload(), Some(&"b".to_string()));
+    }
+
+    fn batch_texts(batches: &[gfx::PaintBatch]) -> Vec<String> {
+        batches
+            .iter()
+            .flat_map(|batch| match batch {
+                gfx::PaintBatch::Rects(_) => Vec::new(),
+                gfx::PaintBatch::Text(texts) => {
+                    texts.iter().map(|text| text.text.clone()).collect()
+                }
+            })
+            .collect()
+    }
+
+    fn text_batch_index(batches: &[gfx::PaintBatch], needle: &str) -> Option<usize> {
+        batches.iter().position(|batch| match batch {
+            gfx::PaintBatch::Rects(_) => false,
+            gfx::PaintBatch::Text(texts) => texts.iter().any(|text| text.text == needle),
+        })
+    }
+
+    #[test]
+    fn paint_command_stream_keeps_rect_text_rect_text_order() {
+        use rqt::gui::{QColor, QPainter, QRectF};
+
+        let mut painter = QPainter::new();
+        painter.fill_rect(
+            QRectF::new(0.0, 0.0, 10.0, 10.0),
+            QColor::rgba8(10, 10, 10, 255),
+        );
+        painter.draw_text(
+            QRectF::new(0.0, 0.0, 10.0, 10.0),
+            "first",
+            QColor::rgba8(255, 255, 255, 255),
+        );
+        painter.fill_rect(
+            QRectF::new(0.0, 12.0, 10.0, 10.0),
+            QColor::rgba8(20, 20, 20, 255),
+        );
+        painter.draw_text(
+            QRectF::new(0.0, 12.0, 10.0, 10.0),
+            "second",
+            QColor::rgba8(255, 255, 255, 255),
+        );
+
+        let mut batches = Vec::new();
+        append_paint_commands(painter.commands(), &mut batches);
+
+        assert_eq!(batches.len(), 4);
+        assert!(matches!(batches[0], gfx::PaintBatch::Rects(_)));
+        assert!(matches!(batches[1], gfx::PaintBatch::Text(_)));
+        assert!(matches!(batches[2], gfx::PaintBatch::Rects(_)));
+        assert!(matches!(batches[3], gfx::PaintBatch::Text(_)));
+        assert_eq!(batch_texts(&batches), vec!["first", "second"]);
+    }
+
+    #[test]
+    fn popup_background_is_batched_after_base_text_without_masking() {
+        use form_xml::PropValue;
+
+        let mut app = App::new(Params {
+            full: true,
+            main_lua: Some("main.lua".into()),
+            ..Params::default()
+        });
+        app.shell
+            .set_menu(&PropValue::List(vec![PropValue::Map(vec![
+                ("title".into(), PropValue::Str("File".into())),
+                (
+                    "children".into(),
+                    PropValue::List(vec![PropValue::Map(vec![
+                        ("title".into(), PropValue::Str("Open".into())),
+                        ("action".into(), PropValue::Str("open_lua".into())),
+                    ])]),
+                ),
+            ])]));
+        app.shell.toolbar = vec![shell::MenuItem {
+            title: "ToolbarLabel".into(),
+            ..Default::default()
+        }];
+        app.shell.toolbar_visible = true;
+
+        let viewport = app.floating.viewport();
+        assert!(app.shell.click((25.0, 10.0), viewport).is_none());
+        assert_eq!(app.shell.open_path, Some(vec![0]));
+
+        let batches = app.collect_paint();
+        let toolbar = text_batch_index(&batches, "ToolbarLabel")
+            .expect("toolbar text must not be masked under the popup");
+        let popup = text_batch_index(&batches, "Open").expect("popup item text");
+        assert!(toolbar < popup, "base text must precede popup text");
+
+        // An opaque popup background must be replayed between the toolbar
+        // text and the popup item's own text.
+        let popup_bg = batches
+            .iter()
+            .enumerate()
+            .skip(toolbar + 1)
+            .take(popup.saturating_sub(toolbar + 1))
+            .any(|(_, batch)| match batch {
+                gfx::PaintBatch::Rects(rects) => rects.iter().any(|rect| {
+                    (rect.color[0] - 250.0 / 255.0).abs() < 0.01
+                        && (rect.color[1] - 250.0 / 255.0).abs() < 0.01
+                        && (rect.color[2] - 250.0 / 255.0).abs() < 0.01
+                        && rect.color[3] > 0.99
+                }),
+                gfx::PaintBatch::Text(_) => false,
+            });
+        assert!(
+            popup_bg,
+            "popup background must be painted after the covered toolbar text"
+        );
+    }
+
+    #[test]
+    fn nested_popup_batches_paint_parent_before_child() {
+        use form_xml::PropValue;
+
+        let mut app = App::new(Params {
+            full: true,
+            main_lua: Some("main.lua".into()),
+            ..Params::default()
+        });
+        app.shell
+            .set_menu(&PropValue::List(vec![PropValue::Map(vec![
+                ("title".into(), PropValue::Str("View".into())),
+                (
+                    "children".into(),
+                    PropValue::List(vec![PropValue::Map(vec![
+                        ("title".into(), PropValue::Str("Submenu".into())),
+                        (
+                            "children".into(),
+                            PropValue::List(vec![PropValue::Map(vec![
+                                ("title".into(), PropValue::Str("Nested".into())),
+                                ("action".into(), PropValue::Str("open_lua".into())),
+                            ])]),
+                        ),
+                    ])]),
+                ),
+            ])]));
+        app.shell.open_path = Some(vec![0, 0]);
+
+        let batches = app.collect_paint();
+        let parent = text_batch_index(&batches, "Submenu").expect("parent popup item");
+        let child = text_batch_index(&batches, "Nested").expect("nested popup item");
+        assert!(
+            parent < child,
+            "nested submenu must be painted after its parent level"
+        );
+    }
+
+    #[test]
+    fn mdi_content_is_painted_before_floating_top_level_windows() {
+        let mut app = App::new(Params::default());
+        app.forms
+            .insert("mdi".into(), card_form(32.0, 54.0, "MdiWindow"));
+        app.mdi.add_subwindow(
+            "MdiWindow",
+            "mdi".into(),
+            rqt::gui::QSizeF::new(300.0, 200.0),
+        );
+        app.forms
+            .insert("float".into(), card_form(80.0, 90.0, "FloatingWindow"));
+        app.floating.add_subwindow(
+            "FloatingWindow",
+            "float".into(),
+            rqt::gui::QSizeF::new(300.0, 200.0),
+        );
+
+        let batches = app.collect_paint();
+        let mdi = text_batch_index(&batches, "MdiWindow").expect("mdi title");
+        let floating = text_batch_index(&batches, "FloatingWindow").expect("floating title");
+        assert!(mdi < floating, "top-level layer must follow the MDI layer");
+    }
+
+    #[test]
+    fn application_modal_blocks_mdi_and_shell() {
+        use serde_json::json;
+
+        let xml = r#"<ui version="4.0"><class>Dialog</class>
+            <widget class="QDialog" name="Dialog">
+              <property name="geometry"><rect><x>100</x><y>100</y><width>300</width><height>200</height></rect></property>
+            </widget></ui>"#;
+        let mut app = App::new(Params {
+            full: true,
+            main_lua: Some("main.lua".into()),
+            ..Params::default()
+        });
+        app.on_command(&json!({
+            "command": "createForm",
+            "form_id": "normal",
+            "mode": "full",
+            "placement": "mdi",
+            "ui_xml": xml,
+        }));
+        app.on_command(&json!({
+            "command": "createForm",
+            "form_id": "modal",
+            "mode": "full",
+            "placement": "top-level",
+            "modal": true,
+            "modal_scope": "application",
+            "ui_xml": xml,
+        }));
+        assert!(app.is_application_modal());
+        let index = app.mdi.index_of(|payload| payload == "normal").unwrap();
+        let content = app.mdi.subwindow(index).unwrap().content_rect();
+        app.cursor = (content.x + 10.0, content.y + 10.0);
+        assert_eq!(app.window_hit_modal(), None);
+
+        let index = app.floating.index_of(|payload| payload == "modal").unwrap();
+        let content = app.floating.subwindow(index).unwrap().content_rect();
+        app.cursor = (content.x + 10.0, content.y + 10.0);
+        assert_eq!(
+            app.window_hit_modal().map(|(layer, _, _)| layer),
+            Some(WindowLayer::Floating)
+        );
     }
 
     #[test]
@@ -3027,7 +4655,14 @@ mod tests {
 
     fn add_form(app: &mut App, id: &str, xml: &str) {
         let (tree, root) = rqt::widgets::load_ui(xml).expect("ui");
-        app.forms.insert(id.into(), QtForm { tree, root });
+        app.forms.insert(
+            id.into(),
+            QtForm {
+                tree,
+                root,
+                under_mouse_widget: None,
+            },
+        );
         app.mdi
             .add_subwindow(id, id.into(), rqt::gui::QSizeF::new(300.0, 200.0));
     }

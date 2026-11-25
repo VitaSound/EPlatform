@@ -457,3 +457,28 @@
 <!-- id: scroll/75_policy_as_needed -->
 
 Комментарий:
+
+## grid/76_2x2
+
+<!-- id: grid/76_2x2 -->
+
+Комментарий:
+
+## grid/77_spans
+
+<!-- id: grid/77_spans -->
+
+Комментарий:
+
+## grid/78_nested
+
+<!-- id: grid/78_nested -->
+
+Комментарий:
+
+## grid/79_policies
+
+<!-- id: grid/79_policies -->
+
+Комментарий:
+

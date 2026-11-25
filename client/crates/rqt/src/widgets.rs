@@ -46,11 +46,30 @@ impl QWidgetEvent {
     }
 }
 
+/// Layout flavour, selected by the `.ui` layout class name.
+///
+/// Before 0.12.2 the flavour was inferred from `class.contains('H')`, which
+/// mis-detected `QGridLayout` as a horizontal box. The kind is explicit now,
+/// so new layout engines can be added without touching box layouts.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum QBoxLayoutDirection {
+pub enum QLayoutKind {
     #[default]
-    LeftToRight,
-    TopToBottom,
+    VBox,
+    HBox,
+    Grid,
+    /// `QFormLayout`; laid out as a vertical stack until 0.13 lands.
+    Form,
+}
+
+impl QLayoutKind {
+    pub fn from_class(class: &str) -> Self {
+        match class {
+            "QHBoxLayout" => Self::HBox,
+            "QGridLayout" => Self::Grid,
+            "QFormLayout" => Self::Form,
+            _ => Self::VBox,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -63,23 +82,43 @@ pub struct QSpacerItem {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum QLayoutItem {
-    Widget(QWidgetId),
-    Spacer(QSpacerItem),
-    Layout(Box<QBoxLayout>),
+    Widget {
+        id: QWidgetId,
+        /// Cell from `<item row= column= rowspan= colspan=>`.
+        cell: form_xml::LayoutCell,
+    },
+    Spacer {
+        item: QSpacerItem,
+        cell: form_xml::LayoutCell,
+    },
+    Layout {
+        layout: Box<QLayout>,
+        cell: form_xml::LayoutCell,
+    },
+}
+
+impl QLayoutItem {
+    pub fn cell(&self) -> form_xml::LayoutCell {
+        match self {
+            QLayoutItem::Widget { cell, .. }
+            | QLayoutItem::Spacer { cell, .. }
+            | QLayoutItem::Layout { cell, .. } => *cell,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct QBoxLayout {
-    pub direction: QBoxLayoutDirection,
+pub struct QLayout {
+    pub kind: QLayoutKind,
     pub spacing: f32,
     pub margins: QMargins,
     pub items: Vec<QLayoutItem>,
 }
 
-impl QBoxLayout {
-    pub fn new(direction: QBoxLayoutDirection) -> Self {
+impl QLayout {
+    pub fn new(kind: QLayoutKind) -> Self {
         Self {
-            direction,
+            kind,
             spacing: 6.0,
             margins: QMargins::default(),
             items: Vec::new(),
@@ -87,7 +126,11 @@ impl QBoxLayout {
     }
 
     pub fn is_horizontal(&self) -> bool {
-        self.direction == QBoxLayoutDirection::LeftToRight
+        self.kind == QLayoutKind::HBox
+    }
+
+    pub fn is_grid(&self) -> bool {
+        self.kind == QLayoutKind::Grid
     }
 }
 
@@ -101,7 +144,13 @@ pub struct QWidget {
     pub size_hint: QSizeF,
     pub minimum_size: QSizeF,
     pub maximum_size: QSizeF,
+    /// Explicit `sizePolicy` from `.ui` (horizontal part); `Preferred`
+    /// when the form does not override the class default.
     pub size_policy: QSizePolicy,
+    /// Explicit `sizePolicy` from `.ui` (vertical part).
+    pub size_policy_v: QSizePolicy,
+    /// Whether the form set `sizePolicy` explicitly (overrides class defaults).
+    pub has_size_policy: bool,
     pub font: QFont,
     pub palette: QPalette,
     pub properties: Vec<(String, QVariant)>,
@@ -120,7 +169,7 @@ pub struct QWidget {
     pub icon_size: QSizeF,
     pub explicit_position: Option<QPointF>,
     pub style_sheet: Option<QStyleSheet>,
-    pub layout: Option<QBoxLayout>,
+    pub layout: Option<QLayout>,
     pub table: Option<Box<QTableWidget>>,
     pub list: Option<Box<QListWidget>>,
     pub tree: Option<Box<QTreeWidget>>,
@@ -159,6 +208,8 @@ impl QWidget {
             minimum_size: QSizeF::default(),
             maximum_size: QSizeF::new(f32::MAX, f32::MAX),
             size_policy: QSizePolicy::Preferred,
+            size_policy_v: QSizePolicy::Preferred,
+            has_size_policy: false,
             font: QFont::default(),
             palette: QPalette::fusion(),
             properties: Vec::new(),
@@ -343,6 +394,19 @@ impl QWidgetTree {
             .get(id)
             .map(|widget| widget.font.clone())
             .unwrap_or_default();
+        if name == "icon" {
+            if let Some(spec) = value.as_str() {
+                let icon = crate::icons::pixmap(spec);
+                let disabled = crate::icons::spec_index(spec)
+                    .filter(|(disabled, _)| !disabled)
+                    .and_then(|(_, index)| crate::icons::pixmap(&format!("img24d:{}", index + 1)));
+                if let Some(widget) = self.widgets.get_mut(id) {
+                    widget.icon = icon;
+                    widget.icon_disabled = disabled;
+                }
+                return true;
+            }
+        }
         if name == "checked"
             && matches!(class.as_str(), "QRadioButton" | "QCheckBox")
             && value.as_bool().is_some()
@@ -398,6 +462,29 @@ impl QWidgetTree {
         if name == "maximumSize" {
             if let QVariant::Size(size) = &value {
                 widget.maximum_size = *size;
+            }
+        }
+        if name == "sizePolicy" {
+            if let QVariant::Map(entries) = &value {
+                for (key, value) in entries {
+                    let Some(text) = value.as_str() else {
+                        continue;
+                    };
+                    let Some(policy) = parse_size_policy(text) else {
+                        continue;
+                    };
+                    match key.as_str() {
+                        "hsizetype" => {
+                            widget.size_policy = policy;
+                            widget.has_size_policy = true;
+                        }
+                        "vsizetype" => {
+                            widget.size_policy_v = policy;
+                            widget.has_size_policy = true;
+                        }
+                        _ => {}
+                    }
+                }
             }
         }
         if name == "styleSheet" {
@@ -787,6 +874,18 @@ impl QWidgetTree {
 
     pub fn is_empty(&self) -> bool {
         self.widgets.is_empty()
+    }
+
+    /// Find the topmost widget at the given point (iterating from last to first for z-order)
+    pub fn widget_at_point(&self, point: QPointF) -> Option<QWidgetId> {
+        // Iterate in reverse order (last added = topmost) to find the top widget at this point
+        for i in (0..self.widgets.len()).rev() {
+            let widget = &self.widgets[i];
+            if widget.visible && widget.enabled && widget.geometry.contains(point) {
+                return Some(i);
+            }
+        }
+        None
     }
 
     pub fn set_enabled(&mut self, widget: QWidgetId, enabled: bool) -> bool {
@@ -1333,25 +1432,30 @@ impl QWidgetTree {
         hint
     }
 
-    fn measure_layout(&mut self, layout: &QBoxLayout) -> QSizeF {
+    fn measure_layout(&mut self, layout: &QLayout) -> QSizeF {
         for item in &layout.items {
-            if let QLayoutItem::Widget(widget) = item {
-                self.measure(*widget);
-            } else if let QLayoutItem::Layout(inner) = item {
+            if let QLayoutItem::Widget { id, .. } = item {
+                self.measure(*id);
+            } else if let QLayoutItem::Layout { layout: inner, .. } = item {
                 self.measure_layout(inner);
             }
         }
         self.layout_size_hint(layout)
     }
 
-    fn layout_size_hint(&self, layout: &QBoxLayout) -> QSizeF {
+    fn layout_size_hint(&self, layout: &QLayout) -> QSizeF {
+        if layout.is_grid() {
+            return self.grid_layout_size_hint(layout);
+        }
         let mut main = 0.0f32;
         let mut perp = 0.0f32;
         for item in &layout.items {
             let size = match item {
-                QLayoutItem::Widget(widget) => self.widget_hint(*widget),
-                QLayoutItem::Spacer(spacer) => QSizeF::new(spacer.width, spacer.height),
-                QLayoutItem::Layout(inner) => self.layout_size_hint(inner),
+                QLayoutItem::Widget { id, .. } => self.widget_hint(*id),
+                QLayoutItem::Spacer { item: spacer, .. } => {
+                    QSizeF::new(spacer.width, spacer.height)
+                }
+                QLayoutItem::Layout { layout, .. } => self.layout_size_hint(layout),
             };
             let (item_main, item_perp) = if layout.is_horizontal() {
                 (size.width, size.height)
@@ -1408,12 +1512,23 @@ impl QWidgetTree {
         };
         let layout = node.layout.take();
         if let Some(layout) = &layout {
-            self.layout_box(layout, rect);
+            self.layout_engine(layout, rect);
         }
         self.widgets[widget].layout = layout;
     }
 
-    fn layout_box(&mut self, layout: &QBoxLayout, rect: QRectF) {
+    /// Dispatch a layout to its geometry engine.
+    fn layout_engine(&mut self, layout: &QLayout, rect: QRectF) {
+        match layout.kind {
+            QLayoutKind::Grid => self.layout_grid(layout, rect),
+            // `Form` keeps the pre-0.13 vertical stack behaviour.
+            QLayoutKind::HBox | QLayoutKind::VBox | QLayoutKind::Form => {
+                self.layout_box(layout, rect)
+            }
+        }
+    }
+
+    fn layout_box(&mut self, layout: &QLayout, rect: QRectF) {
         let inner = QRectF::new(
             rect.x + layout.margins.left,
             rect.y + layout.margins.top,
@@ -1459,11 +1574,11 @@ impl QWidgetTree {
             let spacer_expanders: Vec<usize> = expanders
                 .iter()
                 .copied()
-                .filter(|index| matches!(layout.items[*index], QLayoutItem::Spacer(_)))
+                .filter(|index| matches!(layout.items[*index], QLayoutItem::Spacer { .. }))
                 .collect();
             let has_widget_expanders = expanders
                 .iter()
-                .any(|index| !matches!(layout.items[*index], QLayoutItem::Spacer(_)));
+                .any(|index| !matches!(layout.items[*index], QLayoutItem::Spacer { .. }));
             let mut candidates = if expanders.is_empty() {
                 (0..count).collect::<Vec<_>>()
             } else {
@@ -1557,19 +1672,479 @@ impl QWidgetTree {
                 QRectF::new(inner.x, cursor, perp, main)
             };
             match item {
-                QLayoutItem::Widget(widget) => self.layout_widget(*widget, slot),
-                QLayoutItem::Layout(inner_layout) => self.layout_box(inner_layout, slot),
-                QLayoutItem::Spacer(_) => {}
+                QLayoutItem::Widget { id, .. } => self.layout_widget(*id, slot),
+                QLayoutItem::Layout {
+                    layout: inner_layout,
+                    ..
+                } => self.layout_engine(inner_layout, slot),
+                QLayoutItem::Spacer { .. } => {}
             }
             cursor += main + if main > 0.0 { layout.spacing } else { 0.0 } + gap_extra_value;
         }
     }
 
+    // ---- grid geometry (0.12.3/0.12.4) ----------------------------------
+    //
+    // Port of Qt's `QGridLayoutPrivate::setupLayoutData` / `distribute` and
+    // of `qGeomCalc` (qlayoutengine.cpp). Qt computes row/column sizes in
+    // integers and uses fixed point for the proportional passes; the same
+    // arithmetic is reproduced here so geometry matches Qt6 pixel for pixel.
+
+    fn layout_grid(&mut self, layout: &QLayout, rect: QRectF) {
+        let inner = QRectF::new(
+            rect.x + layout.margins.left,
+            rect.y + layout.margins.top,
+            (rect.width - layout.margins.left - layout.margins.right).max(0.0),
+            (rect.height - layout.margins.top - layout.margins.bottom).max(0.0),
+        );
+        let (mut rows, mut columns) = self.grid_tracks(layout);
+        if rows.is_empty() || columns.is_empty() {
+            return;
+        }
+        let row_count = rows.len();
+        let column_count = columns.len();
+        q_geom_calc(
+            &mut rows,
+            0,
+            row_count,
+            inner.y.round() as i32,
+            inner.height.round() as i32,
+        );
+        q_geom_calc(
+            &mut columns,
+            0,
+            column_count,
+            inner.x.round() as i32,
+            inner.width.round() as i32,
+        );
+
+        for item in &layout.items {
+            let cell = item.cell();
+            let row = (cell.row as usize).min(rows.len() - 1);
+            let column = (cell.column as usize).min(columns.len() - 1);
+            let last_row = ((cell.row + cell.row_span - 1) as usize).min(rows.len() - 1);
+            let last_column =
+                ((cell.column + cell.column_span - 1) as usize).min(columns.len() - 1);
+            let x = columns[column].pos;
+            let y = rows[row].pos;
+            let w = columns[last_column].pos + columns[last_column].size - x;
+            let h = rows[last_row].pos + rows[last_row].size - y;
+            let cell_rect = QRectF::new(x as f32, y as f32, w as f32, h as f32);
+            match item {
+                QLayoutItem::Widget { id, .. } => {
+                    // `QWidgetItem::setGeometry`: clamp to the widget's
+                    // maximum size and place it inside the cell.
+                    let rect = self.grid_widget_rect(*id, cell_rect, cell.alignment);
+                    self.layout_widget(*id, rect);
+                }
+                QLayoutItem::Layout {
+                    layout: inner_layout,
+                    ..
+                } => self.layout_engine(inner_layout, cell_rect),
+                QLayoutItem::Spacer { .. } => {}
+            }
+        }
+    }
+
+    /// Widget geometry inside a grid cell, mirroring Qt's
+    /// `QWidgetItem::setGeometry` (maximum-size clamp + item alignment).
+    fn grid_widget_rect(&self, id: QWidgetId, cell: QRectF, alignment: u32) -> QRectF {
+        let metrics = self.widget_metrics(id);
+        let hint = self.widget_hint(id);
+        let mut width = cell.width.min(metrics.max_w as f32);
+        let mut height = cell.height.min(metrics.max_h as f32);
+        let horizontal = alignment & form_xml::ALIGN_HORIZONTAL_MASK;
+        let vertical = alignment & form_xml::ALIGN_VERTICAL_MASK;
+        if horizontal != 0 {
+            width = width.min(hint.width);
+        }
+        if vertical != 0 {
+            height = height.min(hint.height);
+        }
+        // Qt's `visualAlignment()` implies AlignLeft when no horizontal bit is
+        // set; vertically the default is "not AlignTop" → centered.
+        let horizontal = if horizontal == 0 {
+            form_xml::ALIGN_LEFT
+        } else {
+            horizontal
+        };
+        let mut x = cell.x;
+        let mut y = cell.y;
+        if horizontal & form_xml::ALIGN_RIGHT != 0 {
+            x += cell.width - width;
+        } else if horizontal & form_xml::ALIGN_LEFT == 0 {
+            x += ((cell.width - width) / 2.0).floor();
+        }
+        if vertical & form_xml::ALIGN_BOTTOM != 0 {
+            y += cell.height - height;
+        } else if vertical & form_xml::ALIGN_TOP == 0 {
+            y += ((cell.height - height) / 2.0).floor();
+        }
+        QRectF::new(x, y, width, height)
+    }
+
+    fn grid_layout_size_hint(&self, layout: &QLayout) -> QSizeF {
+        let (rows, columns) = self.grid_tracks(layout);
+        let height: i32 = rows.iter().map(|track| track.hint + track.spacing).sum();
+        let width: i32 = columns.iter().map(|track| track.hint + track.spacing).sum();
+        QSizeF::new(
+            (width + layout.margins.left as i32 + layout.margins.right as i32) as f32,
+            (height + layout.margins.top as i32 + layout.margins.bottom as i32) as f32,
+        )
+    }
+
+    /// Rows and columns as Qt's `QLayoutStruct` chains, including the
+    /// contribution of spanning items (`distributeMultiBox`) and the
+    /// per-track spacing used between neighbouring items.
+    fn grid_tracks(&self, layout: &QLayout) -> (Vec<QGridTrack>, Vec<QGridTrack>) {
+        let mut row_count = 0usize;
+        let mut column_count = 0usize;
+        for item in &layout.items {
+            let cell = item.cell();
+            row_count = row_count.max((cell.row + cell.row_span) as usize);
+            column_count = column_count.max((cell.column + cell.column_span) as usize);
+        }
+        if row_count == 0 || column_count == 0 {
+            return (Vec::new(), Vec::new());
+        }
+        let spacing = layout.spacing.round() as i32;
+        let mut rows = vec![QGridTrack::new(spacing); row_count];
+        let mut columns = vec![QGridTrack::new(spacing); column_count];
+        for track in rows.iter_mut().chain(columns.iter_mut()) {
+            track.spacing = 0;
+        }
+
+        let metrics: Vec<QGridItemMetrics> = layout
+            .items
+            .iter()
+            .map(|item| self.grid_item_metrics(item))
+            .collect();
+
+        let mut has_span = false;
+        for (item, metric) in layout.items.iter().zip(&metrics) {
+            let cell = item.cell();
+            let row = cell.row as usize;
+            let column = cell.column as usize;
+            let last_row = (cell.row + cell.row_span - 1) as usize;
+            let last_column = (cell.column + cell.column_span - 1) as usize;
+            if last_row == row {
+                add_grid_track(
+                    &mut rows[row],
+                    metric.min_h,
+                    metric.hint_h,
+                    metric.max_h,
+                    metric.expansive_v,
+                );
+            } else {
+                init_empty_multi_box(&mut rows, row, last_row);
+                has_span = true;
+            }
+            if last_column == column {
+                add_grid_track(
+                    &mut columns[column],
+                    metric.min_w,
+                    metric.hint_w,
+                    metric.max_w,
+                    metric.expansive_h,
+                );
+            } else {
+                init_empty_multi_box(&mut columns, column, last_column);
+                has_span = true;
+            }
+        }
+
+        setup_grid_spacings(layout, &mut rows, &mut columns, spacing);
+
+        if has_span {
+            for (item, metric) in layout.items.iter().zip(&metrics) {
+                let cell = item.cell();
+                if cell.row_span > 1 {
+                    distribute_multi_box(
+                        &mut rows,
+                        cell.row as usize,
+                        (cell.row + cell.row_span - 1) as usize,
+                        metric.min_h,
+                        metric.hint_h,
+                    );
+                }
+                if cell.column_span > 1 {
+                    distribute_multi_box(
+                        &mut columns,
+                        cell.column as usize,
+                        (cell.column + cell.column_span - 1) as usize,
+                        metric.min_w,
+                        metric.hint_w,
+                    );
+                }
+            }
+        }
+
+        (rows, columns)
+    }
+
+    /// Minimum/hint/maximum size of one grid item, following Qt's
+    /// `QWidgetItem`/`QSpacerItem`/`QLayoutItem` contracts.
+    fn grid_item_metrics(&self, item: &QLayoutItem) -> QGridItemMetrics {
+        match item {
+            QLayoutItem::Widget { id, .. } => self.widget_metrics(*id),
+            QLayoutItem::Spacer { item: spacer, .. } => {
+                let hint_w = spacer.width.round() as i32;
+                let hint_h = spacer.height.round() as i32;
+                let expansive_h = spacer.horizontal_policy == QSizePolicy::Expanding;
+                let expansive_v = spacer.vertical_policy == QSizePolicy::Expanding;
+                QGridItemMetrics {
+                    min_w: 0,
+                    min_h: 0,
+                    hint_w,
+                    hint_h,
+                    max_w: if expansive_h { QLAYOUTSIZE_MAX } else { hint_w },
+                    max_h: if expansive_v { QLAYOUTSIZE_MAX } else { hint_h },
+                    expansive_h,
+                    expansive_v,
+                }
+            }
+            QLayoutItem::Layout { layout, .. } => {
+                let hint = self.layout_size_hint(layout);
+                let min = self.layout_minimum_size(layout);
+                let max = self.layout_maximum_size(layout);
+                QGridItemMetrics {
+                    min_w: min.width.round() as i32,
+                    min_h: min.height.round() as i32,
+                    hint_w: hint.width.round() as i32,
+                    hint_h: hint.height.round() as i32,
+                    max_w: max.width.round() as i32,
+                    max_h: max.height.round() as i32,
+                    expansive_h: layout
+                        .items
+                        .iter()
+                        .any(|item| self.grid_item_metrics(item).expansive_h),
+                    expansive_v: layout
+                        .items
+                        .iter()
+                        .any(|item| self.grid_item_metrics(item).expansive_v),
+                }
+            }
+        }
+    }
+
+    fn layout_minimum_size(&self, layout: &QLayout) -> QSizeF {
+        if layout.is_grid() {
+            let (rows, columns) = self.grid_tracks(layout);
+            let height: i32 = rows.iter().map(|track| track.minimum + track.spacing).sum();
+            let width: i32 = columns
+                .iter()
+                .map(|track| track.minimum + track.spacing)
+                .sum();
+            return QSizeF::new(
+                (width + layout.margins.left as i32 + layout.margins.right as i32) as f32,
+                (height + layout.margins.top as i32 + layout.margins.bottom as i32) as f32,
+            );
+        }
+        let mut main = 0.0f32;
+        let mut perp = 0.0f32;
+        for item in &layout.items {
+            let metric = self.grid_item_metrics(item);
+            let (item_min_w, item_min_h) = (metric.min_w as f32, metric.min_h as f32);
+            let (item_main, item_perp) = if layout.is_horizontal() {
+                (item_min_w, item_min_h)
+            } else {
+                (item_min_h, item_min_w)
+            };
+            main += item_main;
+            perp = perp.max(item_perp);
+        }
+        if layout.items.len() > 1 {
+            main += layout.spacing * (layout.items.len() as f32 - 1.0);
+        }
+        if layout.is_horizontal() {
+            QSizeF::new(
+                main + layout.margins.left + layout.margins.right,
+                perp + layout.margins.top + layout.margins.bottom,
+            )
+        } else {
+            QSizeF::new(
+                perp + layout.margins.left + layout.margins.right,
+                main + layout.margins.top + layout.margins.bottom,
+            )
+        }
+    }
+
+    /// `QLayout::maximumSize()` per axis, needed when a sub-layout sits in a
+    /// grid cell: a fixed-height button row caps the cell height at its hint.
+    fn layout_maximum_size(&self, layout: &QLayout) -> QSizeF {
+        let clamp = |value: i64| value.min(QLAYOUTSIZE_MAX as i64) as i32;
+        if layout.is_grid() {
+            let (rows, columns) = self.grid_tracks(layout);
+            let height = clamp(
+                rows.iter()
+                    .map(|track| track.maximum as i64 + track.spacing as i64)
+                    .sum(),
+            );
+            let width = clamp(
+                columns
+                    .iter()
+                    .map(|track| track.maximum as i64 + track.spacing as i64)
+                    .sum(),
+            );
+            return QSizeF::new(
+                (width + layout.margins.left as i32 + layout.margins.right as i32) as f32,
+                (height + layout.margins.top as i32 + layout.margins.bottom as i32) as f32,
+            );
+        }
+        // `QBoxLayoutPrivate::setupGeom`: main axis maxima are summed, the
+        // perpendicular maximum folds item maxima through `qMaxExpCalc`
+        // (a fixed-height item caps the whole box height).
+        let horizontal = layout.is_horizontal();
+        let mut main: i64 = 0;
+        let mut perp = QLAYOUTSIZE_MAX;
+        let mut perp_expansive = false;
+        let mut previous = false;
+        for item in &layout.items {
+            let metric = self.grid_item_metrics(item);
+            let (item_main, item_perp, expansive_perp) = if horizontal {
+                (metric.max_w as i64, metric.max_h, metric.expansive_v)
+            } else {
+                (metric.max_h as i64, metric.max_w, metric.expansive_h)
+            };
+            if previous {
+                main += layout.spacing.round() as i64;
+            }
+            main += item_main;
+            let mut empty = true;
+            q_max_exp_calc(
+                &mut perp,
+                &mut perp_expansive,
+                &mut empty,
+                item_perp,
+                expansive_perp,
+                false,
+            );
+            previous = true;
+        }
+        let main = clamp(main);
+        let perp = clamp(perp as i64);
+        if layout.is_horizontal() {
+            QSizeF::new(
+                (main + layout.margins.left as i32 + layout.margins.right as i32) as f32,
+                (perp + layout.margins.top as i32 + layout.margins.bottom as i32) as f32,
+            )
+        } else {
+            QSizeF::new(
+                (perp + layout.margins.left as i32 + layout.margins.right as i32) as f32,
+                (main + layout.margins.top as i32 + layout.margins.bottom as i32) as f32,
+            )
+        }
+    }
+
+    fn widget_metrics(&self, id: QWidgetId) -> QGridItemMetrics {
+        let Some(node) = self.widgets.get(id) else {
+            return QGridItemMetrics::default();
+        };
+        let hint = self.widget_hint(id);
+        let hint_w = hint.width.round() as i32;
+        let hint_h = hint.height.round() as i32;
+        let (minimum_hint_w, minimum_hint_h) = self.widget_minimum_hint(id);
+        let policy_h = self.widget_axis_policy(id, true);
+        let policy_v = self.widget_axis_policy(id, false);
+        QGridItemMetrics {
+            min_w: grid_smart_min(
+                policy_h,
+                hint_w,
+                minimum_hint_w,
+                node.minimum_size.width.round() as i32,
+                node.maximum_size.width.round() as i32,
+            ),
+            min_h: grid_smart_min(
+                policy_v,
+                hint_h,
+                minimum_hint_h,
+                node.minimum_size.height.round() as i32,
+                node.maximum_size.height.round() as i32,
+            ),
+            hint_w,
+            hint_h,
+            max_w: grid_smart_max(
+                policy_h,
+                hint_w,
+                node.minimum_size.width.round() as i32,
+                node.maximum_size.width.round() as i32,
+            ),
+            max_h: grid_smart_max(
+                policy_v,
+                hint_h,
+                node.minimum_size.height.round() as i32,
+                node.maximum_size.height.round() as i32,
+            ),
+            expansive_h: policy_expands(policy_h),
+            expansive_v: policy_expands(policy_v),
+        }
+    }
+
+    /// Qt class defaults for `QWidget::sizePolicy`; an explicit
+    /// `<property name="sizePolicy">` in the form always wins.
+    fn widget_axis_policy(&self, id: QWidgetId, horizontal: bool) -> QSizePolicy {
+        let Some(node) = self.widgets.get(id) else {
+            return QSizePolicy::Preferred;
+        };
+        if node.has_size_policy {
+            return if horizontal {
+                node.size_policy
+            } else {
+                node.size_policy_v
+            };
+        }
+        match node.class_name.as_str() {
+            "QLabel" | "QGroupBox" | "QDialog" | "QWidget" | "QMdiSubWindow" => {
+                QSizePolicy::Preferred
+            }
+            "QLineEdit" => {
+                if horizontal {
+                    QSizePolicy::Expanding
+                } else {
+                    QSizePolicy::Fixed
+                }
+            }
+            "QComboBox" => {
+                if horizontal {
+                    QSizePolicy::Preferred
+                } else {
+                    QSizePolicy::Fixed
+                }
+            }
+            "QTableWidget" | "QListWidget" | "QTreeWidget" => QSizePolicy::Expanding,
+            "QPushButton" | "QCheckBox" | "QRadioButton" => {
+                if horizontal {
+                    QSizePolicy::Minimum
+                } else {
+                    QSizePolicy::Fixed
+                }
+            }
+            "QToolButton" => QSizePolicy::Fixed,
+            _ => QSizePolicy::Preferred,
+        }
+    }
+
+    /// Approximation of `minimumSizeHint()` for the widget classes we draw;
+    /// used by the shrinking branch of the Qt geometry engine.
+    fn widget_minimum_hint(&self, id: QWidgetId) -> (i32, i32) {
+        let hint = self.widget_hint(id);
+        let fallback = (hint.width.round() as i32, hint.height.round() as i32);
+        let Some(node) = self.widgets.get(id) else {
+            return fallback;
+        };
+        match node.class_name.as_str() {
+            "QLineEdit" => (32, fallback.1.max(24)),
+            "QTableWidget" | "QListWidget" | "QTreeWidget" => (70, 70),
+            "QGroupBox" => (73, fallback.1.max(35)),
+            _ => fallback,
+        }
+    }
+
     fn item_hint(&self, item: &QLayoutItem) -> QSizeF {
         match item {
-            QLayoutItem::Widget(widget) => self.widget_hint(*widget),
-            QLayoutItem::Spacer(spacer) => QSizeF::new(spacer.width, spacer.height),
-            QLayoutItem::Layout(layout) => self.layout_size_hint(layout),
+            QLayoutItem::Widget { id, .. } => self.widget_hint(*id),
+            QLayoutItem::Spacer { item: spacer, .. } => QSizeF::new(spacer.width, spacer.height),
+            QLayoutItem::Layout { layout, .. } => self.layout_size_hint(layout),
         }
     }
 
@@ -1588,10 +2163,10 @@ impl QWidgetTree {
     }
 
     fn item_min_size(&self, item: &QLayoutItem, horizontal: bool) -> f32 {
-        let QLayoutItem::Widget(widget) = item else {
+        let QLayoutItem::Widget { id, .. } = item else {
             return 0.0;
         };
-        let Some(widget) = self.widgets.get(*widget) else {
+        let Some(widget) = self.widgets.get(*id) else {
             return 0.0;
         };
         if horizontal {
@@ -1603,15 +2178,15 @@ impl QWidgetTree {
 
     fn item_expands(&self, item: &QLayoutItem, horizontal: bool) -> bool {
         match item {
-            QLayoutItem::Widget(widget) => self.widget_expands(*widget, horizontal),
-            QLayoutItem::Spacer(spacer) => {
+            QLayoutItem::Widget { id, .. } => self.widget_expands(*id, horizontal),
+            QLayoutItem::Spacer { item: spacer, .. } => {
                 if horizontal {
                     spacer.horizontal_policy == QSizePolicy::Expanding
                 } else {
                     spacer.vertical_policy == QSizePolicy::Expanding
                 }
             }
-            QLayoutItem::Layout(layout) => layout
+            QLayoutItem::Layout { layout, .. } => layout
                 .items
                 .iter()
                 .any(|item| self.item_expands(item, horizontal)),
@@ -1619,10 +2194,10 @@ impl QWidgetTree {
     }
 
     fn item_can_grow(&self, item: &QLayoutItem, horizontal: bool) -> bool {
-        let QLayoutItem::Widget(widget) = item else {
+        let QLayoutItem::Widget { id, .. } = item else {
             return false;
         };
-        let Some(widget) = self.widgets.get(*widget) else {
+        let Some(widget) = self.widgets.get(*id) else {
             return false;
         };
         if !matches!(
@@ -1651,13 +2226,528 @@ impl QWidgetTree {
                 || widget.class_name == "QListWidget"
                 || widget.class_name == "QTreeWidget"
         } else {
-            widget.size_policy == QSizePolicy::Expanding
-                || widget.size_policy == QSizePolicy::MinimumExpanding
+            widget.size_policy_v == QSizePolicy::Expanding
+                || widget.size_policy_v == QSizePolicy::MinimumExpanding
                 || widget.class_name == "QTableWidget"
                 || widget.class_name == "QListWidget"
                 || widget.class_name == "QTreeWidget"
         }
     }
+}
+
+/// Largest track size, same value as Qt's `QLAYOUTSIZE_MAX`.
+const QLAYOUTSIZE_MAX: i32 = 16_777_215;
+
+/// One row or column of a grid layout: a port of Qt's `QLayoutStruct`.
+#[derive(Clone, Copy, Debug)]
+struct QGridTrack {
+    minimum: i32,
+    hint: i32,
+    maximum: i32,
+    spacing: i32,
+    expansive: bool,
+    empty: bool,
+    done: bool,
+    pos: i32,
+    size: i32,
+}
+
+impl QGridTrack {
+    fn new(spacing: i32) -> Self {
+        Self {
+            minimum: 0,
+            hint: 0,
+            maximum: 0,
+            spacing,
+            expansive: false,
+            empty: true,
+            done: false,
+            pos: 0,
+            size: 0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct QGridItemMetrics {
+    min_w: i32,
+    min_h: i32,
+    hint_w: i32,
+    hint_h: i32,
+    max_w: i32,
+    max_h: i32,
+    expansive_h: bool,
+    expansive_v: bool,
+}
+
+fn policy_grows(policy: QSizePolicy) -> bool {
+    !matches!(policy, QSizePolicy::Fixed | QSizePolicy::Maximum)
+}
+
+fn policy_shrinks(policy: QSizePolicy) -> bool {
+    matches!(
+        policy,
+        QSizePolicy::Maximum
+            | QSizePolicy::Preferred
+            | QSizePolicy::Expanding
+            | QSizePolicy::Ignored
+    )
+}
+
+fn policy_expands(policy: QSizePolicy) -> bool {
+    matches!(
+        policy,
+        QSizePolicy::Expanding | QSizePolicy::MinimumExpanding
+    )
+}
+
+/// `qSmartMinSize()` for one axis.
+fn grid_smart_min(
+    policy: QSizePolicy,
+    hint: i32,
+    minimum_hint: i32,
+    explicit_minimum: i32,
+    maximum: i32,
+) -> i32 {
+    if policy == QSizePolicy::Ignored {
+        return 0;
+    }
+    let mut size = if policy_shrinks(policy) {
+        minimum_hint
+    } else {
+        hint.max(minimum_hint)
+    };
+    if maximum > 0 && maximum < QLAYOUTSIZE_MAX {
+        size = size.min(maximum);
+    }
+    if explicit_minimum > 0 {
+        size = explicit_minimum;
+    }
+    size.max(0)
+}
+
+/// `qSmartMaxSize()` for one axis.
+fn grid_smart_max(policy: QSizePolicy, hint: i32, explicit_minimum: i32, maximum: i32) -> i32 {
+    let mut size = if maximum >= QLAYOUTSIZE_MAX {
+        QLAYOUTSIZE_MAX
+    } else {
+        maximum
+    };
+    if size == QLAYOUTSIZE_MAX && !policy_grows(policy) {
+        size = hint.max(explicit_minimum);
+    }
+    if size == 0 {
+        size = hint.max(explicit_minimum);
+    }
+    size
+}
+
+/// `qMaxExpCalc()`: merge one box into the track's maximum size and flags.
+fn add_grid_track(track: &mut QGridTrack, minimum: i32, hint: i32, maximum: i32, expansive: bool) {
+    track.hint = track.hint.max(hint);
+    track.minimum = track.minimum.max(minimum);
+    q_max_exp_calc(
+        &mut track.maximum,
+        &mut track.expansive,
+        &mut track.empty,
+        maximum,
+        expansive,
+        false,
+    );
+}
+
+/// `qMaxExpCalc()`: fold one box maximum into the running maximum/flags.
+fn q_max_exp_calc(
+    maximum: &mut i32,
+    expansive: &mut bool,
+    empty: &mut bool,
+    box_maximum: i32,
+    box_expansive: bool,
+    box_empty: bool,
+) {
+    if *expansive {
+        if box_expansive {
+            *maximum = (*maximum).max(box_maximum);
+        }
+    } else if box_expansive || (*empty && (!box_empty || *maximum == 0)) {
+        *maximum = box_maximum;
+    } else if *empty == box_empty {
+        *maximum = (*maximum).min(box_maximum);
+    }
+    *expansive |= box_expansive;
+    *empty &= box_empty;
+}
+
+fn init_empty_multi_box(chain: &mut [QGridTrack], start: usize, end: usize) {
+    for track in &mut chain[start..=end] {
+        if track.empty && track.maximum == 0 {
+            track.maximum = QLAYOUTSIZE_MAX;
+        }
+        track.empty = false;
+    }
+}
+
+/// `distributeMultiBox()`: make the spanned rows/columns fit one item.
+#[allow(clippy::needless_range_loop)]
+fn distribute_multi_box(
+    chain: &mut [QGridTrack],
+    start: usize,
+    end: usize,
+    min_size: i32,
+    hint: i32,
+) {
+    let mut minimum_sum = 0;
+    let mut hint_sum = 0;
+    let mut maximum_sum = 0;
+    for index in start..=end {
+        let track = &chain[index];
+        minimum_sum += track.minimum;
+        hint_sum += track.hint;
+        maximum_sum += track.maximum;
+        if index != end {
+            minimum_sum += track.spacing;
+            hint_sum += track.spacing;
+            maximum_sum += track.spacing;
+        }
+    }
+
+    if maximum_sum < min_size {
+        // Not even the maximum sizes fit: qGeomCalc() puts the extra space
+        // between the tracks, recover it and grow the minimum sizes.
+        q_geom_calc(chain, start, end - start + 1, 0, min_size);
+        let mut pos = 0;
+        for index in start..=end {
+            let next = if index == end {
+                min_size
+            } else {
+                chain[index + 1].pos
+            };
+            let mut real_size = next - pos;
+            if index != end {
+                real_size -= chain[index].spacing;
+            }
+            let track = &mut chain[index];
+            if track.minimum < real_size {
+                track.minimum = real_size;
+            }
+            if track.maximum < track.minimum {
+                track.maximum = track.minimum;
+            }
+            pos = next;
+        }
+    } else if minimum_sum < min_size {
+        q_geom_calc(chain, start, end - start + 1, 0, min_size);
+        for index in start..=end {
+            let track = &mut chain[index];
+            if track.minimum < track.size {
+                track.minimum = track.size;
+            }
+        }
+    }
+
+    if hint_sum < hint {
+        q_geom_calc(chain, start, end - start + 1, 0, hint);
+        for index in start..=end {
+            let track = &mut chain[index];
+            if track.hint < track.size {
+                track.hint = track.size;
+            }
+        }
+    }
+}
+
+/// Per-track spacing: Qt only inserts a gap between two *different* items.
+fn setup_grid_spacings(
+    layout: &QLayout,
+    rows: &mut [QGridTrack],
+    columns: &mut [QGridTrack],
+    spacing: i32,
+) {
+    if spacing <= 0 || rows.is_empty() || columns.is_empty() {
+        return;
+    }
+    let row_count = rows.len();
+    let column_count = columns.len();
+    let mut grid: Vec<Option<usize>> = vec![None; row_count * column_count];
+    for (index, item) in layout.items.iter().enumerate() {
+        let cell = item.cell();
+        for row in cell.row..cell.row + cell.row_span {
+            for column in cell.column..cell.column + cell.column_span {
+                let (row, column) = (row as usize, column as usize);
+                if row < row_count && column < column_count {
+                    grid[row * column_count + column] = Some(index);
+                }
+            }
+        }
+    }
+
+    // Horizontal spacing: walk every row, gap belongs to the left track.
+    for row in 0..row_count {
+        let mut previous: Option<(usize, usize)> = None;
+        for column in 0..column_count {
+            if columns[column].empty {
+                continue;
+            }
+            let owner = grid[row * column_count + column];
+            if let Some((previous_column, previous_owner)) = previous {
+                if owner != Some(previous_owner) {
+                    let track = &mut columns[previous_column];
+                    track.spacing = track.spacing.max(spacing);
+                }
+            }
+            previous = owner.map(|owner| (column, owner));
+        }
+    }
+
+    // Vertical spacing: walk every column, gap belongs to the upper track.
+    for column in 0..column_count {
+        let mut previous: Option<(usize, usize)> = None;
+        for row in 0..row_count {
+            if rows[row].empty {
+                continue;
+            }
+            let owner = grid[row * column_count + column];
+            if let Some((previous_row, previous_owner)) = previous {
+                if owner != Some(previous_owner) {
+                    let track = &mut rows[previous_row];
+                    track.spacing = track.spacing.max(spacing);
+                }
+            }
+            previous = owner.map(|owner| (row, owner));
+        }
+    }
+}
+
+fn to_fixed(value: i32) -> i64 {
+    value as i64 * 256
+}
+
+fn f_round(value: i64) -> i32 {
+    if value % 256 < 128 {
+        (value / 256) as i32
+    } else {
+        (1 + value / 256) as i32
+    }
+}
+
+/// Port of Qt's `qGeomCalc()` (qlayoutengine.cpp) for a stretchless chain.
+#[allow(clippy::needless_range_loop)]
+fn q_geom_calc(chain: &mut [QGridTrack], start: usize, count: usize, pos: i32, space: i32) {
+    if count == 0 {
+        return;
+    }
+    let mut c_hint = 0;
+    let mut c_min = 0;
+    let mut sum_spacing = 0;
+    let mut expanding_count = 0i32;
+    let mut all_empty_nonstretch = true;
+    let mut pending_spacing: Option<i32> = None;
+    let mut spacer_count = 0i32;
+
+    for index in start..start + count {
+        let track = &mut chain[index];
+        track.done = false;
+        c_hint += track.hint;
+        c_min += track.minimum;
+        if !track.empty {
+            if let Some(spacing) = pending_spacing {
+                sum_spacing += spacing;
+                spacer_count += 1;
+            }
+            pending_spacing = Some(track.spacing);
+        }
+        if track.expansive {
+            expanding_count += 1;
+        }
+        all_empty_nonstretch = all_empty_nonstretch && track.empty && !track.expansive;
+    }
+
+    let mut extraspace = 0;
+
+    if space < c_min + sum_spacing {
+        // Less space than the minimum size: take from the biggest first.
+        let mut minimums: Vec<i32> = (start..start + count)
+            .map(|index| chain[index].minimum)
+            .collect();
+        minimums.sort_unstable();
+        let space_left = space - sum_spacing;
+        let mut sum = 0;
+        let mut index = 0i64;
+        let mut space_used = 0;
+        let mut current = 0;
+        while (index as usize) < count && space_used < space_left {
+            current = minimums[index as usize];
+            space_used = sum + current * (count - index as usize) as i32;
+            sum += current;
+            index += 1;
+        }
+        // Qt keeps a signed index here: when `space_left <= 0` the loop above
+        // never runs and `--idx` leaves -1, which yields `items = count + 1`.
+        index -= 1;
+        let deficit = space_used - space_left;
+        let items = count as i64 - index;
+        let items = items.max(1) as i32;
+        let deficit_per_item = deficit / items;
+        let remainder = deficit % items;
+        let maxval = current - deficit_per_item;
+        let mut rest = 0;
+        for track in &mut chain[start..start + count] {
+            let mut maxv = maxval;
+            rest += remainder;
+            if rest >= items {
+                maxv -= 1;
+                rest -= items;
+            }
+            track.size = track.minimum.min(maxv);
+            track.done = true;
+        }
+    } else if space < c_hint + sum_spacing {
+        // Less than the hinted size but more than the minimum: take from
+        // each track equally, giving up on tracks that hit their minimum.
+        let mut remaining = count as i32;
+        let space_left = space - sum_spacing;
+        let mut overdraft = c_hint - space_left;
+
+        for track in &mut chain[start..start + count] {
+            if !track.done && track.minimum >= track.hint {
+                track.size = track.hint;
+                track.done = true;
+                remaining -= 1;
+            }
+        }
+        let mut finished = remaining == 0;
+        while !finished {
+            finished = true;
+            let fp_over = to_fixed(overdraft);
+            let mut fp_w: i64 = 0;
+            for index in start..start + count {
+                if chain[index].done {
+                    continue;
+                }
+                fp_w += fp_over / remaining as i64;
+                let width = f_round(fp_w);
+                chain[index].size = chain[index].hint - width;
+                fp_w -= to_fixed(width);
+                if chain[index].size < chain[index].minimum {
+                    let track = &mut chain[index];
+                    track.done = true;
+                    track.size = track.minimum;
+                    finished = false;
+                    overdraft -= track.hint - track.minimum;
+                    remaining -= 1;
+                    break;
+                }
+            }
+        }
+    } else {
+        // Extra space: give it to expanders, otherwise split it evenly.
+        let mut remaining = count as i32;
+        let mut space_left = space - sum_spacing;
+        for index in start..start + count {
+            let track = &mut chain[index];
+            if !track.done
+                && (track.maximum <= track.hint
+                    || (!all_empty_nonstretch && track.empty && !track.expansive))
+            {
+                track.size = track.hint;
+                track.done = true;
+                space_left -= track.size;
+                if track.expansive {
+                    expanding_count -= 1;
+                }
+                remaining -= 1;
+            }
+        }
+        extraspace = space_left;
+
+        let mut surplus;
+        let mut deficit;
+        loop {
+            surplus = 0;
+            deficit = 0;
+            let fp_space = to_fixed(space_left);
+            let mut fp_w: i64 = 0;
+            for index in start..start + count {
+                if chain[index].done {
+                    continue;
+                }
+                extraspace = 0;
+                if expanding_count > 0 {
+                    let weight = if chain[index].expansive { 1 } else { 0 };
+                    fp_w += (fp_space * weight) / expanding_count as i64;
+                } else {
+                    fp_w += fp_space / remaining as i64;
+                }
+                let width = f_round(fp_w);
+                chain[index].size = width;
+                fp_w -= to_fixed(width);
+                if width < chain[index].hint {
+                    deficit += chain[index].hint - width;
+                } else if width > chain[index].maximum {
+                    surplus += width - chain[index].maximum;
+                }
+            }
+            if deficit > 0 && surplus <= deficit {
+                for index in start..start + count {
+                    let track = &mut chain[index];
+                    if !track.done && track.size < track.hint {
+                        track.size = track.hint;
+                        track.done = true;
+                        space_left -= track.hint;
+                        if track.expansive {
+                            expanding_count -= 1;
+                        }
+                        remaining -= 1;
+                    }
+                }
+            }
+            if surplus > 0 && surplus >= deficit {
+                for index in start..start + count {
+                    let track = &mut chain[index];
+                    if !track.done && track.size > track.maximum {
+                        track.size = track.maximum;
+                        track.done = true;
+                        space_left -= track.maximum;
+                        if track.expansive {
+                            expanding_count -= 1;
+                        }
+                        remaining -= 1;
+                    }
+                }
+            }
+            if remaining <= 0 || surplus == deficit {
+                break;
+            }
+        }
+        if remaining == 0 {
+            extraspace = space_left;
+        }
+    }
+
+    // Remaining space goes to the spacers, counting both ends of the chain.
+    let extra = extraspace / (spacer_count + 2);
+    let mut cursor = pos + extra;
+    for track in &mut chain[start..start + count] {
+        track.pos = cursor;
+        cursor += track.size;
+        if !track.empty {
+            cursor += track.spacing + extra;
+        }
+    }
+}
+
+fn parse_size_policy(name: &str) -> Option<QSizePolicy> {
+    let tail = name.rsplit("::").next().unwrap_or(name);
+    Some(match tail {
+        "Fixed" => QSizePolicy::Fixed,
+        "Minimum" => QSizePolicy::Minimum,
+        "Maximum" => QSizePolicy::Maximum,
+        "Preferred" => QSizePolicy::Preferred,
+        "Expanding" => QSizePolicy::Expanding,
+        "MinimumExpanding" => QSizePolicy::MinimumExpanding,
+        "Ignored" => QSizePolicy::Ignored,
+        _ => return None,
+    })
 }
 
 fn parse_scroll_policy(value: &QVariant) -> Option<QScrollBarPolicy> {
@@ -1936,6 +3026,9 @@ fn load_widget(
 }
 
 fn load_pixmap(path: &str) -> Option<QPixmap> {
+    if let Some(pixmap) = crate::icons::pixmap(path) {
+        return Some(pixmap);
+    }
     if path.starts_with(":/") || path.starts_with("data:") || path.is_empty() {
         return None;
     }
@@ -1948,12 +3041,8 @@ fn load_layout(
     spec: &form_xml::Layout,
     parent: QWidgetId,
     is_root: bool,
-) -> QBoxLayout {
-    let direction = if spec.class.contains('H') {
-        QBoxLayoutDirection::LeftToRight
-    } else {
-        QBoxLayoutDirection::TopToBottom
-    };
+) -> QLayout {
+    let kind = QLayoutKind::from_class(&spec.class);
     let margins = match spec.margins {
         Some((left, top, right, bottom)) => {
             QMargins::new(left as f32, top as f32, right as f32, bottom as f32)
@@ -1961,38 +3050,43 @@ fn load_layout(
         None if is_root => QMargins::uniform(11.0),
         None => QMargins::default(),
     };
-    let mut layout = QBoxLayout {
-        direction,
+    let mut layout = QLayout {
+        kind,
         spacing: spec.spacing.map(|value| value as f32).unwrap_or(6.0),
         margins,
         items: Vec::new(),
     };
+
     for item in &spec.items {
         match item {
-            form_xml::LayoutItem::Widget(widget) => {
+            form_xml::LayoutItem::Widget(widget, cell) => {
                 let id = load_widget(tree, widget, Some(parent), false, false);
-                layout.items.push(QLayoutItem::Widget(id));
+                layout.items.push(QLayoutItem::Widget { id, cell: *cell });
             }
-            form_xml::LayoutItem::Layout(inner) => {
-                layout.items.push(QLayoutItem::Layout(Box::new(load_layout(
-                    tree, inner, parent, false,
-                ))));
+            form_xml::LayoutItem::Layout(inner, cell) => {
+                layout.items.push(QLayoutItem::Layout {
+                    layout: Box::new(load_layout(tree, inner, parent, false)),
+                    cell: *cell,
+                });
             }
-            form_xml::LayoutItem::Spacer(spacer) => {
-                layout.items.push(QLayoutItem::Spacer(QSpacerItem {
-                    width: spacer.hint.0 as f32,
-                    height: spacer.hint.1 as f32,
-                    horizontal_policy: if spacer.horizontal {
-                        QSizePolicy::Expanding
-                    } else {
-                        QSizePolicy::Fixed
+            form_xml::LayoutItem::Spacer(spacer, cell) => {
+                layout.items.push(QLayoutItem::Spacer {
+                    item: QSpacerItem {
+                        width: spacer.hint.0 as f32,
+                        height: spacer.hint.1 as f32,
+                        horizontal_policy: if spacer.horizontal {
+                            QSizePolicy::Expanding
+                        } else {
+                            QSizePolicy::Fixed
+                        },
+                        vertical_policy: if spacer.horizontal {
+                            QSizePolicy::Fixed
+                        } else {
+                            QSizePolicy::Expanding
+                        },
                     },
-                    vertical_policy: if spacer.horizontal {
-                        QSizePolicy::Fixed
-                    } else {
-                        QSizePolicy::Expanding
-                    },
-                }));
+                    cell: *cell,
+                });
             }
         }
     }
@@ -2002,6 +3096,77 @@ fn load_layout(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const GRID_2X2: &str = include_str!("../tests/fixtures/grid_2x2.ui");
+    const GRID_SPANS: &str = include_str!("../tests/fixtures/grid_spans.ui");
+    const GRID_NESTED: &str = include_str!("../tests/fixtures/grid_nested.ui");
+    const GRID_POLICIES: &str = include_str!("../tests/fixtures/grid_policies.ui");
+    const QT6_GRID_2X2: &str = include_str!("../tests/fixtures/qt6_grid_2x2.json");
+    const QT6_GRID_SPANS: &str = include_str!("../tests/fixtures/qt6_grid_spans.json");
+    const QT6_GRID_NESTED: &str = include_str!("../tests/fixtures/qt6_grid_nested.json");
+    const QT6_GRID_POLICIES: &str = include_str!("../tests/fixtures/qt6_grid_policies.json");
+
+    /// Compare every named widget against the Qt6 offscreen reference.
+    fn assert_geometry_matches_qt6(ui: &str, reference: &str, tolerance: f32) {
+        let (tree, _) = load_ui(ui).expect("loads ui");
+        let reference: serde_json::Value = serde_json::from_str(reference).expect("reference json");
+        let widgets = reference["widgets"].as_array().expect("widgets array");
+        let mut failures = Vec::new();
+        for expected in widgets {
+            let name = expected["name"].as_str().expect("name");
+            if name.starts_with("qt_") {
+                // Internal Qt children of scroll areas (viewports, bars).
+                continue;
+            }
+            let Some(id) = tree.find_widget(name) else {
+                failures.push(format!("{name}: missing widget"));
+                continue;
+            };
+            let actual = tree.widget(id).unwrap();
+            let class = expected["class"].as_str().expect("class");
+            if actual.class_name != class {
+                failures.push(format!(
+                    "{name}.class: expected {class}, got {}",
+                    actual.class_name
+                ));
+                continue;
+            }
+            for (key, actual) in [
+                ("x", actual.geometry.x),
+                ("y", actual.geometry.y),
+                ("w", actual.geometry.width),
+                ("h", actual.geometry.height),
+            ] {
+                let expected = expected[key]
+                    .as_f64()
+                    .unwrap_or_else(|| panic!("{key} missing"));
+                if (actual - expected as f32).abs() > tolerance {
+                    failures.push(format!("{name}.{key}: expected {expected}, got {actual}"));
+                }
+            }
+        }
+        assert!(failures.is_empty(), "\n{}", failures.join("\n"));
+    }
+
+    #[test]
+    fn grid_2x2_geometry_matches_qt6_offscreen() {
+        assert_geometry_matches_qt6(GRID_2X2, QT6_GRID_2X2, 1.0);
+    }
+
+    #[test]
+    fn grid_spans_geometry_matches_qt6_offscreen() {
+        assert_geometry_matches_qt6(GRID_SPANS, QT6_GRID_SPANS, 1.0);
+    }
+
+    #[test]
+    fn grid_nested_geometry_matches_qt6_offscreen() {
+        assert_geometry_matches_qt6(GRID_NESTED, QT6_GRID_NESTED, 1.0);
+    }
+
+    #[test]
+    fn grid_policies_geometry_matches_qt6_offscreen() {
+        assert_geometry_matches_qt6(GRID_POLICIES, QT6_GRID_POLICIES, 1.0);
+    }
 
     const FIXTURE: &str = include_str!("../../form-xml/tests/fixtures/test_dialog01.ui");
     const DIALOG02: &str = include_str!("../../../../server/priv/qt_forms/test_dialog02.ui");
@@ -2093,6 +3258,33 @@ mod tests {
             }
         }
         assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
+    fn grid_with_spacers_in_tight_rect_does_not_panic() {
+        // Only spacers: minimum sizes are 0, so a rect that is smaller than
+        // the spacings drives `qGeomCalc` into its shrinking branch with a
+        // non-positive `space_left` (a signed index in Qt, guarded here).
+        const ONLY_SPACERS: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0"><class>Dialog</class>
+ <widget class="QDialog" name="Dialog">
+  <property name="geometry"><rect><x>0</x><y>0</y><width>12</width><height>8</height></rect></property>
+  <layout class="QGridLayout" name="grid">
+   <item row="0" column="0"><spacer name="s1">
+    <property name="orientation"><enum>Qt::Orientation::Horizontal</enum></property>
+    <property name="sizeHint" stdset="0"><size><width>40</width><height>20</height></size></property>
+   </spacer></item>
+   <item row="1" column="1"><spacer name="s2">
+    <property name="orientation"><enum>Qt::Orientation::Vertical</enum></property>
+    <property name="sizeHint" stdset="0"><size><width>20</width><height>40</height></size></property>
+   </spacer></item>
+  </layout>
+ </widget>
+</ui>"#;
+        let (mut tree, root) = load_ui(ONLY_SPACERS).expect("loads ui");
+        tree.layout(root, QRectF::new(0.0, 0.0, 4.0, 3.0));
+        let dialog = tree.widget(root).unwrap().geometry;
+        assert_eq!((dialog.width, dialog.height), (4.0, 3.0));
     }
 
     #[test]
@@ -2590,5 +3782,33 @@ mod tests {
         assert!(tree.is_ancestor(root, label));
         assert_eq!(tree.widget(label).unwrap().parent, Some(root));
         assert!(tree.widget(root).unwrap().children.contains(&label));
+    }
+
+    #[test]
+    fn set_property_icon_slices_img24_sprite() {
+        let mut tree = QWidgetTree::new();
+        let root = tree.create_widget("QDialog", "Dialog");
+        let button = tree.create_widget("QPushButton", "ok");
+        tree.add_child(root, button);
+
+        assert!(tree.set_property(button, "icon", QVariant::String("img24:22".into())));
+        let icon = tree
+            .widget(button)
+            .and_then(|widget| widget.icon.as_ref())
+            .expect("sliced icon");
+        assert_eq!(
+            (icon.width, icon.height),
+            (crate::icons::ICON_SIZE, crate::icons::ICON_SIZE)
+        );
+        assert!(tree
+            .widget(button)
+            .and_then(|widget| widget.icon_disabled.as_ref())
+            .is_some());
+
+        assert!(tree.set_property(button, "icon", QVariant::String("img24:99999".into())));
+        assert!(tree
+            .widget(button)
+            .and_then(|widget| widget.icon.as_ref())
+            .is_none());
     }
 }

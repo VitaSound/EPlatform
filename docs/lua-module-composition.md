@@ -386,26 +386,44 @@ open_lua(application_id, lua_file, opts)
 | `Form:finish_modal(result)` | закрыть модалку с результатом | есть |
 | `Form:set_property(object, property, value)` | свойство виджета | есть |
 | `Form:set_form_property(property, value)` | свойство формы | есть |
-| `Form:set(a, b, c)` | 2/3-аргументный sugar | добавить как обёртку |
-| `Form:set_prop(a, b, c)` | совместимый алиас | добавить как обёртку |
+| `Form:set(a, b, c)` | 2/3-аргументный sugar | есть |
+| `Form:set_prop(a, b, c)` | совместимый алиас | есть |
 | `Form:get_property(object, property)` | чтение виджета | есть |
 | `Form:get_form_property(property)` | чтение формы | есть |
-| `Form:get_prop(a, b)` | совместимый алиас | добавить |
-| `Form:setWindowTitle(title)` | заголовок | добавить |
-| `Form:setGeometry(rect)` | геометрия | добавить |
-| `Form:setText(object, text)` | текст | добавить |
-| `Form:setVisible(object, visible)` | видимость | добавить |
-| `Form:setEnabled(object, enabled)` | доступность | добавить |
-| `Form:setChecked(object, checked)` | checked | добавить |
-| `Form:setToolTip(object, text)` | tooltip | добавить |
-| `Form:setIcon(object, icon)` | иконка | добавить |
-| `Form:resize(size_or_w, h)` | размер | добавить |
-| `Form:move(pos_or_x, y)` | позиция | добавить |
-| `Form:setCurrentRow(object, row)` | текущая строка | добавить |
-| `Form:setCurrentIndex(object, index)` | текущий индекс | добавить |
-| `Form:setToolButton(object, opts)` | настройка QToolButton | добавить |
+| `Form:get_prop(a, b)` | совместимый алиас | есть |
+| `Form:setWindowTitle(title)` | заголовок | есть |
+| `Form:setGeometry(rect)` | геометрия | есть |
+| `Form:setText(object, text)` | текст | есть |
+| `Form:setVisible(object, visible)` | видимость | есть |
+| `Form:setEnabled(object, enabled)` | доступность | есть |
+| `Form:setChecked(object, checked)` | checked | есть |
+| `Form:setToolTip(object, text)` | tooltip | есть |
+| `Form:setIcon(object, icon)` | иконка | есть |
+| `Form:resize(size_or_w, h)` | размер (`setFormProperty "size"`, позиция сохраняется) | есть |
+| `Form:move(pos_or_x, y)` | позиция (`setFormProperty "position"`, размер сохраняется) | есть |
+| `Form:setResizable(enabled)` | интерактивный ресайз (grip + границы) | есть |
+| `Form:setSizeGripEnabled(enabled)` | Qt-совместимый алиас `setResizable` | есть |
+| `Form:setMinimumSize(size_or_w, h)` | минимальный content-размер | есть |
+| `Form:setMaximumSize(size_or_w, h)` | максимальный content-размер | есть |
+| `Form:setCurrentRow(object, row)` | текущая строка | есть |
+| `Form:setCurrentIndex(object, index)` | текущий индекс | есть |
+| `Form:setToolButton(object, opts)` | настройка QToolButton | есть |
 | `Form:on(widget, event, callback)` | обработчик | есть |
 | `Form:handleEvent(widget, event)` | диспетчер | есть, добавить fallback |
+
+Координаты `setGeometry`/`move`/`resize` — это **content rect** (клиентская
+область MDI-подокна). Заголовок окна рисуется на 24 px выше, поэтому
+`move(x, 0)` обрежет заголовок; для видимого заголовка нужно `y >= 24`.
+`Form:move` сохраняет размер, `Form:resize` — позицию, `Form:setGeometry`
+меняет и то, и другое.
+
+Ресайз можно выключить флагом `Form:setResizable(false)` / `sizeGripEnabled=false`
+или Qt-флагом `MSWindowsFixedSizeDialogHint` в `windowFlags` формы. Если
+`minimumSize == maximumSize` (по обеим осям), grip тоже скрывается.
+`minimumSize`/`maximumSize` задаются в content-координатах и ограничивают
+и программный `setGeometry`, и перетаскивание границ. При наведении на
+границу/угол клиент меняет курсор на соответствующий `*-resize`.
+
 
 Важно: `setWindowTitle`/`setGeometry`/`setText` и т.п. не должны быть
 «ещё одним протоколом». Они вызывают `set_property`/`set_form_property`.
@@ -427,10 +445,23 @@ open_lua(application_id, lua_file, opts)
 | `App:resize(size_or_w, h)` | размер |
 | `App:move(pos_or_x, y)` | позиция |
 | `App:setGeometry(rect)` | геометрия |
+| `App:set_menu(spec)` | меню главного окна (menu actions) |
+| `App:setToolBar(spec)` | toolbar главного окна |
+| `App:setToolBarVisible(bool)` | видимость toolbar |
+| `App:setStatusMessage(text, timeout)` / `showMessage` | сообщение statusbar |
+| `App:setStatusVisible(bool)` | видимость statusbar |
+| `App:setStatusInfo(text)` | технический текст справа |
 
 `App:exec_qt` и `Form:exec_qt` — **не канон**. Если оставлять, то только
 как escape hatch с allowlist методов и без доступа к произвольным Elixir
 функциям.
+
+`App` sugar (статус 2026-11-25): `setWindowTitle`/`setIcon` → browser
+chrome; `set_menu`/`setToolBar`/statusbar и top-level формы работают в
+полноценном application shell (`?main=...`). `resize`/`move`/`setGeometry`/
+`center`/`show*` для самого главного окна в браузере остаются no-op
+(desktop-host); `visible("toolBar"/"statusbar")` лучше не использовать —
+есть типизированные `setToolBarVisible`/`setStatusVisible`.
 
 ### 6.4. Таблицы
 
@@ -559,6 +590,7 @@ A продолжает обработку очереди
 | `getProperty` reply | клиент | `PlatformChannel` → `DialogSession` | сырой `{:property_reply, ref, value}` |
 | `setProperty` | Lua | `PlatformChannel` → клиент | применить свойство виджета |
 | `setFormProperty` | Lua | `PlatformChannel` → клиент | применить свойство формы |
+| `setAppProperty` | Lua | `PlatformChannel` → клиент | `windowTitle`/`windowIcon` — применить; остальное браузер игнорирует |
 | `createForm` | Lua | `PlatformChannel` → клиент | создать форму; `modal`/`mdi` |
 | `closeForm` | Lua/сервер | `PlatformChannel` → клиент | закрыть форму |
 | `closeApplication` | Lua | `PlatformChannel` → клиент | закрыть всё приложение |
@@ -689,7 +721,9 @@ local rows = data.list_measurements({limit = 100})
 4. `icons` — чистая таблица.
 5. `open_opts`/`init_opts` унифицируются в один `opts`.
 6. `mdi`/`modal` — явные boolean; `mode` не используем.
-7. `center` не добавляем, пока клиент не умеет центрировать.
+7. `Form:center` — свойство формы `centered` (центрирование MDI-подокна);
+   `App:center` (главное окно) не добавляем. Клиентскую поддержку
+   `centered` нужно реализовать до включения sugar.
 8. `null` не используем; только `nil`.
 9. Глобальные переменные в формах запрещены.
 10. Модальный результат — сырой `send`, не `GenServer.call`.
@@ -697,22 +731,41 @@ local rows = data.list_measurements({limit = 100})
 12. `invoke_qt` не основной путь; при необходимости — allowlist.
 13. `mfa` не переносим.
 14. `list_*` не переносим без слоя данных.
+15. `create_empty_form` не нужен: формы всегда создаются из `.ui`
+    (решение 2026-11-25).
+16. `modal_result` — структура `{status, value}`
+    (`ok|closed|error|timeout`); `Form:open_modal`/`App:open_modal` —
+    канонические, `*_lua` — совместимые обёртки (решение 2026-11-25).
+17. `App` sugar: `setWindowTitle`/`setIcon` → `setAppProperty`
+    (`windowTitle`/`windowIcon`; браузер применяет `document.title` и
+    favicon). `resize`, `move`, `setGeometry`, `center`, `show*`,
+    `visible`, `set_menu` объявлены в Lua и передаются как
+    `setAppProperty`, но браузерный клиент их игнорирует — задел под
+    desktop-host с нативным окном вокруг встроенного браузера.
+
+**Обновление 0.14 (2026-11-25).** Решение 17 пересматривается:
+`set_menu`, statusbar и top-level формы становятся частью реального
+application shell. No-op в браузере остаётся только у геометрии
+главного окна (`resize`/`move`/`setGeometry`/`center`/`show*` для
+самого main window). План и принятые решения D1–D8 — в
+`docs/application-shell-plan.md` и `questions.md`.
 
 ### Открытые вопросы
 
-1. Нужен ли `Form:center` как клиентская команда или достаточно геометрии?
-2. Делать ли `modal_result` структурой `{status, value}` или оставить
-   совместимый `result`/`"error"`/`"timeout"`?
-3. Нужен ли `open_lua` для немодальных дочерних форм в MDI, или достаточно
-   `start_dialog`?
-4. Нужен ли `create_empty_form` в текущем клиенте, или динамические формы
-   собираются из `.ui`?
-5. Нужен ли `invoke_qt` вообще, или хватит типизированных команд?
+1. `Form:center`: рекомендация — реализовать свойство `centered` в клиенте
+   (центр MDI-подокна), тогда sugar заработает без изменений Lua.
+2. ~~Структура `modal_result`?~~ Закрыт 2026-11-25: структурный подход
+   `{status, value}` (решение 16).
+3. `open_lua` уже реализован; вопрос снят.
+4. ~~`create_empty_form`?~~ Закрыт 2026-11-25: не нужен (решение 15).
+5. ~~`invoke_qt`?~~ Закрыт: не тащим (решение 12).
 6. Как поступать с `dialogError` у модального ребёнка: возвращать
-   `"error"` родителю или отдельный `{:error, reason}`?
+   `"error"` родителю или отдельный `{:error, reason}`? Согласовать
+   со структурным `modal_result` (status `error` + причина в `value`).
 7. Нужен ли `tableLayout`/`groupedHeader` в клиенте, или старые формы
    можно упростить до `tableHeaders`/`tableData`?
-8. Нужен ли `App` как отдельный объект, или достаточно `Form` + host API?
+8. `App` как объект оставляем (`init/close/open_lua/open_modal_lua`);
+   sugar не добавляем (решение 17).
 
 ## 11. Итоговая схема
 
@@ -754,21 +807,43 @@ GenServer, сырые сообщения только там, где иначе 
 
 ## 12. Статус реализации
 
-Этап 1 закрыт:
+Обновлено 2026-11-25 по коду и тестам (`mix test` — 29 passed).
 
-- добавлены `form_common_lib.lua`, `icons.lua`, `test_common.lua`;
-- добавлены `abstract_table_form.ui` и `abstract_tree_table_form.ui`;
-- `form.lua` получил совместимый sugar: `set`/`get`, `setWindowTitle`,
-  `setGeometry`, `setText`, `setVisible`, `setEnabled`, `setChecked`,
+### Реализовано
+
+- `form_common_lib.lua`, `icons.lua`, `test_common.lua`;
+- `abstract_table_form.ui` и `abstract_tree_table_form.ui`;
+- `form.lua`: `set`/`get`, `setWindowTitle`, `setGeometry`, `move`,
+  `resize`, `setResizable`/`setSizeGripEnabled`, `setMinimumSize`,
+  `setMaximumSize`, `setText`, `setVisible`, `setEnabled`, `setChecked`,
   `setToolTip`, `setIcon`, `setToolButton`, `setCurrentRow`,
   `setCurrentIndex`, `set_table*`, `setTableHeaders`, `setTableData`;
-- `handleEvent` снова понимает `Clicked` и `MouseButtonRelease`;
-- добавлены e2e-тесты `server/test/e_platform/lua_modules_test.exs`.
+  `handleEvent` понимает `Clicked` и `MouseButtonRelease`;
+- **модалки**: `open_modal_lua`, `close_modal`, `close_form` с сырым
+  `send`/`receive`, монитором родителя/ребёнка и таймаутами
+  (`lua/api.ex`, `dialog_session.ex`; матрица — `modal-message-matrix.md`);
+- **`open_opts` → `init`**: `DialogSession` передаёт опции четвёртым
+  аргументом `init(app_id, form_id, ui_file_or_nil, open_opts)`
+  (`dialog_session.ex`), покрыто тестом `open_opts reach init/4`;
+- **`open_lua`**: немодальный ребёнок через `DialogManager.start_dialog`
+  с `owner`-монитором; закрывается вместе с каналом/родителем;
+- `App`: `init`, `close`, `open_lua`, `open_modal_lua`;
+- **`App` browser chrome**: `setWindowTitle`/`setIcon` → `set_app_property`
+  → `setAppProperty`; клиент ставит `document.title`/favicon (включая
+  legacy `img24:N` из встроенного спрайта); остальные
+  App-операции принимаются протоколом и игнорируются браузером
+  (задел под desktop-host);
+- e2e-тесты `server/test/e_platform/lua_modules_test.exs` и
+  `modal_flow_test.exs` (25 тестов суммарно по серверу).
 
-Ещё не реализовано:
+### Ещё не реализовано
 
-- `create_empty_form`, `open_lua`, `open_opts` в host API;
-- `Form:center` и клиентское центрирование;
+- структурный `modal_result` (`{status, value}`) — решение принято,
+  реализация впереди (совместимые обёртки обязательны);
+- клиентское свойство `centered` для `Form:center` (сам sugar уже есть в
+  `ref_qt`, но не в текущем `form.lua`);
 - `tableLayout`/`groupedHeader` в клиенте;
-- `App` sugar сверх `close/1`;
-- `invoke_qt`/`mfa` и слой данных.
+- слой данных (`list_*`/`data`).
+
+Не планируется (решения 2026-11-25): `create_empty_form`, `App` sugar,
+`invoke_qt`/`mfa`. Открытые решения — в `questions.md` (раздел B).

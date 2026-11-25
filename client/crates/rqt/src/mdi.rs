@@ -7,6 +7,13 @@ pub const QMDI_BUTTON_RIGHT: f32 = 6.0;
 pub const QMDI_BUTTON_GAP: f32 = 2.0;
 pub const QMDI_SYSMENU_LEFT: f32 = 5.0;
 pub const QMDI_RESIZE: f32 = 12.0;
+/// Width of the interactive resize border around a resizable subwindow.
+pub const QMDI_BORDER: f32 = 4.0;
+/// Size of the corner resize zones (the bottom-right grip uses `QMDI_RESIZE`).
+pub const QMDI_CORNER: f32 = 8.0;
+/// Fallback minimum content size when the form does not set `minimumSize`.
+pub const QMDI_MIN_W: f32 = 80.0;
+pub const QMDI_MIN_H: f32 = 64.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum QMdiSubWindowHit {
@@ -16,7 +23,31 @@ pub enum QMdiSubWindowHit {
     Maximize,
     Close,
     Body,
+    ResizeTop,
+    ResizeBottom,
+    ResizeLeft,
+    ResizeRight,
+    ResizeTopLeft,
+    ResizeTopRight,
+    ResizeBottomLeft,
     ResizeBottomRight,
+}
+
+impl QMdiSubWindowHit {
+    /// True for every interactive resize border/corner.
+    pub fn is_resize(self) -> bool {
+        matches!(
+            self,
+            Self::ResizeTop
+                | Self::ResizeBottom
+                | Self::ResizeLeft
+                | Self::ResizeRight
+                | Self::ResizeTopLeft
+                | Self::ResizeTopRight
+                | Self::ResizeBottomLeft
+                | Self::ResizeBottomRight
+        )
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -56,6 +87,12 @@ pub struct QMdiSubWindow<T> {
     pub minimized: bool,
     pub visible: bool,
     pub window_flags: QMdiWindowFlags,
+    /// Whether the user may resize the subwindow (grip/borders).
+    pub resizable: bool,
+    /// Form-provided content minimum; `0` means the QMDI_MIN_* fallback.
+    pub min_content: QSizeF,
+    /// Form-provided content maximum; values `<= 0` mean unbounded.
+    pub max_content: QSizeF,
     restore_frame: Option<QRectF>,
 }
 
@@ -145,12 +182,125 @@ impl<T> QMdiSubWindow<T> {
         )
     }
 
+    /// Effective content minimum: explicit form value or the UI fallback.
+    pub fn min_content_size(&self) -> QSizeF {
+        QSizeF::new(
+            if self.min_content.width > 0.0 {
+                self.min_content.width
+            } else {
+                QMDI_MIN_W
+            },
+            if self.min_content.height > 0.0 {
+                self.min_content.height
+            } else {
+                QMDI_MIN_H
+            },
+        )
+    }
+
+    /// Effective content maximum; `0`/infinite values are unbounded.
+    pub fn max_content_size(&self) -> QSizeF {
+        let min = self.min_content_size();
+        let unbounded = |value: f32| value <= 0.0 || !value.is_finite();
+        QSizeF::new(
+            if unbounded(self.max_content.width) {
+                f32::MAX
+            } else {
+                self.max_content.width.max(min.width)
+            },
+            if unbounded(self.max_content.height) {
+                f32::MAX
+            } else {
+                self.max_content.height.max(min.height)
+            },
+        )
+    }
+
+    /// Interactive resizing is available only for visible, non-maximized
+    /// windows with a non-degenerate size range.
+    pub fn can_resize(&self) -> bool {
+        if !self.visible || !self.resizable || self.maximized || self.minimized {
+            return false;
+        }
+        let min = self.min_content_size();
+        let max = self.max_content_size();
+        max.width > min.width || max.height > min.height
+    }
+
+    pub fn set_resizable(&mut self, resizable: bool) {
+        self.resizable = resizable;
+    }
+
+    /// Apply form-level `minimumSize`/`maximumSize` (content size) and clamp
+    /// the current frame. Dragging a border keeps the opposite edge anchored;
+    /// this method only enforces the size range.
+    pub fn set_size_constraints(&mut self, min: QSizeF, max: QSizeF) {
+        self.min_content = min;
+        self.max_content = max;
+        if let Some(frame) = self.restore_frame {
+            self.restore_frame = Some(self.constrained_frame(frame));
+        }
+        if !self.maximized && !self.minimized {
+            self.frame = self.constrained_frame(self.frame);
+        }
+    }
+
+    fn constrained_frame(&self, frame: QRectF) -> QRectF {
+        let min = self.min_content_size();
+        let max = self.max_content_size();
+        let width = frame.width.clamp(min.width, max.width);
+        let height = frame
+            .height
+            .clamp(min.height + QMDI_TITLE_H, max.height + QMDI_TITLE_H);
+        QRectF::new(frame.x, frame.y, width, height)
+    }
+
+    fn resize_hit(&self, point: QPointF) -> Option<QMdiSubWindowHit> {
+        if !self.can_resize() || !self.frame.contains(point) {
+            return None;
+        }
+        let frame = self.frame;
+        // The visible grip is intentionally larger than the normal corners.
+        if point.x >= frame.right() - QMDI_RESIZE && point.y >= frame.bottom() - QMDI_RESIZE {
+            return Some(QMdiSubWindowHit::ResizeBottomRight);
+        }
+        let corner_l = point.x < frame.left() + QMDI_CORNER;
+        let corner_r = point.x >= frame.right() - QMDI_CORNER;
+        let corner_t = point.y < frame.top() + QMDI_CORNER;
+        let corner_b = point.y >= frame.bottom() - QMDI_CORNER;
+        if corner_t && corner_l {
+            return Some(QMdiSubWindowHit::ResizeTopLeft);
+        }
+        if corner_t && corner_r {
+            return Some(QMdiSubWindowHit::ResizeTopRight);
+        }
+        if corner_b && corner_l {
+            return Some(QMdiSubWindowHit::ResizeBottomLeft);
+        }
+        if corner_b && corner_r {
+            return Some(QMdiSubWindowHit::ResizeBottomRight);
+        }
+        if point.x < frame.left() + QMDI_BORDER {
+            return Some(QMdiSubWindowHit::ResizeLeft);
+        }
+        if point.x >= frame.right() - QMDI_BORDER {
+            return Some(QMdiSubWindowHit::ResizeRight);
+        }
+        if point.y < frame.top() + QMDI_BORDER {
+            return Some(QMdiSubWindowHit::ResizeTop);
+        }
+        if point.y >= frame.bottom() - QMDI_BORDER {
+            return Some(QMdiSubWindowHit::ResizeBottom);
+        }
+        None
+    }
+
     pub fn hit_test(&self, point: QPointF) -> Option<QMdiSubWindowHit> {
         if !self.visible || !self.frame.contains(point) {
             return None;
         }
-        if !self.minimized && self.resize_rect().contains(point) {
-            return Some(QMdiSubWindowHit::ResizeBottomRight);
+        if let Some(hit) = self.resize_hit(point) {
+            return Some(hit);
         }
         if point.y < self.frame.y + QMDI_TITLE_H {
             for (button, rect) in self.title_buttons() {
@@ -269,6 +419,9 @@ impl<T> QMdiArea<T> {
             minimized: false,
             visible: true,
             window_flags: QMdiWindowFlags::default(),
+            resizable: true,
+            min_content: QSizeF::default(),
+            max_content: QSizeF::new(f32::MAX, f32::MAX),
             restore_frame: None,
         });
         let index = self.subwindows.len() - 1;
@@ -338,12 +491,13 @@ impl<T> QMdiArea<T> {
 
     pub fn set_content_geometry(&mut self, index: usize, rect: QRectF) {
         if let Some(subwindow) = self.subwindows.get_mut(index) {
-            subwindow.frame = QRectF::new(
+            let frame = QRectF::new(
                 rect.x,
                 rect.y - QMDI_TITLE_H,
-                rect.width.max(80.0),
-                (rect.height + QMDI_TITLE_H).max(64.0),
+                rect.width,
+                rect.height + QMDI_TITLE_H,
             );
+            subwindow.frame = subwindow.constrained_frame(frame);
             subwindow.maximized = false;
             subwindow.minimized = false;
             subwindow.restore_frame = None;
@@ -353,8 +507,36 @@ impl<T> QMdiArea<T> {
     pub fn resize_content(&mut self, index: usize, size: QSizeF) {
         if let Some(subwindow) = self.subwindows.get_mut(index) {
             if !subwindow.maximized && !subwindow.minimized {
-                subwindow.frame.width = size.width.max(80.0);
-                subwindow.frame.height = (size.height + QMDI_TITLE_H).max(64.0);
+                let frame = QRectF::new(
+                    subwindow.frame.x,
+                    subwindow.frame.y,
+                    size.width,
+                    size.height + QMDI_TITLE_H,
+                );
+                subwindow.frame = subwindow.constrained_frame(frame);
+            }
+        }
+    }
+
+    /// Set the whole subwindow frame (used by interactive border resizing).
+    /// Size constraints are enforced on width/height; the caller anchors
+    /// the opposite edge itself.
+    pub fn set_size_constraints(&mut self, index: usize, min: QSizeF, max: QSizeF) {
+        if let Some(subwindow) = self.subwindows.get_mut(index) {
+            subwindow.set_size_constraints(min, max);
+        }
+    }
+
+    pub fn set_resizable(&mut self, index: usize, resizable: bool) {
+        if let Some(subwindow) = self.subwindows.get_mut(index) {
+            subwindow.set_resizable(resizable);
+        }
+    }
+
+    pub fn set_frame(&mut self, index: usize, frame: QRectF) {
+        if let Some(subwindow) = self.subwindows.get_mut(index) {
+            if !subwindow.maximized && !subwindow.minimized {
+                subwindow.frame = subwindow.constrained_frame(frame);
             }
         }
     }
@@ -426,6 +608,71 @@ mod tests {
     }
 
     #[test]
+    fn resize_borders_follow_resizable_flag_and_constraints() {
+        let mut area = area();
+        let index = area.add_subwindow("One", "a".into(), QSizeF::new(300.0, 200.0));
+        let frame = area.subwindow(index).unwrap().frame;
+
+        // Borders and corners are interactive resize zones.
+        assert_eq!(
+            area.hit_test(QPointF::new(frame.x + 1.0, frame.y + 100.0)),
+            Some((index, QMdiSubWindowHit::ResizeLeft))
+        );
+        assert_eq!(
+            area.hit_test(QPointF::new(frame.right() - 1.0, frame.y + 100.0)),
+            Some((index, QMdiSubWindowHit::ResizeRight))
+        );
+        assert_eq!(
+            area.hit_test(QPointF::new(frame.x + 100.0, frame.bottom() - 1.0)),
+            Some((index, QMdiSubWindowHit::ResizeBottom))
+        );
+        assert_eq!(
+            area.hit_test(QPointF::new(frame.x + 1.0, frame.y + 1.0)),
+            Some((index, QMdiSubWindowHit::ResizeTopLeft))
+        );
+        assert_eq!(
+            area.hit_test(QPointF::new(frame.right() - 1.0, frame.bottom() - 1.0)),
+            Some((index, QMdiSubWindowHit::ResizeBottomRight))
+        );
+        assert!(area.subwindow(index).unwrap().can_resize());
+
+        // A non-resizable form keeps the same points for title/body hits.
+        area.subwindows_mut()[index].set_resizable(false);
+        assert!(!area.subwindow(index).unwrap().can_resize());
+        assert_eq!(
+            area.hit_test(QPointF::new(frame.x + 1.0, frame.y + 100.0)),
+            Some((index, QMdiSubWindowHit::Body))
+        );
+        assert_eq!(
+            area.hit_test(QPointF::new(frame.x + 1.0, frame.y + 1.0)),
+            Some((index, QMdiSubWindowHit::Title))
+        );
+
+        // Minimum/maximum content sizes clamp programmatic and interactive
+        // resizes; the title bar adds QMDI_TITLE_H.
+        area.subwindows_mut()[index].set_resizable(true);
+        area.subwindows_mut()[index]
+            .set_size_constraints(QSizeF::new(200.0, 150.0), QSizeF::new(400.0, 300.0));
+        area.resize_content(index, QSizeF::new(1000.0, 1000.0));
+        let frame = area.subwindow(index).unwrap().frame;
+        assert_eq!((frame.width, frame.height), (400.0, 300.0 + QMDI_TITLE_H));
+        assert_eq!(
+            area.subwindow(index).unwrap().content_rect().size(),
+            QSizeF::new(400.0, 300.0)
+        );
+
+        area.set_content_geometry(index, QRectF::new(50.0, 60.0, 10.0, 10.0));
+        let frame = area.subwindow(index).unwrap().frame;
+        assert_eq!((frame.x, frame.y), (50.0, 60.0 - QMDI_TITLE_H));
+        assert_eq!((frame.width, frame.height), (200.0, 150.0 + QMDI_TITLE_H));
+
+        // Width and height fixed to the same value means no interactive grip.
+        area.subwindows_mut()[index]
+            .set_size_constraints(QSizeF::new(250.0, 180.0), QSizeF::new(250.0, 180.0));
+        assert!(!area.subwindow(index).unwrap().can_resize());
+    }
+
+    #[test]
     fn subwindow_layout_and_hit_test() {
         let mut area = area();
         let index = area.add_subwindow("One", "a".into(), QSizeF::new(300.0, 200.0));
@@ -437,7 +684,7 @@ mod tests {
             QRectF::new(32.0, 28.0 + QMDI_TITLE_H, 300.0, 200.0)
         );
         assert_eq!(
-            area.hit_test(QPointF::new(40.0, 30.0)),
+            area.hit_test(QPointF::new(100.0, 40.0)),
             Some((index, QMdiSubWindowHit::Title))
         );
         assert_eq!(

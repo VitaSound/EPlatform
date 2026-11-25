@@ -10,9 +10,9 @@ defmodule EPlatform.DialogManager do
   @doc """
   Starts a dialog session (Lua script + form) for the given application.
 
-  `opts` may contain `:modal`, `:mdi`, `:modal_parent`, `:modal_ref`,
-  `:modal_parent_form_id` and `:open_opts`. The default starts a normal,
-  non-modal form.
+  `opts` may contain `:modal`, `:mdi`, `:mode`, `:role`, `:modal_scope`,
+  `:modal_parent`, `:modal_ref`, `:modal_parent_form_id` and `:open_opts`.
+  The default starts a normal, non-modal form.
   """
   def start_dialog(application_id, lua_file, ui_file, opts \\ %{}) do
     form_id = EPlatform.ID.generate()
@@ -25,7 +25,10 @@ defmodule EPlatform.DialogManager do
           lua_file: lua_file,
           ui_file: ui_file,
           modal: false,
-          mdi: true
+          mdi: true,
+          mode: :standalone,
+          role: :form,
+          modal_scope: "none"
         },
         opts
       )
@@ -36,6 +39,20 @@ defmodule EPlatform.DialogManager do
       {:ok, _pid} -> {:ok, form_id}
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  @doc """
+  Starts the application main session (role `:main`). It owns top-level
+  forms opened from the main Lua script and its menu/toolbar actions.
+  """
+  def start_app(application_id, lua_file, opts \\ %{}) do
+    opts =
+      Map.merge(
+        %{role: :main, mode: :full, ui_file: "", modal: false, mdi: false},
+        opts
+      )
+
+    start_dialog(application_id, lua_file, "", opts)
   end
 
   @doc """
@@ -56,7 +73,10 @@ defmodule EPlatform.DialogManager do
           lua_file: lua_file,
           ui_file: ui_file,
           modal: true,
-          mdi: true
+          mdi: true,
+          mode: :standalone,
+          role: :form,
+          modal_scope: "application"
         },
         opts
       )

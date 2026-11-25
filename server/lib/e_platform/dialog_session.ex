@@ -23,6 +23,15 @@ defmodule EPlatform.DialogSession do
   # place to expose the modal parent/ref without threading a context argument
   # through every Lua function.
   defp expose_modal_context(state) do
+    Process.put(:e_platform_session, %{
+      form_id: state.form_id,
+      role: state.role,
+      mode: state.mode,
+      mdi: state.mdi,
+      modal: state.modal,
+      modal_scope: state.modal_scope
+    })
+
     if state.modal do
       Process.put(:e_platform_modal, %{
         parent: state.modal_parent,
@@ -67,6 +76,9 @@ defmodule EPlatform.DialogSession do
       form_props: %{},
       modal: Map.get(opts, :modal, false),
       mdi: Map.get(opts, :mdi, true),
+      mode: Map.get(opts, :mode, :standalone),
+      role: Map.get(opts, :role, :form),
+      modal_scope: Map.get(opts, :modal_scope, "none"),
       modal_parent: Map.get(opts, :modal_parent),
       modal_ref: Map.get(opts, :modal_ref),
       modal_parent_form_id: Map.get(opts, :modal_parent_form_id),
@@ -154,6 +166,35 @@ defmodule EPlatform.DialogSession do
       else
         {:noreply, state}
       end
+    end
+  end
+
+  def handle_cast({:dispatch, %{"command" => "menuAction"} = payload}, state) do
+    if Process.get(:e_platform_closing) do
+      {:stop, :normal, state}
+    else
+      args = [
+        payload["action"] || "",
+        payload["lua_file"] || "",
+        payload["ui_file"] || "",
+        payload["mdi"] == true,
+        payload["modal"] == true,
+        payload["modal_scope"] || "application"
+      ]
+
+      state =
+        try do
+          {_status, _res, lua_state} =
+            Lua.call_function(state.lua_state, :onMenuAction, args)
+
+          %{state | lua_state: lua_state}
+        rescue
+          e ->
+            Logger.error("onMenuAction failed form=#{state.form_id}: #{Exception.message(e)}")
+            state
+        end
+
+      {:noreply, state}
     end
   end
 
