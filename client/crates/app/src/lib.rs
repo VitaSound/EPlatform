@@ -413,6 +413,9 @@ struct App {
     editing: Option<CellEdit>,
     /// Laid-out Qt widget trees by `form_id` (one per open dialog session).
     forms: HashMap<String, QtForm>,
+    /// Global painting/hit z-order across MDI and top-level windows. The
+    /// last entry is frontmost; activation moves a form there.
+    window_z: Vec<(WindowLayer, String)>,
     /// Stack of currently open modal forms. The last one owns input.
     modal_stack: Vec<String>,
     /// Modal scope by form id (`window` / `application`).
@@ -482,6 +485,7 @@ impl App {
             table_focus: None,
             editing: None,
             forms: HashMap::new(),
+            window_z: Vec::new(),
             modal_stack: Vec::new(),
             modal_scopes: HashMap::new(),
             mdi: QMdiArea::new(rqt::gui::QRectF::new(0.0, 0.0, 1280.0, 800.0)),
@@ -1088,6 +1092,7 @@ impl App {
     fn remove_form(&mut self, form_id: &str) {
         self.mdi_hover = None;
         self.forms.remove(form_id);
+        self.window_z.retain(|(_, id)| id != form_id);
         let was_modal = self.modal_stack.iter().any(|id| id == form_id);
         self.modal_stack.retain(|id| id != form_id);
         self.modal_scopes.remove(form_id);
@@ -1131,6 +1136,7 @@ impl App {
     fn remove_all_forms(&mut self) {
         self.mdi_hover = None;
         self.forms.clear();
+        self.window_z.clear();
         self.modal_stack.clear();
         self.modal_scopes.clear();
         self.mdi.clear();
@@ -1263,6 +1269,7 @@ impl App {
             form_id.clone(),
             rqt::gui::QSizeF::new(form_area.width, form_area.height),
         );
+        self.raise_window(layer, &form_id);
 
         let min_size = tree.minimum_size_hint(root);
         let max_size = tree
@@ -1386,28 +1393,23 @@ impl App {
         append_paint_commands(base.commands(), &mut batches);
 
         let active_form = self.active_form_id();
-        for layer in [WindowLayer::Mdi, WindowLayer::Floating] {
-            let area = self.area(layer);
-            for (index, subwindow) in area.subwindows().iter().enumerate() {
-                let Some(form) = self.forms.get(&subwindow.payload) else {
-                    continue;
-                };
-                if !subwindow.minimized {
-                    let mut painter = rqt::gui::QPainter::new();
-                    rqt::paint::paint_widget_tree_content(
-                        &form.tree,
-                        form.root,
-                        &style,
-                        &mut painter,
-                    );
-                    append_paint_commands(painter.commands(), &mut batches);
-                }
-                let active = active_form.as_deref() == Some(subwindow.payload.as_str());
-                let hover = self.mdi_hover.and_then(|(hover_layer, hover_index, hit)| {
-                    (hover_layer == layer && hover_index == index).then_some(hit)
-                });
-                self.push_subwindow_chrome(subwindow, active, hover, &mut batches);
+        for (layer, index) in self.window_order() {
+            let Some(subwindow) = self.area(layer).subwindow(index) else {
+                continue;
+            };
+            let Some(form) = self.forms.get(&subwindow.payload) else {
+                continue;
+            };
+            if !subwindow.minimized {
+                let mut painter = rqt::gui::QPainter::new();
+                rqt::paint::paint_widget_tree_content(&form.tree, form.root, &style, &mut painter);
+                append_paint_commands(painter.commands(), &mut batches);
             }
+            let active = active_form.as_deref() == Some(subwindow.payload.as_str());
+            let hover = self.mdi_hover.and_then(|(hover_layer, hover_index, hit)| {
+                (hover_layer == layer && hover_index == index).then_some(hit)
+            });
+            self.push_subwindow_chrome(subwindow, active, hover, &mut batches);
         }
 
         // Popups are last: their opaque backgrounds naturally cover menu,
@@ -1670,13 +1672,16 @@ impl App {
     fn window_hit(&self, point: (f32, f32)) -> Option<(WindowLayer, usize, QMdiSubWindowHit)> {
         let point = rqt::gui::QPointF::new(point.0, point.1);
         let touch = self.primary_touch.is_some();
-        for layer in [WindowLayer::Floating, WindowLayer::Mdi] {
-            let hit = if touch {
-                self.area(layer).hit_test_touch(point)
-            } else {
-                self.area(layer).hit_test(point)
+        for (layer, index) in self.window_order().into_iter().rev() {
+            let Some(subwindow) = self.area(layer).subwindow(index) else {
+                continue;
             };
-            if let Some((index, hit)) = hit {
+            let hit = if touch {
+                subwindow.hit_test_touch(point)
+            } else {
+                subwindow.hit_test(point)
+            };
+            if let Some(hit) = hit {
                 return Some((layer, index, hit));
             }
         }
@@ -1694,10 +1699,40 @@ impl App {
         Some(hit)
     }
 
+    fn raise_window(&mut self, layer: WindowLayer, form_id: &str) {
+        self.window_z
+            .retain(|(window_layer, id)| !(*window_layer == layer && id == form_id));
+        self.window_z.push((layer, form_id.to_string()));
+    }
+
+    /// Front-to-back list for painting and hit-testing. Known windows use
+    /// the global activation order; manually inserted test windows fall back
+    /// to the layer/area order.
+    fn window_order(&self) -> Vec<(WindowLayer, usize)> {
+        let mut entries = Vec::new();
+        for layer in [WindowLayer::Mdi, WindowLayer::Floating] {
+            for (index, subwindow) in self.area(layer).subwindows().iter().enumerate() {
+                let base = entries.len();
+                let z = self
+                    .window_z
+                    .iter()
+                    .position(|(l, id)| *l == layer && *id == subwindow.payload)
+                    .unwrap_or(usize::MAX / 2 + base);
+                entries.push((z, layer, index));
+            }
+        }
+        entries.sort_by_key(|(z, _, _)| *z);
+        entries
+            .into_iter()
+            .map(|(_, layer, index)| (layer, index))
+            .collect()
+    }
+
     fn activate_form(&mut self, form_id: &str) -> Option<usize> {
         self.mdi_hover = None;
         let (layer, index) = self.find_window(form_id)?;
         let activated = self.area_mut(layer).activate(index)?;
+        self.raise_window(layer, form_id);
         for (id, form) in self.forms.iter_mut() {
             if id != form_id {
                 form.tree.close_combo_popups();
@@ -1841,6 +1876,9 @@ impl App {
                         .area(layer)
                         .subwindow(index)
                         .map(|subwindow| subwindow.payload.clone());
+                    if let Some(form_id) = self.active_form.clone() {
+                        self.raise_window(layer, &form_id);
+                    }
                     self.update_resize_cursor(None);
                 }
             }
@@ -1864,6 +1902,9 @@ impl App {
                         .area(layer)
                         .subwindow(index)
                         .map(|subwindow| subwindow.payload.clone());
+                    if let Some(form_id) = self.active_form.clone() {
+                        self.raise_window(layer, &form_id);
+                    }
                     self.update_resize_cursor(Some(hit));
                 }
             }
@@ -1883,6 +1924,7 @@ impl App {
                     return;
                 };
                 self.active_form = Some(form_id.clone());
+                self.raise_window(layer, &form_id);
                 self.clear_inactive_focus(&form_id);
                 let Some((_, name, class)) = self.hit_test(self.cursor) else {
                     self.line_select = None;
@@ -2174,11 +2216,18 @@ impl App {
             }
             Some((_, _, hit)) if hit.is_resize() => return,
             Some((layer, index, QMdiSubWindowHit::Body)) => {
-                self.area_mut(layer).activate(index);
-                self.active_form = self
+                let Some(index) = self.area_mut(layer).activate(index) else {
+                    return;
+                };
+                let Some(form_id) = self
                     .area(layer)
                     .subwindow(index)
-                    .map(|subwindow| subwindow.payload.clone());
+                    .map(|subwindow| subwindow.payload.clone())
+                else {
+                    return;
+                };
+                self.raise_window(layer, &form_id);
+                self.active_form = Some(form_id);
             }
             Some((_, _, _)) => return,
             None => {
@@ -5260,6 +5309,36 @@ mod tests {
         let png = rqt::icons::png_bytes("img24:22").expect("sprite cell");
         let url = png_data_url(&png);
         assert!(url.starts_with("data:image/png;base64,iVBOR"), "{url}");
+    }
+
+    #[test]
+    fn activating_mdi_window_raises_it_above_floating() {
+        let mut app = App::new(Params::default());
+        app.forms.insert("mdi".into(), card_form(32.0, 54.0, "Mdi"));
+        app.mdi
+            .add_subwindow("Mdi", "mdi".into(), rqt::gui::QSizeF::new(300.0, 200.0));
+        app.forms
+            .insert("float".into(), card_form(40.0, 60.0, "Float"));
+        app.floating
+            .add_subwindow("Float", "float".into(), rqt::gui::QSizeF::new(300.0, 200.0));
+        app.window_z = vec![
+            (WindowLayer::Mdi, "mdi".into()),
+            (WindowLayer::Floating, "float".into()),
+        ];
+
+        app.activate_form("mdi");
+
+        assert_eq!(
+            app.window_z.last(),
+            Some(&(WindowLayer::Mdi, "mdi".to_string()))
+        );
+        assert_eq!(
+            app.window_order().last(),
+            Some(&(
+                WindowLayer::Mdi,
+                app.mdi.index_of(|id| id == "mdi").unwrap()
+            ))
+        );
     }
 
     #[test]

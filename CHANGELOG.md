@@ -85,8 +85,13 @@
   `expandAll`/`collapseAll`; `childrenCollapsible` не добавляли.
 - **Review.** `scripts/review.sh` пересобран: `qss/52_checks` 4.88 → 4.07,
   `qss/55_disabled` 11.44 → 4.41; браузерный скриншот QSS-формы проверен.
-- **Тесты.** `cargo test --workspace` — 202 passed, 1 ignored
-  (app 56+1 ignored, form-xml 13, rqt 133); wasm-check и `cargo fmt
+- **Z-order окон.** MDI и top-level теперь имеют общий порядок активации:
+  активное окно всегда рисуется и хит-тестится поверх остальных, включая
+  переход между MDI и top-level слоями. Исправлен старый индекс после
+  `activate()` в release-body ветке; добавлен тест
+  `activating_mdi_window_raises_it_above_floating`.
+- **Тесты.** `cargo test --workspace` — 203 passed, 1 ignored
+  (app 57+1 ignored, form-xml 13, rqt 133); wasm-check и `cargo fmt
   --check` зелёные.
 
 ### Волна 0.16: combo popup, collapse/expand tree, `QSplitter`, QSS

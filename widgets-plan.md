@@ -25,8 +25,8 @@ long tap, double tap, multi-touch и two-finger scroll проверены в
 ## Baseline (проверено 2026-11-25, после волны 0.17.4)
 
 ```
-cargo test --workspace   → 202 passed; 0 failed; 1 ignored
-  app 56 (1 ignored) · form-xml 13 · rqt 133
+cargo test --workspace   → 203 passed; 0 failed; 1 ignored
+  app 57 (1 ignored) · form-xml 13 · rqt 133
 mix test (server/)       → 30 passed
 cargo check -p app --target wasm32-unknown-unknown → ok
 ```
@@ -218,7 +218,15 @@ tree/table item подхватывают QSS; 3 новых unit/paint-теста
 - [x] Тест `tree_expand_all_and_collapse_all_properties_rebuild_rows`;
       current сохраняется существующим `rebuild_rows`.
 
-### 0.17.3.4 App sugar — не расширять без запроса
+### 0.17.3.4 Z-order окон — ✅
+
+- [x] Общий `window_z` для MDI и top-level: активация/клик/создание
+      поднимают окно наверх, paint и hit-test идут в одном порядке.
+- [x] Исправлен старый `index` после `activate()` в release-body.
+- [x] Тест `activating_mdi_window_raises_it_above_floating`; браузер:
+      MDI-окно, открытое под top-level, после клика выходит наверх.
+
+### 0.17.3.5 App sugar — не расширять без запроса
 
 `setWindowTitle`/`setIcon` уже работают; геометрия главного окна в
 браузере остаётся no-op по D5. `set_menu`/toolbar/statusbar закрыты в
