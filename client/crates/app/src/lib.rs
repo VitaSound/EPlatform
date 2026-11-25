@@ -5509,10 +5509,20 @@ mod tests {
                     ]),
                 ),
             ])]));
-        app.shell.toolbar = vec![shell::MenuItem {
-            title: "ToolbarLabel".into(),
-            ..Default::default()
-        }];
+        app.shell.toolbar = vec![
+            shell::MenuItem {
+                title: "ToolbarLabel".into(),
+                ..Default::default()
+            },
+            shell::MenuItem {
+                separator: true,
+                ..Default::default()
+            },
+            shell::MenuItem {
+                title: "ToolbarTail".into(),
+                ..Default::default()
+            },
+        ];
         app.shell.toolbar_visible = true;
         let viewport = QRectF::new(0.0, 0.0, 480.0, 240.0);
         app.floating.set_viewport(viewport);

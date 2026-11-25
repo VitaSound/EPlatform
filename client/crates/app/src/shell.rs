@@ -797,7 +797,22 @@ impl Shell {
                     continue;
                 };
                 if item.separator {
-                    painter.fill_rect(rect, border);
+                    // Qt6 ground truth (`qt6_mainwindow.png`, QToolBar
+                    // separator action at x=178, y=4, 6x31): two crisp
+                    // 1 px lines at the rect centre — dark (0xd9) left,
+                    // light right — inset by 6 px top and bottom, not a
+                    // solid block.
+                    let x = rect.x.floor() + (rect.width.floor() / 2.0);
+                    let top = rect.y + 6.0;
+                    let height = (rect.height - 12.0).max(1.0);
+                    painter.fill_rect(
+                        QRectF::new(x, top, 1.0, height),
+                        QColor::rgb(0xd9, 0xd9, 0xd9),
+                    );
+                    painter.fill_rect(
+                        QRectF::new(x + 1.0, top, 1.0, height),
+                        QColor::rgb(0xff, 0xff, 0xff),
+                    );
                     continue;
                 }
                 let color = if item.enabled { text } else { disabled };
@@ -1304,5 +1319,75 @@ mod tests {
         shell.set_status_message(Some("ready".into()), Some(500.0), 1000.0);
         assert_eq!(shell.status_text(1400.0), Some("ready"));
         assert_eq!(shell.status_text(1500.0), None);
+    }
+
+    #[test]
+    fn toolbar_separator_paints_qt_two_line_primitive() {
+        use rqt::gui::QPaintCommand;
+
+        let mut shell = Shell::default();
+        shell.visible = true;
+        shell.toolbar = vec![
+            MenuItem {
+                title: "First".into(),
+                ..Default::default()
+            },
+            MenuItem {
+                separator: true,
+                ..Default::default()
+            },
+            MenuItem {
+                title: "Second".into(),
+                ..Default::default()
+            },
+        ];
+        shell.toolbar_visible = true;
+        let viewport = QRectF::new(0.0, 0.0, 800.0, 600.0);
+        let separator = shell.toolbar_rects(viewport)[1];
+        assert!((separator.width - 6.0).abs() < 0.01);
+
+        let mut painter = QPainter::new();
+        shell.paint_base(&mut painter, viewport, 0.0, None);
+
+        // Qt6 renders the toolbar separator as two crisp 1 px lines
+        // (dark left, light right) inset 6 px from the action rect —
+        // never as a solid block over the full 6x31 area.
+        let mut lines = Vec::new();
+        for command in painter.commands() {
+            if let QPaintCommand::FillRect { rect, color } = command {
+                if (rect.width - 1.0).abs() < 0.01 {
+                    lines.push((*rect, *color));
+                }
+            }
+        }
+        assert_eq!(lines.len(), 2, "exactly two 1px lines, got {lines:?}");
+        let x = separator.x.floor() + (separator.width.floor() / 2.0);
+        let y = separator.y + 6.0;
+        let height = separator.height - 12.0;
+        assert_eq!(
+            lines[0].0,
+            QRectF::new(x, y, 1.0, height),
+            "dark line position"
+        );
+        assert_eq!(lines[0].1, QColor::rgb(0xd9, 0xd9, 0xd9));
+        assert_eq!(
+            lines[1].0,
+            QRectF::new(x + 1.0, y, 1.0, height),
+            "light line position"
+        );
+        assert_eq!(lines[1].1, QColor::rgb(0xff, 0xff, 0xff));
+
+        // No solid 6-wide block covering the separator.
+        let solid = painter.commands().iter().any(|command| {
+            matches!(
+                command,
+                QPaintCommand::FillRect { rect, .. }
+                    if (rect.width - separator.width).abs() < 0.01
+                        && (rect.height - separator.height).abs() < 0.01
+                        && (rect.x - separator.x).abs() < 1.5
+                        && (rect.y - separator.y).abs() < 1.5
+            )
+        });
+        assert!(!solid, "separator must not be filled as one block");
     }
 }
