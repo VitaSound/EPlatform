@@ -1661,8 +1661,14 @@ impl App {
     /// separate Qt windows; modal filtering is applied separately.
     fn window_hit(&self, point: (f32, f32)) -> Option<(WindowLayer, usize, QMdiSubWindowHit)> {
         let point = rqt::gui::QPointF::new(point.0, point.1);
+        let touch = self.primary_touch.is_some();
         for layer in [WindowLayer::Floating, WindowLayer::Mdi] {
-            if let Some((index, hit)) = self.area(layer).hit_test(point) {
+            let hit = if touch {
+                self.area(layer).hit_test_touch(point)
+            } else {
+                self.area(layer).hit_test(point)
+            };
+            if let Some((index, hit)) = hit {
                 return Some((layer, index, hit));
             }
         }

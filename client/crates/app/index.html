@@ -62,6 +62,7 @@
         ta.setAttribute("autocorrect", "off");
         ta.setAttribute("spellcheck", "false");
         ta.setAttribute("inputmode", "text");
+        ta.setAttribute("enterkeyhint", "done");
         ta.setAttribute("aria-hidden", "true");
         ta.tabIndex = -1;
         // Keep it rendered (iOS ignores `display:none` for programmatic
@@ -72,7 +73,9 @@
           "top:0",
           "width:1px",
           "height:1px",
-          "opacity:0",
+          // iOS can refuse to focus a fully transparent/zero-size field;
+          // 1px at 1% opacity is rendered but visually invisible.
+          "opacity:0.01",
           "border:0",
           "padding:0",
           "margin:0",
@@ -112,16 +115,22 @@
           }
         };
 
+        function focusTextInput() {
+          try {
+            ta.focus({ preventScroll: true });
+          } catch (_) {}
+        }
+
         window.__epSetTextInputActive = function (next) {
           next = !!next;
           if (next === active) {
-            if (next) ta.focus({ preventScroll: true });
+            if (next) focusTextInput();
             return;
           }
           active = next;
           if (active) {
             ta.value = "";
-            ta.focus({ preventScroll: true });
+            focusTextInput();
           } else {
             ta.blur();
             ta.value = "";
@@ -129,6 +138,24 @@
             suppressNextInput = false;
           }
         };
+
+        // iOS only opens the keyboard from a user gesture. Rust focuses the
+        // hidden field on pointer release, which is sometimes too late after
+        // the keyboard was dismissed; re-focus at touchstart as well.
+        window.addEventListener(
+          "touchstart",
+          function () {
+            if (active) focusTextInput();
+          },
+          { capture: true, passive: true },
+        );
+        window.addEventListener(
+          "pointerdown",
+          function () {
+            if (active) focusTextInput();
+          },
+          { capture: true, passive: true },
+        );
 
         ta.addEventListener("compositionstart", function () {
           composing = true;

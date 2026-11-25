@@ -295,6 +295,31 @@ impl<T> QMdiSubWindow<T> {
         None
     }
 
+    fn title_hit(&self, point: QPointF) -> Option<QMdiSubWindowHit> {
+        if point.y >= self.frame.y + QMDI_TITLE_H {
+            return None;
+        }
+        for (button, rect) in self.title_buttons() {
+            if !rect.contains(point) {
+                continue;
+            }
+            return Some(match button {
+                QMdiSubWindowButton::SystemMenu => QMdiSubWindowHit::SystemMenu,
+                QMdiSubWindowButton::Minimize => QMdiSubWindowHit::Minimize,
+                QMdiSubWindowButton::Maximize => QMdiSubWindowHit::Maximize,
+                QMdiSubWindowButton::Restore => {
+                    if self.minimized {
+                        QMdiSubWindowHit::Minimize
+                    } else {
+                        QMdiSubWindowHit::Maximize
+                    }
+                }
+                QMdiSubWindowButton::Close => QMdiSubWindowHit::Close,
+            });
+        }
+        Some(QMdiSubWindowHit::Title)
+    }
+
     pub fn hit_test(&self, point: QPointF) -> Option<QMdiSubWindowHit> {
         if !self.visible || !self.frame.contains(point) {
             return None;
@@ -302,26 +327,24 @@ impl<T> QMdiSubWindow<T> {
         if let Some(hit) = self.resize_hit(point) {
             return Some(hit);
         }
-        if point.y < self.frame.y + QMDI_TITLE_H {
-            for (button, rect) in self.title_buttons() {
-                if !rect.contains(point) {
-                    continue;
-                }
-                return Some(match button {
-                    QMdiSubWindowButton::SystemMenu => QMdiSubWindowHit::SystemMenu,
-                    QMdiSubWindowButton::Minimize => QMdiSubWindowHit::Minimize,
-                    QMdiSubWindowButton::Maximize => QMdiSubWindowHit::Maximize,
-                    QMdiSubWindowButton::Restore => {
-                        if self.minimized {
-                            QMdiSubWindowHit::Minimize
-                        } else {
-                            QMdiSubWindowHit::Maximize
-                        }
-                    }
-                    QMdiSubWindowButton::Close => QMdiSubWindowHit::Close,
-                });
-            }
-            return Some(QMdiSubWindowHit::Title);
+        if let Some(hit) = self.title_hit(point) {
+            return Some(hit);
+        }
+        Some(QMdiSubWindowHit::Body)
+    }
+
+    /// Touch hit-testing: the title bar wins over the narrow resize border.
+    /// Fingers are much less precise than a mouse, and resizing a window when
+    /// the user tried to drag it by the title is the most common failure.
+    pub fn hit_test_touch(&self, point: QPointF) -> Option<QMdiSubWindowHit> {
+        if !self.visible || !self.frame.contains(point) {
+            return None;
+        }
+        if let Some(hit) = self.title_hit(point) {
+            return Some(hit);
+        }
+        if let Some(hit) = self.resize_hit(point) {
+            return Some(hit);
         }
         Some(QMdiSubWindowHit::Body)
     }
@@ -475,6 +498,16 @@ impl<T> QMdiArea<T> {
     pub fn hit_test(&self, point: QPointF) -> Option<(usize, QMdiSubWindowHit)> {
         for (index, subwindow) in self.subwindows.iter().enumerate().rev() {
             if let Some(hit) = subwindow.hit_test(point) {
+                return Some((index, hit));
+            }
+        }
+        None
+    }
+
+    /// Hit-test for touch input; title bar is preferred over resize borders.
+    pub fn hit_test_touch(&self, point: QPointF) -> Option<(usize, QMdiSubWindowHit)> {
+        for (index, subwindow) in self.subwindows.iter().enumerate().rev() {
+            if let Some(hit) = subwindow.hit_test_touch(point) {
                 return Some((index, hit));
             }
         }
@@ -695,6 +728,23 @@ mod tests {
         assert_eq!(
             area.hit_test(QPointF::new(close.x + 2.0, close.y + 2.0)),
             Some((index, QMdiSubWindowHit::Close))
+        );
+
+        // Touch prefers the title bar over the top resize border.
+        let frame = subwindow.frame;
+        let top_border = QPointF::new(frame.x + 20.0, frame.y + 1.0);
+        assert_eq!(
+            area.hit_test(top_border),
+            Some((index, QMdiSubWindowHit::ResizeTop))
+        );
+        assert_eq!(
+            area.hit_test_touch(top_border),
+            Some((index, QMdiSubWindowHit::Title))
+        );
+        let bottom_border = QPointF::new(frame.x + 20.0, frame.bottom() - 1.0);
+        assert_eq!(
+            area.hit_test_touch(bottom_border),
+            Some((index, QMdiSubWindowHit::ResizeBottom))
         );
     }
 
