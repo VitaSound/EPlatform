@@ -4187,8 +4187,9 @@ impl App {
             .as_ref()
             .map(|gfx| gfx.size())
             .unwrap_or((0, 0));
+        let viewport = self.floating.viewport();
         let text = format!(
-            "winit=({:.1}, {:.1}) ui_scale={:.4} logical=({:.1}, {:.1}) app_surface={}x{} app_logical={:.0}x{:.0}",
+            "winit=({:.1}, {:.1}) ui_scale={:.4} logical=({:.1}, {:.1}) app_surface={}x{} app_logical={:.0}x{:.0} viewport=({:.0},{:.0},{:.0}x{:.0})",
             x,
             y,
             scale,
@@ -4197,42 +4198,43 @@ impl App {
             surface_w,
             surface_h,
             surface_w as f32 / scale,
-            surface_h as f32 / scale
+            surface_h as f32 / scale,
+            viewport.x,
+            viewport.y,
+            viewport.width,
+            viewport.height
         );
         let _ = js_sys::Reflect::set(&win, &"__epPtr".into(), &text.as_str().into());
     }
 
-    /// Browser zoom, moving the window to another monitor or a browser that
-    /// respects DPR late can change the device pixel ratio without a resize
-    /// event arriving first; that would leave `ui_scale` stale and make every
-    /// click land `dpr`-times away from its widget.
+    /// Reconcile backing store, surface and `ui_scale` with the DOM.
+    ///
+    /// The browser is the only source of truth here: at load the canvas can
+    /// still carry its pre-layout size, `devicePixelRatio` can arrive after the
+    /// first resize, and winit's own numbers are unit-ambiguous. Without this
+    /// the renderer keeps the stale geometry from start-up until the user
+    /// happens to resize the window, which shows up as the whole UI painted
+    /// off-origin (and pointer hit-testing along with it).
     #[cfg(target_arch = "wasm32")]
-    fn sync_scale_factor(&mut self) {
-        let Some(live) = self.window.as_ref().map(|window| window.scale_factor()) else {
+    fn sync_canvas_geometry(&mut self) {
+        let Some((css_w, css_h, dpr)) = self.dom_canvas_size() else {
             return;
         };
+        let width = (css_w * dpr).round().max(1.0) as u32;
+        let height = (css_h * dpr).round().max(1.0) as u32;
         let stale = self
             .gfx
             .borrow()
             .as_ref()
-            .map(|gfx| (gfx.dpr() as f64 - live).abs() > 1e-3)
+            .map(|gfx| gfx.size() != (width, height) || (gfx.dpr() as f64 - dpr).abs() > 1e-3)
             .unwrap_or(false);
-        if !stale {
+        if !stale && self.last_size.get() == Some((width, height)) {
             return;
         }
-        let (width, height) = self
-            .dom_canvas_size()
-            .map(|(w, h, dpr)| {
-                (
-                    (w * dpr).round().max(1.0) as u32,
-                    (h * dpr).round().max(1.0) as u32,
-                )
-            })
-            .unwrap_or_else(|| self.last_size.get().unwrap_or((1, 1)));
         self.last_size.set(Some((width, height)));
         self.sync_canvas_backing(width, height);
         if let Some(gfx) = self.gfx.borrow_mut().as_mut() {
-            gfx.set_scale_factor(live, width, height);
+            gfx.set_scale_factor(dpr, width, height);
         }
         if let Some(window) = &self.window {
             window.request_redraw();
@@ -4242,7 +4244,7 @@ impl App {
     /// Pointer position in canvas pixels, shared by mouse and touch input.
     fn pointer_moved(&mut self, x: f64, y: f64) {
         #[cfg(target_arch = "wasm32")]
-        self.sync_scale_factor();
+        self.sync_canvas_geometry();
         let scale = self.ui_scale();
         #[cfg(target_arch = "wasm32")]
         self.publish_pointer_debug(x, y, scale);
@@ -4643,6 +4645,8 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::RedrawRequested => {
+                #[cfg(target_arch = "wasm32")]
+                self.sync_canvas_geometry();
                 self.drain_socket_events();
                 self.refresh_viewports();
                 if let Some((form_id, name)) = self.focused.clone() {

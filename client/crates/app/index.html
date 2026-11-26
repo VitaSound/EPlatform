@@ -160,9 +160,14 @@
       // The HTML names the exact wasm/js bundle it was built with; showing it
       // makes "is the browser running the new client?" answerable at a glance.
       window.__epBuild = (function () {
-        var link = document.querySelector('link[rel="modulepreload"]');
-        var href = (link && link.getAttribute("href")) || "unknown";
-        return href.split("/").pop();
+        // The wasm hash changes on every Rust build; the js hash only when the
+        // bindgen glue changes, so report both.
+        var wasm = document.querySelector('link[type="application/wasm"]');
+        var js = document.querySelector('link[rel="modulepreload"]');
+        var name = function (link) {
+          return link ? (link.getAttribute("href") || "").split("/").pop() : "?";
+        };
+        return name(wasm) + " / " + name(js);
       })();
       if (/[?&]diag=1/.test(location.search)) {
         var hud = document.createElement("div");
