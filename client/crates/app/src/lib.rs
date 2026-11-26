@@ -816,6 +816,13 @@ impl App {
                 };
                 let mut title = None;
                 if let Some((layer, index)) = self.find_window(form_id) {
+                    if property == "cascade" && value.as_bool() == Some(true) {
+                        // `Form:cascade()`: move this window to the next
+                        // cascade slot without touching its size.
+                        self.area_mut(layer).cascade_window(index);
+                        Self::log(format!("apply form.cascade form_id={form_id}"));
+                        return;
+                    }
                     let current = self
                         .forms
                         .get(form_id)
@@ -994,6 +1001,20 @@ impl App {
                     "statusVisible" | "statusbar" => {
                         if let Some(visible) = value.as_bool() {
                             self.shell.status_visible = visible;
+                        }
+                    }
+                    "cascadeWindows" => {
+                        if value.as_bool() != Some(false) {
+                            self.mdi.cascade_subwindows();
+                            self.floating.cascade_subwindows();
+                            Self::log("cascade windows".to_string());
+                        }
+                    }
+                    "tileWindows" => {
+                        if value.as_bool() != Some(false) {
+                            self.mdi.tile_subwindows();
+                            self.floating.tile_subwindows();
+                            Self::log("tile windows".to_string());
                         }
                     }
                     _ => match self.chrome.apply(property, &value) {
@@ -1299,33 +1320,26 @@ impl App {
 
         if layer == WindowLayer::Floating {
             let viewport = self.floating.viewport();
-            let width = form_area.width.clamp(1.0, viewport.width.max(1.0));
-            let height = form_area.height.clamp(1.0, viewport.height.max(1.0));
-            let x = form_area
-                .x
-                .clamp(viewport.x, (viewport.right() - width).max(viewport.x));
-            let y = form_area
-                .y
-                .clamp(viewport.y, (viewport.bottom() - height).max(viewport.y));
-            self.floating
-                .set_content_geometry(index, rqt::gui::QRectF::new(x, y, width, height));
-        } else {
-            // `QMdiArea::add_subwindow` uses local (32, 28) coordinates; the
-            // central area starts below the menu/toolbar, so offset the frame
-            // by the viewport origin.
-            let viewport = self.mdi.viewport();
-            if let Some(frame) = self.mdi.subwindow(index).map(|subwindow| subwindow.frame) {
-                self.mdi.set_frame(
-                    index,
-                    rqt::gui::QRectF::new(
-                        frame.x + viewport.x,
-                        frame.y + viewport.y,
-                        frame.width,
-                        frame.height,
-                    ),
-                );
+            // A designer position of (0,0) means "no position given": the
+            // window keeps the cascade slot assigned by `add_subwindow`.
+            // Explicit `.ui`/Lua positions are honored as-is — coinciding
+            // explicit positions are intentional (user decision, 0.18.1).
+            let explicit_position = form_area.x != 0.0 || form_area.y != 0.0;
+            if explicit_position {
+                let width = form_area.width.clamp(1.0, viewport.width.max(1.0));
+                let height = form_area.height.clamp(1.0, viewport.height.max(1.0));
+                let x = form_area
+                    .x
+                    .clamp(viewport.x, (viewport.right() - width).max(viewport.x));
+                let y = form_area
+                    .y
+                    .clamp(viewport.y, (viewport.bottom() - height).max(viewport.y));
+                self.floating
+                    .set_content_geometry(index, rqt::gui::QRectF::new(x, y, width, height));
             }
         }
+        // MDI windows keep the absolute cascade slot from `add_subwindow`
+        // (it already contains the viewport origin; no post-shift needed).
 
         if modal || layer == WindowLayer::Floating {
             let _ = self.area_mut(layer).activate(index);
@@ -4974,6 +4988,145 @@ mod tests {
         assert!(full.shell.visible);
     }
 
+    fn cascade_test_ui(x: i64, y: i64) -> String {
+        format!(
+            r#"<ui version="4.0"><class>Dialog</class><widget class="QDialog" name="Dialog"><property name="geometry"><rect><x>{x}</x><y>{y}</y><width>300</width><height>200</height></rect></property></widget></ui>"#
+        )
+    }
+
+    #[test]
+    fn forms_without_position_cascade_and_explicit_geometry_stays() {
+        use serde_json::json;
+
+        let mut app = App::new(Params {
+            full: true,
+            main_lua: Some("main.lua".into()),
+            ..Params::default()
+        });
+        let viewport = QRectF::new(0.0, 0.0, 800.0, 600.0);
+        app.floating.set_viewport(viewport);
+        app.mdi.set_viewport(viewport);
+
+        // Two MDI forms without any explicit position get cascade slots:
+        // step (10, title height), so every title stays visible.
+        for id in ["m1", "m2"] {
+            app.on_command(&json!({
+                "command": "createForm",
+                "form_id": id,
+                "mode": "full",
+                "placement": "mdi",
+                "ui_xml": cascade_test_ui(0, 0),
+            }));
+        }
+        let mdi_frame = |app: &App, id: &str| {
+            let index = app.mdi.index_of(|payload| payload == id).unwrap();
+            app.mdi.subwindow(index).unwrap().frame
+        };
+        let first = mdi_frame(&app, "m1");
+        let second = mdi_frame(&app, "m2");
+        assert_eq!((first.x, first.y), (32.0, 28.0));
+        assert_eq!((second.x - first.x, second.y - first.y), (10.0, 24.0));
+
+        // An explicit position is honored as-is (coinciding explicit
+        // positions are intentional and never shifted).
+        app.on_command(&json!({
+            "command": "setFormProperty",
+            "form_id": "m2",
+            "property": "geometry",
+            "value": { "x": 100, "y": 100, "w": 300, "h": 200 },
+        }));
+        let index = app.mdi.index_of(|payload| payload == "m2").unwrap();
+        let content = app.mdi.subwindow(index).unwrap().content_rect();
+        assert_eq!((content.x, content.y), (100.0, 100.0));
+
+        // Top-level forms without a designer position cascade as well…
+        for id in ["t1", "t2"] {
+            app.on_command(&json!({
+                "command": "createForm",
+                "form_id": id,
+                "mode": "standalone",
+                "placement": "top-level",
+                "ui_xml": cascade_test_ui(0, 0),
+            }));
+        }
+        // …while a designer position is explicit and stays put.
+        app.on_command(&json!({
+            "command": "createForm",
+            "form_id": "t3",
+            "mode": "standalone",
+            "placement": "top-level",
+            "ui_xml": cascade_test_ui(120, 80),
+        }));
+        let floating_frame = |app: &App, id: &str| {
+            let index = app.floating.index_of(|payload| payload == id).unwrap();
+            app.floating.subwindow(index).unwrap().frame
+        };
+        let t1 = floating_frame(&app, "t1");
+        let t2 = floating_frame(&app, "t2");
+        let t3 = floating_frame(&app, "t3");
+        assert_eq!((t1.x, t1.y), (32.0, 28.0));
+        assert_eq!((t2.x - t1.x, t2.y - t1.y), (10.0, 24.0));
+        assert_eq!((t3.x, t3.y), (120.0, 80.0 - rqt::mdi::QMDI_TITLE_H));
+    }
+
+    #[test]
+    fn cascade_and_tile_app_commands_rearrange_windows() {
+        use serde_json::json;
+
+        let mut app = App::new(Params {
+            full: true,
+            main_lua: Some("main.lua".into()),
+            ..Params::default()
+        });
+        let viewport = QRectF::new(0.0, 0.0, 800.0, 600.0);
+        app.mdi.set_viewport(viewport);
+        for id in ["a", "b", "c"] {
+            app.on_command(&json!({
+                "command": "createForm",
+                "form_id": id,
+                "mode": "full",
+                "placement": "mdi",
+                "ui_xml": cascade_test_ui(0, 0),
+            }));
+        }
+        let frames = |app: &App| {
+            ["a", "b", "c"]
+                .into_iter()
+                .map(|id| {
+                    let index = app.mdi.index_of(|payload| payload == id).unwrap();
+                    app.mdi.subwindow(index).unwrap().frame
+                })
+                .collect::<Vec<_>>()
+        };
+
+        app.on_command(&json!({
+            "command": "setAppProperty",
+            "property": "cascadeWindows",
+            "value": true,
+        }));
+        let cascaded = frames(&app);
+        assert_eq!((cascaded[0].x, cascaded[0].y), (32.0, 28.0));
+        assert_eq!(
+            (cascaded[1].x - cascaded[0].x, cascaded[1].y - cascaded[0].y),
+            (10.0, 24.0)
+        );
+        assert_eq!(
+            (cascaded[2].x - cascaded[1].x, cascaded[2].y - cascaded[1].y),
+            (10.0, 24.0)
+        );
+
+        app.on_command(&json!({
+            "command": "setAppProperty",
+            "property": "tileWindows",
+            "value": true,
+        }));
+        let tiled = frames(&app);
+        // 3 windows → 2 columns × 2 rows over the 800x600 viewport.
+        assert_eq!(tiled[0], QRectF::new(0.0, 0.0, 400.0, 300.0));
+        assert_eq!(tiled[1], QRectF::new(400.0, 0.0, 400.0, 300.0));
+        assert_eq!(tiled[2], QRectF::new(0.0, 300.0, 400.0, 300.0));
+    }
+
     #[test]
     fn mdi_form_position_is_relative_to_the_central_area() {
         use serde_json::json;
@@ -5361,8 +5514,9 @@ mod tests {
             app.mdi_hit((315.0, 32.0)).map(|(_, hit)| hit),
             Some(QMdiSubWindowHit::Close)
         );
+        // Second window sits one cascade step away: (42, 52).
         assert_eq!(
-            app.mdi_hit((345.0, 60.0)).map(|(_, hit)| hit),
+            app.mdi_hit((325.0, 60.0)).map(|(_, hit)| hit),
             Some(QMdiSubWindowHit::Close)
         );
         assert_eq!(app.mdi_hit((100.0, 100.0)).map(|(index, _)| index), Some(1));

@@ -115,6 +115,16 @@ function App:setToolBarVisible(visible)
     return set(self, "toolBarVisible", visible ~= false)
 end
 
+-- Window arrangement (0.18.1): cascade all forms in the MDI area and the
+-- top-level layer, or tile them in a grid.
+function App:cascadeWindows()
+    return set(self, "cascadeWindows", true)
+end
+
+function App:tileWindows()
+    return set(self, "tileWindows", true)
+end
+
 function App:setStatusMessage(text, timeout)
     if text == nil then
         return set(self, "statusMessage", nil)

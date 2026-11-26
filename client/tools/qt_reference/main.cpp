@@ -22,6 +22,8 @@
 #include <QStyleOptionSlider>
 #include <QStyleOptionMenuItem>
 #include <QDir>
+#include <QMdiArea>
+#include <QMdiSubWindow>
 #include <QUiLoader>
 #include <QWidget>
 
@@ -407,6 +409,125 @@ static int chromeProbe(QApplication &app, const QString &uiPath,
     return 0;
 }
 
+// MDI probe: how Qt places new subwindows, cascades and tiles them, and
+// what happens when a cascade would leave the viewport (wrap or overflow).
+static int mdiProbe(QApplication &app, const QString &outDir)
+{
+    QDir dir(outDir);
+    if (!dir.mkpath(".")) {
+        qCritical("cannot create %s", qPrintable(outDir));
+        return 2;
+    }
+    auto rectJson = [](const QRect &r) {
+        return QJsonObject{{"x", r.x()}, {"y", r.y()},
+                           {"w", r.width()}, {"h", r.height()}};
+    };
+
+    QJsonObject output;
+
+    // --- probe 1: four identical 388x190 forms in a 600x400 area ---
+    QMdiArea area;
+    area.resize(600, 400);
+    area.show();
+    app.processEvents();
+    auto add = [&](QMdiArea &target, int count) {
+        for (int i = 0; i < count; ++i) {
+            auto *widget = new QWidget;
+            widget->setWindowTitle(QString("F%1").arg(count * 100 + i));
+            widget->setMinimumSize(388, 190);
+            widget->resize(388, 190);
+            target.addSubWindow(widget);
+            widget->show();
+        }
+        app.processEvents();
+    };
+    auto dump = [&](QMdiArea &target) {
+        QJsonArray array;
+        const auto list = target.subWindowList();
+        for (QMdiSubWindow *sub : list) {
+            QJsonObject object = rectJson(sub->frameGeometry());
+            object["title"] = sub->windowTitle();
+            array.append(object);
+        }
+        return array;
+    };
+
+    output["area"] = rectJson(QRect(area.pos(), area.size()));
+    add(area, 4);
+    output["added4"] = dump(area);
+    area.cascadeSubWindows();
+    app.processEvents();
+    output["cascade4"] = dump(area);
+    renderWidgetToImage(&area).save(outDir + "/mdi_cascade4.png");
+    area.tileSubWindows();
+    app.processEvents();
+    output["tile4"] = dump(area);
+    renderWidgetToImage(&area).save(outDir + "/mdi_tile4.png");
+
+    // --- probe 2: wrap/overflow — 12 windows in 400x300 ---
+    QMdiArea small;
+    small.resize(400, 300);
+    small.show();
+    app.processEvents();
+    add(small, 12);
+    output["added12"] = dump(small);
+    small.cascadeSubWindows();
+    app.processEvents();
+    output["area_small"] = rectJson(QRect(small.pos(), small.size()));
+    output["cascade12"] = dump(small);
+    small.tileSubWindows();
+    app.processEvents();
+    output["tile12"] = dump(small);
+
+    // --- probe 4: does the second cascade column depend on window width? ---
+    {
+        QMdiArea probe;
+        probe.resize(500, 300);
+        probe.show();
+        app.processEvents();
+        for (int i = 0; i < 4; ++i) {
+            auto *widget = new QWidget;
+            widget->setWindowTitle(QString("W%1").arg(i));
+            widget->setMinimumSize(288, 140);
+            widget->resize(288, 140);
+            probe.addSubWindow(widget);
+            widget->show();
+        }
+        app.processEvents();
+        probe.cascadeSubWindows();
+        app.processEvents();
+        QJsonObject entry;
+        entry["area"] = rectJson(QRect(probe.pos(), probe.size()));
+        entry["cascade"] = dump(probe);
+        output["narrow_windows"] = entry;
+        probe.hide();
+    }
+
+    QJsonArray wraps;
+    for (const QSize &size : {QSize(800, 600), QSize(500, 300),
+                              QSize(450, 300), QSize(420, 300)}) {
+        QMdiArea probe;
+        probe.resize(size);
+        probe.show();
+        app.processEvents();
+        add(probe, 12);
+        probe.cascadeSubWindows();
+        app.processEvents();
+        QJsonObject entry;
+        entry["area"] = rectJson(QRect(probe.pos(), probe.size()));
+        entry["cascade"] = dump(probe);
+        wraps.append(entry);
+        probe.hide();
+    }
+    output["wraps"] = wraps;
+
+    QJsonDocument document(output);
+    QFile out;
+    out.open(stdout, QIODevice::WriteOnly);
+    out.write(document.toJson(QJsonDocument::Indented));
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     QApplication app(argc, argv);
@@ -417,7 +538,8 @@ int main(int argc, char **argv)
 
     if (argc < 2) {
         qCritical("usage: qt_reference <form.ui> [out.png]\n"
-                  "       qt_reference --chrome <form.ui> <outdir>");
+                  "       qt_reference --chrome <form.ui> <outdir>\n"
+                  "       qt_reference --mdi <outdir>");
         return 2;
     }
 
@@ -428,6 +550,14 @@ int main(int argc, char **argv)
         }
         return chromeProbe(app, QString::fromLocal8Bit(argv[2]),
                            QString::fromLocal8Bit(argv[3]));
+    }
+
+    if (qstrcmp(argv[1], "--mdi") == 0) {
+        if (argc < 3) {
+            qCritical("usage: qt_reference --mdi <outdir>");
+            return 2;
+        }
+        return mdiProbe(app, QString::fromLocal8Bit(argv[2]));
     }
 
     QFile file(QString::fromLocal8Bit(argv[1]));

@@ -426,14 +426,16 @@ impl<T> QMdiArea<T> {
         payload: T,
         content_size: QSizeF,
     ) -> usize {
-        let offset = (self.cascade % 8) as f32 * 28.0;
-        self.cascade += 1;
-        let frame = QRectF::new(
-            32.0 + offset,
-            28.0 + offset,
+        // Windows-style auto cascade: every new window gets the next slot
+        // of the Qt-probed cascade pattern (see `cascade_pos`). Positions
+        // are absolute inside the viewport — callers no longer shift them.
+        let size = QSizeF::new(
             content_size.width.max(80.0),
             (content_size.height + QMDI_TITLE_H).max(64.0),
         );
+        let pos = Self::cascade_pos(self.viewport, self.cascade, size);
+        self.cascade += 1;
+        let frame = QRectF::new(pos.x, pos.y, size.width, size.height);
         self.subwindows.push(QMdiSubWindow {
             payload,
             title: title.into(),
@@ -548,6 +550,130 @@ impl<T> QMdiArea<T> {
                 );
                 subwindow.frame = subwindow.constrained_frame(frame);
             }
+        }
+    }
+
+    /// Absolute cascade position for `slot` inside `viewport`.
+    ///
+    /// Qt6 ground truth (`qt_reference --mdi`): `cascadeSubWindows` steps
+    /// (10, 22) — the y step equals Qt's title height, so every following
+    /// title bar lands right below the previous one, and Qt's columns are
+    /// overlapping halves of the area. We keep a 32/28 inset from the
+    /// viewport edge (titles do not touch the frame) and use our own
+    /// `QMDI_TITLE_H` as the y step; columns advance by half a viewport.
+    /// When the slot leaves the viewport, the cascade wraps into the next
+    /// column, and slots beyond the visible grid wrap around.
+    fn cascade_pos(viewport: QRectF, slot: usize, frame: QSizeF) -> QPointF {
+        const STEP_X: f32 = 10.0;
+        const INSET_X: f32 = 32.0;
+        const INSET_Y: f32 = 28.0;
+
+        let step_y = QMDI_TITLE_H;
+        let rows = (((viewport.height - INSET_Y - frame.height) / step_y)
+            .floor()
+            .max(0.0) as usize
+            + 1)
+        .max(1);
+        let col_step = (viewport.width / 2.0).max(STEP_X);
+        let cols = (((viewport.width - INSET_X - 40.0) / col_step)
+            .floor()
+            .max(0.0) as usize
+            + 1)
+        .max(1);
+        let slots = rows.saturating_mul(cols).max(1);
+        let slot = slot % slots;
+        let col = slot / rows;
+        let row = slot % rows;
+        QPointF::new(
+            viewport.x + INSET_X + col as f32 * col_step + row as f32 * STEP_X,
+            viewport.y + INSET_Y + row as f32 * step_y,
+        )
+    }
+
+    /// Move one subwindow to the next cascade slot (`Form:cascade`).
+    pub fn cascade_window(&mut self, index: usize) {
+        let Some(subwindow) = self.subwindows.get(index) else {
+            return;
+        };
+        if !subwindow.visible || subwindow.maximized || subwindow.minimized {
+            return;
+        }
+        let size = QSizeF::new(subwindow.frame.width, subwindow.frame.height);
+        let pos = Self::cascade_pos(self.viewport, self.cascade, size);
+        self.cascade += 1;
+        if let Some(subwindow) = self.subwindows.get_mut(index) {
+            subwindow.frame = QRectF::new(
+                pos.x,
+                pos.y,
+                subwindow.frame.width,
+                subwindow.frame.height,
+            );
+        }
+    }
+
+    /// Qt `QMdiArea::cascadeSubWindows`: re-arrange every normal-state
+    /// subwindow from the cascade origin (probed step: x 10, y = title
+    /// height). Maximised/minimized windows are left alone, like Qt.
+    pub fn cascade_subwindows(&mut self) {
+        let mut placed = 0usize;
+        for index in 0..self.subwindows.len() {
+            let (visible, frame) = {
+                let subwindow = &self.subwindows[index];
+                (
+                    subwindow.visible && !subwindow.maximized && !subwindow.minimized,
+                    QRectF::new(
+                        subwindow.frame.x,
+                        subwindow.frame.y,
+                        subwindow.frame.width,
+                        subwindow.frame.height,
+                    ),
+                )
+            };
+            if !visible {
+                continue;
+            }
+            let pos = Self::cascade_pos(
+                self.viewport,
+                placed,
+                QSizeF::new(frame.width, frame.height),
+            );
+            let subwindow = &mut self.subwindows[index];
+            subwindow.frame = QRectF::new(pos.x, pos.y, frame.width, frame.height);
+            placed += 1;
+        }
+        // Follow-up `add_subwindow` calls continue after the arranged set.
+        self.cascade = placed;
+    }
+
+    /// Qt `QMdiArea::tileSubWindows`: `ceil(sqrt(n))` columns × rows over
+    /// the viewport with an integer cell split; frames shrink to their cell
+    /// but never below the subwindow's size constraints (Qt keeps the
+    /// minimum too, letting tiles overflow a too-small area).
+    pub fn tile_subwindows(&mut self) {
+        let viewport = self.viewport;
+        let indices: Vec<usize> = (0..self.subwindows.len())
+            .filter(|&index| {
+                let subwindow = &self.subwindows[index];
+                subwindow.visible && !subwindow.maximized && !subwindow.minimized
+            })
+            .collect();
+        if indices.is_empty() {
+            return;
+        }
+        let count = indices.len();
+        let cols = ((count as f32).sqrt().ceil() as usize).max(1);
+        let rows = count.div_ceil(cols);
+        for (position, &index) in indices.iter().enumerate() {
+            let col = position % cols;
+            let row = position / cols;
+            let cell = QRectF::new(
+                viewport.x + viewport.width * col as f32 / cols as f32,
+                viewport.y + viewport.height * row as f32 / rows as f32,
+                viewport.width / cols as f32,
+                viewport.height / rows as f32,
+            );
+            let subwindow = &mut self.subwindows[index];
+            subwindow.frame = subwindow.constrained_frame(cell);
         }
     }
 
@@ -837,5 +963,68 @@ mod tests {
         assert_eq!(area.active_payload(), Some(&"b".to_string()));
         assert_eq!(area.remove(0), Some("b".into()));
         assert_eq!(area.active_index(), None);
+    }
+
+    #[test]
+    fn cascade_slots_step_title_height_and_wrap_into_columns() {
+        // Qt6 probe (`qt_reference --mdi`): cascade step is (10, title h).
+        // 400x300 viewport with 200x100 content → frame 200x124:
+        // rows = (300-28-124)/24 + 1 = 7, col_step = 400/2 = 200,
+        // cols = (400-32-40)/200 + 1 = 2 → 14 slots before wrapping.
+        let mut area = QMdiArea::new(QRectF::new(0.0, 0.0, 400.0, 300.0));
+        let mut frames = Vec::new();
+        for i in 0..15 {
+            let index =
+                area.add_subwindow(format!("W{i}"), i, QSizeF::new(200.0, 100.0));
+            frames.push(area.subwindow(index).unwrap().frame);
+        }
+        // Origin keeps the 32/28 inset; x step 10, y step = title height,
+        // so every following title bar sits directly below the previous.
+        assert_eq!((frames[0].x, frames[0].y), (32.0, 28.0));
+        assert_eq!((frames[1].x, frames[1].y), (42.0, 52.0));
+        assert_eq!((frames[2].x, frames[2].y), (52.0, 76.0));
+        // Slot 7 wraps into the second column at the top…
+        assert_eq!((frames[7].x, frames[7].y), (232.0, 28.0));
+        // …and slot 14 exceeds the visible grid and wraps to the first.
+        assert_eq!((frames[14].x, frames[14].y), (32.0, 28.0));
+    }
+
+    #[test]
+    fn cascade_and_tile_rearrange_normal_windows() {
+        let mut area = area();
+        let mut added = Vec::new();
+        for i in 0..4 {
+            let index = area.add_subwindow(
+                format!("W{i}"),
+                i.to_string(),
+                QSizeF::new(300.0, 150.0),
+            );
+            added.push(index);
+        }
+        // Scatter so the cascade has visible work to do.
+        for (step, &index) in added.iter().enumerate() {
+            area.translate(index, step as f32 * 150.0, 0.0);
+        }
+        area.cascade_subwindows();
+        for (slot, &index) in added.iter().enumerate() {
+            let frame = area.subwindow(index).unwrap().frame;
+            assert_eq!(
+                (frame.x, frame.y),
+                (
+                    32.0 + slot as f32 * 10.0,
+                    28.0 + slot as f32 * QMDI_TITLE_H
+                )
+            );
+        }
+        area.tile_subwindows();
+        let expected = [
+            QRectF::new(0.0, 0.0, 640.0, 400.0),
+            QRectF::new(640.0, 0.0, 640.0, 400.0),
+            QRectF::new(0.0, 400.0, 640.0, 400.0),
+            QRectF::new(640.0, 400.0, 640.0, 400.0),
+        ];
+        for (slot, &index) in added.iter().enumerate() {
+            assert_eq!(area.subwindow(index).unwrap().frame, expected[slot]);
+        }
     }
 }

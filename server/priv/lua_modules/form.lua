@@ -147,6 +147,11 @@ function Form:resize(size_or_w, h)
     self:set_prop("size", size)
 end
 
+-- Move the form to the next cascade slot (size unchanged).
+function Form:cascade()
+    return self:set_prop("cascade", true)
+end
+
 -- Enable/disable interactive resizing (MDI grip and borders).
 function Form:setResizable(enabled)
     self:set_prop("resizable", enabled ~= false)
