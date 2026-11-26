@@ -611,7 +611,8 @@ impl QStyle for QFusionStyle {
             QPixelMetric::FocusFrameWidth => 1.0,
             QPixelMetric::ScrollBarExtent => 14.0,
             QPixelMetric::ScrollBarSliderMin => 26.0,
-            QPixelMetric::TabBarHeight => 22.0,
+            // Fusion: font (~16) + PM_TabBarTabVSpace (12) → ~28 (Qt probe).
+            QPixelMetric::TabBarHeight => 28.0,
             QPixelMetric::MenuItemHeight => 20.0,
         }
     }

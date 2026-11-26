@@ -7,12 +7,14 @@ use crate::widgets::{wrap_text_lines, QWidget, QWidgetId, QWidgetTree, QCOMBO_PO
 mod focus;
 mod scroll;
 mod table;
+mod tabs;
 
 pub use scroll::paint_scroll_bar;
 
 use focus::paint_focus_indicators;
 use scroll::paint_item_views;
 use table::paint_table;
+use tabs::paint_tab_widget;
 
 
 /// Paint a form and its open combo popups. Popups are a top-level layer in
@@ -95,9 +97,16 @@ fn paint_widget(
     let item_qss = resolved_style_part(tree, widget_id, "item");
     let header_qss = resolved_style_part(tree, widget_id, "section");
 
-    paint_widget_background(widget, style, &option, painter, &qss);
+    let tab_page = widget.parent.is_some_and(|parent| {
+        tree.widget(parent)
+            .is_some_and(|node| node.class_name == "QTabWidget")
+    });
+    paint_widget_background(widget, style, &option, painter, &qss, tab_page);
     if widget.class_name == "QSplitter" {
         paint_splitter_handles(tree, widget, painter);
+    }
+    if widget.class_name == "QTabWidget" {
+        paint_tab_widget(widget, style, painter);
     }
     paint_table(widget, painter, style, &item_qss, &header_qss);
     paint_item_views(widget, painter, style, &item_qss, &header_qss);
@@ -209,13 +218,23 @@ fn paint_widget_background(
     option: &QStyleOption,
     painter: &mut QPainter,
     qss: &QStyleDeclarations,
+    tab_page: bool,
 ) {
     let frame = qss_frame_rect(widget, qss);
     let mut frame_option = option.clone();
     frame_option.rect = frame;
     match widget.class_name.as_str() {
-        "QDialog" | "QWidget" => {
+        "QDialog" => {
             painter.draw_commands(&style.draw_primitive(QPrimitiveElement::Panel, &frame_option));
+        }
+        "QWidget" => {
+            // Tab pages sit on Fusion's tab frame (Base-ish), not Window gray.
+            if tab_page {
+                let fill = widget.palette.color(QPaletteRole::Base).darker(101);
+                painter.fill_rect(frame, fill);
+            } else {
+                painter.draw_commands(&style.draw_primitive(QPrimitiveElement::Panel, &frame_option));
+            }
         }
         "QGroupBox" => {
             let metrics = QFontMetrics::new(&qss_font(widget, qss));
@@ -249,6 +268,9 @@ fn paint_widget_background(
         }
         "QSplitter" => {
             painter.fill_rect(frame, widget.palette.color(QPaletteRole::Window));
+        }
+        "QTabWidget" => {
+            // Chrome is drawn in `paint_tab_widget` after the background pass.
         }
         _ => {}
     }

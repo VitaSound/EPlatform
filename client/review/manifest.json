@@ -1608,5 +1608,21 @@
     "description": "table and tree side by side",
     "path": "review/forms/gallery/mixed/211_table_and_tree.ui",
     "number": 126
+  },
+  {
+    "id": "gallery/tabs/212_basic_two",
+    "category": "gallery/tabs",
+    "title": "#127 tabs/212_basic_two",
+    "description": "QTabWidget with two pages and cyrillic titles",
+    "path": "review/forms/gallery/tabs/212_basic_two.ui",
+    "number": 127
+  },
+  {
+    "id": "gallery/tabs/213_fields_three",
+    "category": "gallery/tabs",
+    "title": "#128 tabs/213_fields_three",
+    "description": "three tabs with form controls",
+    "path": "review/forms/gallery/tabs/213_fields_three.ui",
+    "number": 128
   }
 ]

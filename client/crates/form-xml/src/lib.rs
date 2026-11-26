@@ -100,6 +100,8 @@ pub struct Widget {
     pub class: String,
     pub name: String,
     pub properties: Vec<(String, PropValue)>,
+    /// `<attribute name="…">` values (e.g. QTabWidget page `title`).
+    pub attributes: Vec<(String, PropValue)>,
     /// Direct child widgets placed by explicit geometry (no layout).
     pub children: Vec<Widget>,
     /// The widget's single layout, if it has one (Qt allows at most one).
@@ -115,6 +117,13 @@ pub struct Widget {
 impl Widget {
     pub fn property(&self, name: &str) -> Option<&PropValue> {
         self.properties
+            .iter()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value)
+    }
+
+    pub fn attribute(&self, name: &str) -> Option<&PropValue> {
+        self.attributes
             .iter()
             .find(|(key, _)| key == name)
             .map(|(_, value)| value)
@@ -292,6 +301,7 @@ fn parse_widget(node: Node<'_, '_>) -> Result<Widget, ParseError> {
     let name = node.attribute("name").unwrap_or("").to_string();
 
     let mut properties = Vec::new();
+    let mut attributes = Vec::new();
     let mut children = Vec::new();
     let mut layout = None;
     let mut actions = Vec::new();
@@ -302,6 +312,11 @@ fn parse_widget(node: Node<'_, '_>) -> Result<Widget, ParseError> {
             "property" => {
                 if let Some(prop) = parse_property(child) {
                     properties.push(prop);
+                }
+            }
+            "attribute" => {
+                if let Some(attr) = parse_property(child) {
+                    attributes.push(attr);
                 }
             }
             "column" => columns.push(parse_column(child)),
@@ -325,6 +340,7 @@ fn parse_widget(node: Node<'_, '_>) -> Result<Widget, ParseError> {
         class,
         name,
         properties,
+        attributes,
         children,
         layout,
         actions,
@@ -1096,6 +1112,39 @@ mod tests {
         assert_eq!(
             form.root.property("weird"),
             Some(&PropValue::Str("text".into()))
+        );
+    }
+
+    #[test]
+    fn parses_tab_widget_page_title_attributes() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0"><class>Dialog</class>
+ <widget class="QDialog" name="Dialog">
+  <widget class="QTabWidget" name="tabs">
+   <property name="currentIndex"><number>1</number></property>
+   <widget class="QWidget" name="pageA">
+    <attribute name="title"><string>Первая</string></attribute>
+   </widget>
+   <widget class="QWidget" name="pageB">
+    <attribute name="title"><string>Вторая</string></attribute>
+   </widget>
+  </widget>
+ </widget>
+</ui>"#;
+        let form = parse(xml).expect("parses");
+        let tabs = &form.root.children[0];
+        assert_eq!(tabs.class, "QTabWidget");
+        assert_eq!(
+            tabs.property("currentIndex"),
+            Some(&PropValue::Int(1))
+        );
+        assert_eq!(
+            tabs.children[0].attribute("title"),
+            Some(&PropValue::Str("Первая".into()))
+        );
+        assert_eq!(
+            tabs.children[1].attribute("title"),
+            Some(&PropValue::Str("Вторая".into()))
         );
     }
 }

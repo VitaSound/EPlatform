@@ -207,6 +207,24 @@ impl Default for QSplitter {
     }
 }
 
+/// `QTabWidget` state. Pages are direct children; titles come from each
+/// page's `<attribute name="title">`. The bar height matches
+/// `QPixelMetric::TabBarHeight` (Fusion).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct QTabWidget {
+    pub current_index: usize,
+    pub titles: Vec<String>,
+}
+
+impl QTabWidget {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+/// Horizontal padding around a tab label (Fusion `PM_TabBarTabHSpace`).
+pub const QTAB_H_SPACE: f32 = 24.0;
+
 /// `QComboBox` popup view state. Item strings live in the `items` property
 /// (the same source the closed combo paints); only the transient open state
 /// is kept here, like `QComboBoxPrivateContainer` in Qt.
@@ -267,6 +285,7 @@ pub struct QWidget {
     pub list: Option<Box<QListWidget>>,
     pub tree: Option<Box<QTreeWidget>>,
     pub splitter: Option<Box<QSplitter>>,
+    pub tabs: Option<Box<QTabWidget>>,
     pub combo_popup: Option<QComboBoxPopup>,
 }
 
@@ -292,9 +311,16 @@ impl QWidget {
         } else {
             None
         };
+        let tabs = if class_name == "QTabWidget" {
+            Some(Box::new(QTabWidget::new()))
+        } else {
+            None
+        };
         let focus_policy = match class_name.as_str() {
             "QLineEdit" | "QPushButton" | "QTableWidget" | "QListWidget" | "QTreeWidget"
-            | "QComboBox" | "QCheckBox" | "QRadioButton" => QFocusPolicy::StrongFocus,
+            | "QComboBox" | "QCheckBox" | "QRadioButton" | "QTabWidget" => {
+                QFocusPolicy::StrongFocus
+            }
             "QAbstractButton" | "QToolButton" => QFocusPolicy::StrongFocus,
             _ => QFocusPolicy::NoFocus,
         };
@@ -333,6 +359,7 @@ impl QWidget {
             list,
             tree,
             splitter,
+            tabs,
             combo_popup: None,
         }
     }
@@ -417,6 +444,7 @@ impl QWidget {
             "QTableWidget" => QSizeF::new(256.0, 192.0),
             "QListWidget" | "QTreeWidget" => QSizeF::new(256.0, 192.0),
             "QSplitter" => QSizeF::new(256.0, 192.0),
+            "QTabWidget" => QSizeF::new(256.0, 192.0),
             "QGroupBox" => {
                 // QGroupBox stores its caption in `title`, not `text`.
                 let title = self
@@ -638,6 +666,7 @@ impl QWidgetTree {
             class.as_str(),
             "QTableWidget" | "QListWidget" | "QTreeWidget"
         );
+        let (ok, tab_geometry) = {
         let Some(widget) = self.widgets.get_mut(id) else {
             return false;
         };
@@ -725,6 +754,14 @@ impl QWidgetTree {
                 }
             }
         }
+        let tab_index_changed = widget.class_name == "QTabWidget" && name == "currentIndex";
+        if tab_index_changed {
+            if let Some(tabs) = widget.tabs.as_mut() {
+                if let Some(index) = value_as_i64(&value) {
+                    tabs.current_index = index.max(0) as usize;
+                }
+            }
+        }
         if widget.class_name == "QComboBox" && name == "text" {
             // `setCurrentText` style updates are represented by `text`; keep
             // the current index in sync with the item list when possible.
@@ -746,6 +783,11 @@ impl QWidgetTree {
             widget.cursor_visible = true;
         }
         let property_name = name.clone();
+        let tab_geometry = if tab_index_changed {
+            Some(widget.geometry)
+        } else {
+            None
+        };
         widget.set_property(name, value);
         if widget.class_name == "QComboBox" {
             if matches!(
@@ -773,7 +815,13 @@ impl QWidgetTree {
                 }
             }
         }
-        !is_item_view || handled
+        (!is_item_view || handled, tab_geometry)
+        };
+        if let Some(geometry) = tab_geometry {
+            self.sync_tab_pages(id);
+            self.layout_tab_widget(id, geometry);
+        }
+        ok
     }
 
     pub fn translate(&mut self, widget: QWidgetId, dx: f32, dy: f32) {
@@ -1447,6 +1495,171 @@ impl QWidgetTree {
         }
     }
 
+    fn tab_bar_height() -> f32 {
+        // Matches `QFusionStyle::pixel_metric(TabBarHeight)` / Qt probe (~28).
+        28.0
+    }
+
+    /// Sync page visibility to `tabs.current_index` (only the current page
+    /// is visible, like `QStackedWidget` inside `QTabWidget`).
+    fn sync_tab_pages(&mut self, widget: QWidgetId) {
+        let Some(node) = self.widgets.get(widget) else {
+            return;
+        };
+        let Some(tabs) = node.tabs.as_deref() else {
+            return;
+        };
+        let current = tabs.current_index;
+        let children = node.children.clone();
+        for (index, child) in children.into_iter().enumerate() {
+            if let Some(page) = self.widgets.get_mut(child) {
+                page.visible = index == current;
+            }
+        }
+    }
+
+    /// Absolute tab label rectangles left-to-right inside the tab bar.
+    pub fn tab_rects(&self, widget: QWidgetId) -> Vec<QRectF> {
+        let Some(node) = self.widgets.get(widget) else {
+            return Vec::new();
+        };
+        let Some(tabs) = node.tabs.as_deref() else {
+            return Vec::new();
+        };
+        let frame = node.geometry;
+        let bar_h = Self::tab_bar_height();
+        let metrics = QFontMetrics::new(&node.font);
+        // Flush with the tab widget's left edge (Qt probe: no 2px inset).
+        let mut x = frame.x;
+        let mut rects = Vec::with_capacity(tabs.titles.len());
+        for (index, title) in tabs.titles.iter().enumerate() {
+            let label = if title.is_empty() {
+                format!("Tab {}", index + 1)
+            } else {
+                title.clone()
+            };
+            let width = (metrics.horizontal_advance(&label) + QTAB_H_SPACE).max(40.0);
+            let selected = index == tabs.current_index;
+            let y = if selected {
+                frame.y
+            } else {
+                frame.y + 2.0
+            };
+            let height = if selected { bar_h } else { bar_h - 2.0 };
+            rects.push(QRectF::new(x, y, width, height));
+            x += width - 1.0;
+        }
+        rects
+    }
+
+    pub fn tab_at(&self, point: QPointF) -> Option<(QWidgetId, usize)> {
+        for (id, widget) in self.widgets.iter().enumerate().rev() {
+            if widget.tabs.is_none() || !widget.visible || !widget.enabled {
+                continue;
+            }
+            let bar = QRectF::new(
+                widget.geometry.x,
+                widget.geometry.y,
+                widget.geometry.width,
+                Self::tab_bar_height(),
+            );
+            if !bar.contains(point) {
+                continue;
+            }
+            for (index, rect) in self.tab_rects(id).into_iter().enumerate() {
+                if rect.contains(point) {
+                    return Some((id, index));
+                }
+            }
+        }
+        None
+    }
+
+    pub fn set_tab_current_index(&mut self, widget: QWidgetId, index: usize) -> bool {
+        let geometry = {
+            let Some(node) = self.widgets.get_mut(widget) else {
+                return false;
+            };
+            let page_count = node.children.len();
+            let Some(tabs) = node.tabs.as_mut() else {
+                return false;
+            };
+            if index >= tabs.titles.len().max(page_count) {
+                return false;
+            }
+            if tabs.current_index == index {
+                return false;
+            }
+            tabs.current_index = index;
+            node.set_property("currentIndex", QVariant::Int(index as i64));
+            node.geometry
+        };
+        self.sync_tab_pages(widget);
+        self.layout_tab_widget(widget, geometry);
+        true
+    }
+
+    fn measure_tab_widget(&mut self, widget: QWidgetId) -> QSizeF {
+        let Some(node) = self.widgets.get(widget) else {
+            return QSizeF::default();
+        };
+        let children = node.children.clone();
+        let titles = node
+            .tabs
+            .as_deref()
+            .map(|tabs| tabs.titles.clone())
+            .unwrap_or_default();
+        let font = node.font.clone();
+        let mut page_w = 0.0_f32;
+        let mut page_h = 0.0_f32;
+        for child in &children {
+            let hint = self.measure(*child);
+            page_w = page_w.max(hint.width);
+            page_h = page_h.max(hint.height);
+        }
+        let metrics = QFontMetrics::new(&font);
+        let mut bar_w = 0.0_f32;
+        for (index, title) in titles.iter().enumerate() {
+            let label = if title.is_empty() {
+                format!("Tab {}", index + 1)
+            } else {
+                title.clone()
+            };
+            bar_w += (metrics.horizontal_advance(&label) + QTAB_H_SPACE).max(40.0) - 1.0;
+        }
+        bar_w = bar_w.max(0.0) + 1.0;
+        let hint = QSizeF::new(page_w.max(bar_w), page_h + Self::tab_bar_height());
+        if let Some(node) = self.widgets.get_mut(widget) {
+            node.size_hint = hint;
+        }
+        hint
+    }
+
+    fn layout_tab_widget(&mut self, widget: QWidgetId, rect: QRectF) {
+        if let Some(node) = self.widgets.get_mut(widget) {
+            node.geometry = rect;
+        }
+        let children = self
+            .widgets
+            .get(widget)
+            .map(|node| node.children.clone())
+            .unwrap_or_default();
+        let bar_h = Self::tab_bar_height();
+        // Inset like Qt's stacked widget (≈2px) so the pane outline stays
+        // visible after the page fills Base.
+        let inset = 1.0;
+        let page = QRectF::new(
+            rect.x + inset,
+            rect.y + bar_h,
+            (rect.width - inset * 2.0).max(0.0),
+            (rect.height - bar_h - inset).max(0.0),
+        );
+        for child in children {
+            self.layout_widget(child, page);
+        }
+        self.sync_tab_pages(widget);
+    }
+
     fn measure_splitter(&mut self, widget: QWidgetId) -> QSizeF {
         let Some(node) = self.widgets.get(widget) else {
             return QSizeF::default();
@@ -1888,6 +2101,16 @@ impl QWidgetTree {
                 clicked: false,
             });
         }
+        if let Some((tabs, index)) = self.tab_at(point) {
+            self.set_focus(tabs);
+            self.set_tab_current_index(tabs, index);
+            self.mouse_grab = Some(tabs);
+            return Some(QWidgetEvent {
+                widget: tabs,
+                event_type: QEventType::MouseButtonPress,
+                clicked: false,
+            });
+        }
         let widget = self.widget_at(root, point)?;
         if self.handle_scrollbar_press(widget, point) {
             self.mouse_grab = Some(widget);
@@ -2322,6 +2545,13 @@ impl QWidgetTree {
         {
             return self.measure_splitter(widget);
         }
+        if self
+            .widgets
+            .get(widget)
+            .is_some_and(|node| node.tabs.is_some())
+        {
+            return self.measure_tab_widget(widget);
+        }
         let Some(node) = self.widgets.get_mut(widget) else {
             return QSizeF::default();
         };
@@ -2444,12 +2674,15 @@ impl QWidgetTree {
         };
         let parent_origin = (parent.geometry.x, parent.geometry.y);
         let children = parent.children.clone();
-        // QSplitter owns its children geometry; Designer may still store a
-        // `<property name="geometry">` on them, which must not override the
-        // splitter layout.
-        let splitter_parent = parent.class_name == "QSplitter";
+        // QSplitter / QTabWidget own their children geometry; Designer may
+        // still store a `<property name="geometry">` on them, which must not
+        // override the owner layout.
+        let owned_parent = matches!(
+            parent.class_name.as_str(),
+            "QSplitter" | "QTabWidget"
+        );
         for child in children {
-            if !splitter_parent {
+            if !owned_parent {
                 if let Some(relative) = self.widgets[child].explicit_position {
                     self.widgets[child].geometry.x = parent_origin.0 + relative.x;
                     self.widgets[child].geometry.y = parent_origin.1 + relative.y;
@@ -2469,6 +2702,14 @@ impl QWidgetTree {
             .is_some_and(|node| node.splitter.is_some());
         if splitter {
             self.layout_splitter(widget, rect);
+            return;
+        }
+        let tabs = self
+            .widgets
+            .get(widget)
+            .is_some_and(|node| node.tabs.is_some());
+        if tabs {
+            self.layout_tab_widget(widget, rect);
             return;
         }
         let Some(node) = self.widgets.get_mut(widget) else {
@@ -4626,6 +4867,36 @@ fn load_widget(
     for child in &spec.children {
         load_widget(tree, child, Some(id), false, true);
     }
+    if spec.class == "QTabWidget" {
+        let titles: Vec<String> = spec
+            .children
+            .iter()
+            .map(|page| {
+                page.attribute("title")
+                    .and_then(|value| match value {
+                        form_xml::PropValue::Str(text) | form_xml::PropValue::Enum(text) => {
+                            Some(text.clone())
+                        }
+                        _ => value.as_str().map(str::to_string),
+                    })
+                    .unwrap_or_else(|| page.name.clone())
+            })
+            .collect();
+        let current = tree
+            .widgets
+            .get(id)
+            .and_then(|node| node.property("currentIndex"))
+            .and_then(value_as_i64)
+            .unwrap_or(0)
+            .max(0) as usize;
+        if let Some(node) = tree.widgets.get_mut(id) {
+            if let Some(tabs) = node.tabs.as_mut() {
+                tabs.titles = titles;
+                tabs.current_index = current.min(node.children.len().saturating_sub(1));
+            }
+        }
+        tree.sync_tab_pages(id);
+    }
     id
 }
 
@@ -5826,5 +6097,68 @@ mod tests {
             lines as f32 * metrics.height()
         );
 
+    }
+
+    #[test]
+    fn tab_widget_switches_pages_on_click() {
+        const UI: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0"><class>Dialog</class>
+ <widget class="QDialog" name="Dialog">
+  <property name="geometry"><rect><x>0</x><y>0</y><width>420</width><height>280</height></rect></property>
+  <layout class="QVBoxLayout" name="verticalLayout">
+   <item>
+    <widget class="QTabWidget" name="tabs">
+     <property name="currentIndex"><number>0</number></property>
+     <widget class="QWidget" name="pageA">
+      <attribute name="title"><string>Первая</string></attribute>
+      <layout class="QVBoxLayout" name="layA">
+       <item><widget class="QLabel" name="labelA">
+        <property name="text"><string>Page A</string></property>
+       </widget></item>
+      </layout>
+     </widget>
+     <widget class="QWidget" name="pageB">
+      <attribute name="title"><string>Вторая</string></attribute>
+      <layout class="QVBoxLayout" name="layB">
+       <item><widget class="QLabel" name="labelB">
+        <property name="text"><string>Page B</string></property>
+       </widget></item>
+      </layout>
+     </widget>
+    </widget>
+   </item>
+  </layout>
+ </widget>
+</ui>"#;
+        let (mut tree, root) = load_ui(UI).expect("loads ui");
+        tree.layout(root, tree.widget(root).unwrap().geometry);
+        let tabs = tree.find_widget("tabs").expect("tabs");
+        let page_a = tree.find_widget("pageA").expect("pageA");
+        let page_b = tree.find_widget("pageB").expect("pageB");
+        assert!(tree.widget(page_a).unwrap().visible);
+        assert!(!tree.widget(page_b).unwrap().visible);
+        assert_eq!(
+            tree.widget(tabs).unwrap().tabs.as_ref().unwrap().titles,
+            vec!["Первая".to_string(), "Вторая".to_string()]
+        );
+
+        let rects = tree.tab_rects(tabs);
+        assert_eq!(rects.len(), 2);
+        let click = crate::gui::QPointF::new(
+            rects[1].x + rects[1].width / 2.0,
+            rects[1].y + rects[1].height / 2.0,
+        );
+        tree.mouse_press(root, click);
+        tree.mouse_release(root, click);
+        assert!(!tree.widget(page_a).unwrap().visible);
+        assert!(tree.widget(page_b).unwrap().visible);
+        assert_eq!(
+            tree.property(tabs, "currentIndex"),
+            Some(&QVariant::Int(1))
+        );
+
+        tree.set_property(tabs, "currentIndex", QVariant::Int(0));
+        assert!(tree.widget(page_a).unwrap().visible);
+        assert!(!tree.widget(page_b).unwrap().visible);
     }
 }

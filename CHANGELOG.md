@@ -2,6 +2,20 @@
 
 ## 2026-11-27
 
+### Волна: agent-plan 30 — QTabWidget / QTabBar
+
+- **Parse.** `form-xml` читает `<attribute>` (title страниц вкладки).
+- **Model/layout.** `QTabWidget` в `rqt`: titles + `currentIndex`, только
+  текущая страница `visible`; bar height Fusion ≈ 28; page inset 1px, чтобы
+  не затирать outline pane (как Qt stacked).
+- **Paint/events.** Fusion-like north tabs: flush left (без +2), idle ≈232 /
+  frame ≈252, тёмный ободок 171 через 1px fills; клик переключает индекс
+  (`setCurrentIndex` / Lua `currentIndex`).
+- **Gallery / review.** `#127`/`#128` — `gallery/tabs/212_basic_two`,
+  `213_fields_three`; qt/rust PNG + обновлённый `review/index.html`.
+- **Тесты.** `tab_widget_switches_pages_on_click`; form-xml attribute parse;
+  `cargo test -p rqt -p form-xml -p app --lib` зелёные.
+
 ### Волна: agent-plans 00–22 (Qt graphics parity)
 
 Закрыты handoff-планы из `docs/agent-plans/` (Status: done). Кратко по номерам:

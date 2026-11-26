@@ -1,6 +1,6 @@
 # 30 — QTabWidget / QTabBar
 
-Status: ready
+Status: done
 Priority: P2
 Depends-on: [01-canvas-geometry-pointer.md, 06-buttons-combo-qt-rounding.md]
 Blocks: [35-qtoolbox.md]
@@ -51,8 +51,8 @@ Estimate: L
 
 ## Tests / acceptance
 
-- [ ] Unit + gallery golden within tolerance
-- [ ] `cargo test` relevant crates
+- [x] Unit + gallery golden within tolerance
+- [x] `cargo test` relevant crates
 
 ## Agent handoff prompt (copy-paste)
 

@@ -46,6 +46,25 @@ def widget(cls, name, props="", layout=""):
     return f'<widget class="{cls}" name="{name}">{props}{layout}</widget>'
 
 
+def attr_text(name, text):
+    return f'<attribute name="{name}"><string>{esc(text)}</string></attribute>'
+
+
+def tab_page(name, title, items, spacing=6, margins=9):
+    """QTabWidget page: child QWidget with title attribute + layout."""
+    return widget(
+        "QWidget",
+        name,
+        attr_text("title", title),
+        layout("QVBoxLayout", name + "Layout", items, spacing, margins),
+    )
+
+
+def tab_widget(name, pages, current=0):
+    body = "".join(pages)
+    return widget("QTabWidget", name, prop_int("currentIndex", current), body)
+
+
 def label(name, text):
     return widget("QLabel", name, prop_text("text", text))
 
@@ -1723,6 +1742,29 @@ def build_gallery_cases():
         layout("QHBoxLayout", "buttons",
                [label("l1", "Строк: 8"), spacer(True),
                 button("b1", "Выполнить")], 6, 0)], width=620, height=380)
+
+    category = "gallery/tabs"
+    vg(category, "basic_two", "QTabWidget with two pages and cyrillic titles",
+       [tab_widget("tabs", [
+           tab_page("pageA", "Первая", [label("l1", "Содержимое первой вкладки")]),
+           tab_page("pageB", "Вторая", [label("l2", "Содержимое второй вкладки")]),
+       ])], width=460, height=280)
+    vg(category, "fields_three", "three tabs with form controls",
+       [tab_widget("tabs", [
+           tab_page("pageGeneral", "Общие", [
+               label("l1", "Имя:"), line("e1", "Значение"),
+               checkbox("c1", "Активно", True),
+           ]),
+           tab_page("pageExtra", "Дополнительно", [
+               label("l2", "Тип:"), combo("combo1"),
+               radio("r1", "Вариант A", True), radio("r2", "Вариант B", False),
+           ]),
+           tab_page("pageNotes", "Заметки", [
+               label("l3", "Комментарий"),
+               line("e2", ""),
+               button("b1", "Сохранить"),
+           ]),
+       ], current=1)], width=500, height=320)
 
     assert len(cases) >= 100, f"gallery too small: {len(cases)}"
     return cases

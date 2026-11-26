@@ -127,4 +127,6 @@ return {
     { number = 124, id = "gallery/mixed/209_checks_panel", category = "gallery/mixed", ui = "gallery/mixed/209_checks_panel.ui" },
     { number = 125, id = "gallery/mixed/210_nav_plus_detail", category = "gallery/mixed", ui = "gallery/mixed/210_nav_plus_detail.ui" },
     { number = 126, id = "gallery/mixed/211_table_and_tree", category = "gallery/mixed", ui = "gallery/mixed/211_table_and_tree.ui" },
+    { number = 127, id = "gallery/tabs/212_basic_two", category = "gallery/tabs", ui = "gallery/tabs/212_basic_two.ui" },
+    { number = 128, id = "gallery/tabs/213_fields_three", category = "gallery/tabs", ui = "gallery/tabs/213_fields_three.ui" },
 }
