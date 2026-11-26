@@ -108,6 +108,8 @@ pub struct Widget {
     pub actions: Vec<Action>,
     /// `<addaction name="...">` references in document order.
     pub add_actions: Vec<String>,
+    /// `<column>` captions (QTableWidget/QTreeWidget header sections).
+    pub columns: Vec<String>,
 }
 
 impl Widget {
@@ -294,6 +296,7 @@ fn parse_widget(node: Node<'_, '_>) -> Result<Widget, ParseError> {
     let mut layout = None;
     let mut actions = Vec::new();
     let mut add_actions = Vec::new();
+    let mut columns = Vec::new();
     for child in node.children().filter(|n| n.is_element()) {
         match child.tag_name().name() {
             "property" => {
@@ -301,6 +304,7 @@ fn parse_widget(node: Node<'_, '_>) -> Result<Widget, ParseError> {
                     properties.push(prop);
                 }
             }
+            "column" => columns.push(parse_column(child)),
             "widget" => {
                 children.push(parse_widget(child)?);
             }
@@ -325,7 +329,27 @@ fn parse_widget(node: Node<'_, '_>) -> Result<Widget, ParseError> {
         layout,
         actions,
         add_actions,
+        columns,
     })
+}
+
+/// `<column>` caption: `<column><property name="text"><string>…`.
+/// Missing text means an empty section (Qt then shows no label).
+fn parse_column(node: Node<'_, '_>) -> String {
+    for child in node.children().filter(|n| n.is_element()) {
+        if child.tag_name().name() != "property" {
+            continue;
+        }
+        if let Some((name, value)) = parse_property(child) {
+            if name == "text" {
+                return match value {
+                    PropValue::Str(text) | PropValue::Enum(text) => text,
+                    _ => String::new(),
+                };
+            }
+        }
+    }
+    String::new()
 }
 
 /// `<action>` definition: name plus its `<property>` children.

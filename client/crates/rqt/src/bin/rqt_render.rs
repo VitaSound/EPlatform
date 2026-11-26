@@ -1,4 +1,4 @@
-use rqt::gui::{QColor, QPainter};
+use rqt::gui::{QColor, QPainter, QRectF};
 use rqt::paint::paint_widget_tree;
 use rqt::raster::rasterize;
 use rqt::style::QFusionStyle;
@@ -17,6 +17,12 @@ fn main() -> Result<(), String> {
     let geometry = tree.widget(root).ok_or("missing root widget")?.geometry;
     let width = geometry.width.max(min.width).ceil().max(1.0) as u32;
     let height = geometry.height.max(min.height).ceil().max(1.0) as u32;
+    // Relayout at the clamped size: `load_ui` laid the children out at the
+    // .ui geometry, so a window widened to the minimum kept the narrow
+    // geometry and clipped long labels (gallery/100, /105, /121: Qt shows
+    // the full line, we cut it). Qt lays out when the widget is shown, i.e.
+    // at the final size.
+    tree.layout(root, QRectF::new(0.0, 0.0, width as f32, height as f32));
 
     tree.focus_first(root);
     let mut painter = QPainter::new();

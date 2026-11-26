@@ -109,14 +109,17 @@ impl QScrollBar {
 
     pub fn groove_rect(&self, rect: QRectF) -> QRectF {
         let extent = self.cross_extent(rect);
+        // The groove (and therefore the slider) sits inside the scrollbar's
+        // frame: Qt insets it by 1 px on the cross axis top/left, while the
+        // arrow buttons keep the full extent (gallery/tables/35).
         match self.orientation {
             QOrientation::Vertical => {
                 let length = (rect.height - extent * 2.0).max(0.0);
-                QRectF::new(rect.x, rect.y + extent, rect.width, length)
+                QRectF::new(rect.x + 1.0, rect.y + extent, (rect.width - 1.0).max(0.0), length)
             }
             QOrientation::Horizontal => {
                 let length = (rect.width - extent * 2.0).max(0.0);
-                QRectF::new(rect.x + extent, rect.y, length, rect.height)
+                QRectF::new(rect.x + extent, rect.y + 1.0, length, (rect.height - 1.0).max(0.0))
             }
         }
     }
@@ -456,7 +459,9 @@ mod tests {
             bar.sub_control_rect(rect, QScrollBarSubControl::AddLine),
             QRectF::new(10.0, 220.0, 12.0, 12.0)
         );
-        assert_eq!(bar.groove_rect(rect), QRectF::new(10.0, 32.0, 12.0, 188.0));
+        // The groove is inset 1 px on the cross axis (left edge) like Qt's
+        // scrollbar frame; the arrows keep the full width.
+        assert_eq!(bar.groove_rect(rect), QRectF::new(11.0, 32.0, 11.0, 188.0));
     }
 
     #[test]
@@ -465,13 +470,13 @@ mod tests {
         let rect = QRectF::new(0.0, 0.0, 12.0, 212.0);
         bar.set_range(0.0, 400.0, 100.0);
         assert_eq!(bar.slider_length(188.0), 38.0);
-        assert_eq!(bar.slider_rect(rect), QRectF::new(0.0, 12.0, 12.0, 38.0));
+        assert_eq!(bar.slider_rect(rect), QRectF::new(1.0, 12.0, 11.0, 38.0));
 
         bar.set_value(200.0);
-        assert_eq!(bar.slider_rect(rect), QRectF::new(0.0, 87.0, 12.0, 38.0));
+        assert_eq!(bar.slider_rect(rect), QRectF::new(1.0, 87.0, 11.0, 38.0));
 
         bar.set_value(400.0);
-        assert_eq!(bar.slider_rect(rect), QRectF::new(0.0, 162.0, 12.0, 38.0));
+        assert_eq!(bar.slider_rect(rect), QRectF::new(1.0, 162.0, 11.0, 38.0));
     }
 
     #[test]

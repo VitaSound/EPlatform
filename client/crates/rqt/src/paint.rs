@@ -580,7 +580,13 @@ fn paint_list_widget(widget: &QWidget, painter: &mut QPainter, item_qss: &QStyle
     let palette = &widget.palette;
     let layout = list.scroll_area(rect);
     let viewport = layout.viewport;
-    painter.fill_rect(rect, palette.color(QPaletteRole::Base));
+    // Disabled lists paint gray (gallery/lists/188_list_disabled).
+    let list_fill = if widget.enabled {
+        palette.color(QPaletteRole::Base)
+    } else {
+        palette.color(QPaletteRole::Window)
+    };
+    painter.fill_rect(rect, list_fill);
     painter.stroke_rect(rect, 1.0, palette.color(QPaletteRole::Mid));
 
     let metrics = QFontMetrics::new(&widget.font);
@@ -659,7 +665,7 @@ pub fn paint_scroll_bar(
     }
     let base = palette.color(QPaletteRole::Window);
     let disabled = palette.color(QPaletteRole::Mid);
-    let border = if enabled { base.darker(140) } else { disabled };
+    let border = if enabled { base.darker(124) } else { disabled };
     let arrow_color = if enabled {
         palette.color(QPaletteRole::ButtonText).with_alpha(0.70)
     } else {
@@ -668,7 +674,9 @@ pub fn paint_scroll_bar(
     painter.fill_rect(rect, base);
     let groove = bar.groove_rect(rect);
     if groove.width > 0.0 && groove.height > 0.0 {
-        painter.fill_rect(groove, base.darker(104));
+        // Qt's groove slivers (the strip visible outside slider and pages)
+        // carry a light vertical gradient, 253 → 242 (probed on tables/35).
+        painter.fill_linear_gradient_rect(groove, 0.0, base.lighter(106), base.lighter(101));
     }
 
     let mut arrow = |control: QScrollBarSubControl, up: bool| {
@@ -687,7 +695,7 @@ pub fn paint_scroll_bar(
         } else {
             base
         };
-        painter.fill_linear_gradient_rect(area, 0.0, fill.lighter(104), fill.darker(102));
+        painter.fill_linear_gradient_rect(area, 0.0, fill.lighter(106), fill.lighter(101));
         paint_scroll_arrow(painter, area, bar.orientation, up, arrow_color);
         painter.fill_rect(
             QRectF::new(area.x, area.y, area.width, 1.0),
@@ -697,33 +705,70 @@ pub fn paint_scroll_bar(
     arrow(QScrollBarSubControl::SubLine, true);
     arrow(QScrollBarSubControl::AddLine, false);
 
+    // The page regions beside the handle: Qt paints SCROLLBAR_SUB/ADDPAGE
+    // as a flat darker rectangle (230) with a two-pixel darker tail at the
+    // bottom (227/225 in the probes), distinct from the light groove
+    // (gallery/tables/35_table_2x5).
+    let page_fill = if enabled { base.darker(104) } else { base };
+    for page in [QScrollBarSubControl::SubPage, QScrollBarSubControl::AddPage] {
+        let area = bar.sub_control_rect(rect, page);
+        if area.width <= 0.0 || area.height <= 0.0 {
+            continue;
+        }
+        painter.fill_rect(area, page_fill);
+        if enabled && area.height >= 4.0 && area.width > 2.0 {
+            painter.fill_rect(
+                QRectF::new(area.x + 1.0, area.bottom() - 2.0, area.width - 2.0, 1.0),
+                base.darker(105),
+            );
+            painter.fill_rect(
+                QRectF::new(area.x + 1.0, area.bottom() - 1.0, area.width - 2.0, 1.0),
+                base.darker(106),
+            );
+        }
+    }
+
     let slider = bar.slider_rect(rect);
     if slider.width <= 0.0 || slider.height <= 0.0 {
         return;
     }
     let pressed = bar.pressed == Some(QScrollBarSubControl::Slider);
     let hovered = bar.hovered == Some(QScrollBarSubControl::Slider);
-    let color = if !enabled {
-        base
-    } else if pressed {
-        base.darker(112)
-    } else if hovered {
-        base.lighter(106)
+    if enabled && !pressed && !hovered {
+        // Qt's handle is the light gradient rectangle (253 → 242) — the
+        // "светлый прямоугольник" of the feedback — spanning the full
+        // groove height.
+        painter.fill_linear_gradient_rect(slider, 0.0, base.lighter(106), base.lighter(101));
     } else {
-        base
-    };
-    painter.fill_linear_gradient_rect(slider, 2.0, color.lighter(104), color.darker(102));
-    painter.stroke_rounded_rect(
-        QRectF::new(
-            slider.x + 0.5,
-            slider.y + 0.5,
-            (slider.width - 1.0).max(1.0),
-            (slider.height - 1.0).max(1.0),
-        ),
-        2.0,
-        1.0,
+        let fill = if !enabled {
+            base
+        } else if pressed {
+            base.darker(112)
+        } else {
+            base.lighter(106)
+        };
+        painter.fill_rect(slider, fill);
+    }
+    // Qt's slider has a single 1 px border on its sides only: it spans the
+    // full groove height, so the top and bottom merge with the scrollbar's
+    // own frame (gallery/tables/35_table_2x5: our rounded box looked
+    // thicker than Qt's).
+    painter.fill_rect(QRectF::new(slider.x, slider.y, 1.0, slider.height), border);
+    painter.fill_rect(
+        QRectF::new(slider.right() - 1.0, slider.y, 1.0, slider.height),
         border,
     );
+    // The scrollbar's frame line along the groove (top edge for a horizontal
+    // bar, left edge for a vertical one), crossing both the page regions and
+    // the handle like Qt's 186/196 probe values.
+    match bar.orientation {
+        QOrientation::Horizontal => {
+            painter.fill_rect(QRectF::new(groove.x, rect.y, groove.width, 1.0), border);
+        }
+        QOrientation::Vertical => {
+            painter.fill_rect(QRectF::new(rect.x, groove.y, 1.0, groove.height), border);
+        }
+    }
 }
 
 fn paint_scroll_arrow(
@@ -783,7 +828,20 @@ fn paint_header_gradient(widget: &QWidget, painter: &mut QPainter, rect: QRectF)
 }
 
 fn paint_header_section(widget: &QWidget, painter: &mut QPainter, rect: QRectF) {
-    paint_header_gradient(widget, painter, rect);
+    // Qt's header gradient runs from 251 to 230 over the 20 visible rows
+    // (probed on the offscreen renders: start Window lighter 105 %, end
+    // darker 104 %); the bottom pixel is the section border.
+    let base = widget.palette.color(QPaletteRole::Window);
+    // Qt's section: a slow 251 → 236 gradient over the visible rows, then a
+    // single 230 edge row above the 171 bottom border (probed y35..54).
+    let gradient = QRectF::new(rect.x, rect.y, rect.width, (rect.height - 2.0).max(1.0));
+    painter.fill_linear_gradient_rect(gradient, 0.0, base.lighter(105), base.darker(101));
+    if rect.height >= 3.0 {
+        painter.fill_rect(
+            QRectF::new(rect.x, rect.bottom() - 2.0, rect.width, 1.0),
+            base.darker(104),
+        );
+    }
     if rect.width > 0.0 && rect.height > 0.0 {
         painter.fill_rect(
             QRectF::new(rect.x, rect.y, rect.width, 1.0),
@@ -822,7 +880,13 @@ fn paint_tree_widget(
         viewport.width,
         (viewport.height - QVIEW_HEADER_H).max(0.0),
     );
-    painter.fill_rect(rect, palette.color(QPaletteRole::Base));
+    // Disabled trees paint gray (gallery/lists/189_tree_disabled).
+    let tree_fill = if widget.enabled {
+        palette.color(QPaletteRole::Base)
+    } else {
+        palette.color(QPaletteRole::Window)
+    };
+    painter.fill_rect(rect, tree_fill);
     let metrics = QFontMetrics::new(&widget.font);
     let line_height = metrics.height();
     let header_color = header_qss
@@ -972,7 +1036,12 @@ fn paint_control_indicator(widget: &QWidget, painter: &mut QPainter) {
         };
         painter.fill_ellipse(
             QRectF::new(x, y, size, size),
-            widget.palette.color(QPaletteRole::Base),
+            // Disabled radio circles are gray inside (gallery/states/153).
+            if widget.enabled {
+                widget.palette.color(QPaletteRole::Base)
+            } else {
+                widget.palette.color(QPaletteRole::Window)
+            },
         );
         painter.stroke_ellipse(QRectF::new(x, y, size, size), 1.0, outline);
         if checked {
@@ -1117,6 +1186,15 @@ fn paint_table(
                 }
             }
         }
+        // Right border of the row-number cells: Qt draws a 1 px line between
+        // the vertical header and the cells (color 171), from the header's
+        // bottom to the last row line (gallery/tables/33, /172).
+        if content_h > 0.0 {
+            painter.fill_rect(
+                QRectF::new(body_x - 1.0, body_top - 1.0, 1.0, content_h),
+                palette.color(QPaletteRole::Window).darker(140),
+            );
+        }
         painter.restore();
     }
 
@@ -1223,9 +1301,24 @@ fn paint_table(
         if let Some(last) = rows.clone().last() {
             horizontal.push(viewport.y + table.row_y(last) + QTABLE_ROW_H);
         }
+        let last_x = if table.model.column_count() == 0 {
+            body_x
+        } else {
+            column_left(table.model.column_count() - 1)
+                + table.model.column_width(table.model.column_count() - 1)
+        };
         for y in &horizontal {
+            // Qt paints the separator on the row's top edge, i.e. one pixel
+            // above the row's content; the first row's top edge is the
+            // header's bottom line and is already painted there.
+            let line_y = *y - 1.0;
+            if line_y <= body_top - 1.0 {
+                continue;
+            }
+            // Lines only span the cells: Qt draws nothing in the empty area
+            // right of the last column (gallery/grid/113, tables/172).
             painter.fill_rect(
-                QRectF::new(body_x, *y, (right - body_x).max(0.0), 1.0),
+                QRectF::new(body_x, line_y, (last_x - body_x).max(0.0), 1.0),
                 grid,
             );
         }
@@ -1236,17 +1329,13 @@ fn paint_table(
             let x = column_left(column) - 1.0;
             painter.fill_rect(QRectF::new(x, body_top, 1.0, content_h), grid);
         }
-        let last_x = if table.model.column_count() == 0 {
-            body_x
-        } else {
-            column_left(table.model.column_count() - 1)
-                + table.model.column_width(table.model.column_count() - 1)
-        };
-        painter.fill_rect(QRectF::new(last_x, body_top, 1.0, content_h), grid);
-        painter.fill_rect(
-            QRectF::new(body_x - 1.0, body_top, 1.0, content_h),
-            header_grid,
-        );
+        if table.model.column_count() > 0 {
+            // The cells' right border sits on the last column boundary
+            // (x - 1 like the internal borders); drawing at `last_x` left a
+            // white gap next to the cell fill — a visible double line
+            // (gallery/tables/172, /178).
+            painter.fill_rect(QRectF::new(last_x - 1.0, body_top, 1.0, content_h), grid);
+        }
         painter.restore();
 
         painter.save();
@@ -1257,7 +1346,11 @@ fn paint_table(
             (bottom - body_top).max(0.0),
         )));
         for y in &horizontal {
-            painter.fill_rect(QRectF::new(left, *y, row_header_w, 1.0), header_grid);
+            let line_y = *y - 1.0;
+            if line_y <= body_top - 1.0 {
+                continue;
+            }
+            painter.fill_rect(QRectF::new(left, line_y, row_header_w, 1.0), header_grid);
         }
         painter.restore();
     }
@@ -1285,20 +1378,17 @@ fn paint_table(
         QRectF::new(left, body_top - 1.0, (right - left).max(0.0), 1.0),
         header_grid,
     );
-    for column in 0..table.model.column_count() {
+    // Qt separates neighbouring header sections with one light line and
+    // draws nothing at the gutter edge or after the last section: only the
+    // internal boundaries (gallery/tables/172 has no header lines at all).
+    let header_separator = palette.color(QPaletteRole::Window).darker(118);
+    for column in 1..table.model.column_count() {
         if table.model.is_column_hidden(column) {
             continue;
         }
         let x = column_left(column) - 1.0;
-        painter.fill_rect(QRectF::new(x, top, 1.0, header_h), header_grid);
+        painter.fill_rect(QRectF::new(x, top, 1.0, header_h), header_separator);
     }
-    let last_x = if table.model.column_count() == 0 {
-        body_x
-    } else {
-        column_left(table.model.column_count() - 1)
-            + table.model.column_width(table.model.column_count() - 1)
-    };
-    painter.fill_rect(QRectF::new(last_x, top, 1.0, header_h), header_grid);
 
     let header_color = header_qss
         .color
@@ -1586,8 +1676,8 @@ fn paint_widget_text(widget: &QWidget, painter: &mut QPainter, qss: &QStyleDecla
                 let line_height = metrics.height();
                 painter.set_font(font);
                 let frame = qss_frame_rect(widget, qss);
-                let pad_left = qss.padding.map(|padding| padding.0).unwrap_or(8.0);
-                let pad_right = qss.padding.map(|padding| padding.2).unwrap_or(8.0);
+                let pad_left = qss.padding.map(|padding| padding.0).unwrap_or(0.0);
+                let pad_right = qss.padding.map(|padding| padding.2).unwrap_or(0.0);
                 painter.draw_text(
                     QRectF::new(
                         frame.x + pad_left,

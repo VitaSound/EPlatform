@@ -3679,10 +3679,13 @@ impl QWidgetTree {
                     spacer.vertical_policy == QSizePolicy::Expanding
                 }
             }
-            QLayoutItem::Layout { layout, .. } => layout
-                .items
-                .iter()
-                .any(|item| self.item_expands(item, horizontal)),
+            // A nested layout is not an expander for `qGeomCalc`: Qt lets an
+            // expanding spacer take all the slack while the nested layout
+            // keeps its hint (gallery/lists/190: the grid rows grew and the
+            // list became 83 px tall instead of Qt's ~60). When there is no
+            // spacer the layout still grows through `item_can_grow` (its
+            // maximum exceeds the hint).
+            QLayoutItem::Layout { .. } => false,
         }
     }
 
@@ -4568,6 +4571,29 @@ fn load_widget(
             .and_then(|(_, value)| value.as_str());
         tree.widgets[id].icon = icon_path.and_then(load_pixmap);
         tree.widgets[id].icon_disabled = disabled_path.and_then(load_pixmap);
+    }
+    // `<column>` header captions: Qt shows them in the horizontal header;
+    // without them we fell back to section numbers (gallery/mixed/206
+    // rendered "1" where Qt shows "Имя").
+    if !spec.columns.is_empty() {
+        match spec.class.as_str() {
+            "QTreeWidget" => {
+                if let Some(tree) = tree.widgets[id].tree.as_mut() {
+                    tree.headers = spec.columns.clone();
+                }
+            }
+            "QTableWidget" => {
+                if let Some(table) = tree.widgets[id].table.as_mut() {
+                    if table.model.column_count() < spec.columns.len() {
+                        table.model.set_column_count(spec.columns.len());
+                    }
+                    for (index, text) in spec.columns.iter().enumerate() {
+                        table.model.set_header(index, text.clone());
+                    }
+                }
+            }
+            _ => {}
+        }
     }
     if let Some(parent) = parent {
         tree.add_child(parent, id);

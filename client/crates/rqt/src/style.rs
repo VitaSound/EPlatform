@@ -291,7 +291,13 @@ impl QStyle for QFusionStyle {
             QControlElement::LineEdit => vec![
                 QPaintCommand::FillRect {
                     rect: option.rect,
-                    color: palette.color(crate::gui::QPaletteRole::Base),
+                    // Qt fills disabled line edits with the window colour
+                    // instead of white (gallery/hbox/88_disabled_mix).
+                    color: if option.state.contains(QStyleState::ENABLED) {
+                        palette.color(crate::gui::QPaletteRole::Base)
+                    } else {
+                        palette.color(crate::gui::QPaletteRole::Window)
+                    },
                 },
                 QPaintCommand::StrokeRoundedRect {
                     rect: option.rect,
@@ -308,7 +314,13 @@ impl QStyle for QFusionStyle {
             QControlElement::TableView => vec![
                 QPaintCommand::FillRect {
                     rect: option.rect,
-                    color: palette.color(crate::gui::QPaletteRole::Base),
+                    // Disabled views are gray, not white (gallery/lists/188,
+                    // gallery/states/155_disabled_table).
+                    color: if option.state.contains(QStyleState::ENABLED) {
+                        palette.color(crate::gui::QPaletteRole::Base)
+                    } else {
+                        palette.color(crate::gui::QPaletteRole::Window)
+                    },
                 },
                 QPaintCommand::StrokeRect {
                     rect: option.rect,
@@ -331,7 +343,13 @@ impl QStyle for QFusionStyle {
                 vec![
                     QPaintCommand::FillRect {
                         rect: indicator,
-                        color: palette.color(crate::gui::QPaletteRole::Base),
+                        // Disabled indicators get a gray interior, not white
+                        // (gallery/states/153_disabled_check_radio).
+                        color: if option.state.contains(QStyleState::ENABLED) {
+                            palette.color(crate::gui::QPaletteRole::Base)
+                        } else {
+                            palette.color(crate::gui::QPaletteRole::Window)
+                        },
                     },
                     QPaintCommand::StrokeRect {
                         rect: indicator,
