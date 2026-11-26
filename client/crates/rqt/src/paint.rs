@@ -418,27 +418,10 @@ fn paint_splitter_handles(tree: &QWidgetTree, widget: &QWidget, painter: &mut QP
         if rect.is_empty() {
             continue;
         }
-        let base = fusion_button_color(palette);
-        painter.fill_linear_gradient_rect(rect, 0.0, base.lighter(104), base.darker(102));
-        if horizontal {
-            painter.fill_rect(
-                QRectF::new(rect.x, rect.y, 1.0, rect.height),
-                palette.color(QPaletteRole::Window).darker(140),
-            );
-            painter.fill_rect(
-                QRectF::new(rect.right() - 1.0, rect.y, 1.0, rect.height),
-                palette.color(QPaletteRole::Window).lighter(115),
-            );
-        } else {
-            painter.fill_rect(
-                QRectF::new(rect.x, rect.y, rect.width, 1.0),
-                palette.color(QPaletteRole::Window).darker(140),
-            );
-            painter.fill_rect(
-                QRectF::new(rect.x, rect.bottom() - 1.0, rect.width, 1.0),
-                palette.color(QPaletteRole::Window).lighter(115),
-            );
-        }
+        // Qt's handle is a flat window-coloured gap between the pane
+        // frames — no gradient and no extra edge lines (the panes' own
+        // 1 px borders already flank it; mixed/206 probe: 278..281 = 239).
+        painter.fill_rect(rect, palette.color(QPaletteRole::Window));
     }
 }
 
@@ -716,7 +699,13 @@ pub fn paint_scroll_bar(
             continue;
         }
         painter.fill_rect(area, page_fill);
-        if enabled && area.height >= 4.0 && area.width > 2.0 {
+        // Qt adds the two-pixel darker tail at the bottom of horizontal page
+        // regions only; vertical pages stay flat (tables/181: 230 clean).
+        if enabled
+            && bar.orientation == QOrientation::Horizontal
+            && area.height >= 4.0
+            && area.width > 2.0
+        {
             painter.fill_rect(
                 QRectF::new(area.x + 1.0, area.bottom() - 2.0, area.width - 2.0, 1.0),
                 base.darker(105),
@@ -725,6 +714,40 @@ pub fn paint_scroll_bar(
                 QRectF::new(area.x + 1.0, area.bottom() - 1.0, area.width - 2.0, 1.0),
                 base.darker(106),
             );
+        }
+    }
+
+
+    // Qt frames each arrow button with a single 1 px line on its inner side
+    // — the outer side is the bar's own frame line (tables/179: 192 at
+    // x25/x314, tables/181: 194 at y55/y363). Drawn after the pages: the
+    // page rectangles would otherwise cover these lines.
+    for (control, up) in [
+        (QScrollBarSubControl::SubLine, true),
+        (QScrollBarSubControl::AddLine, false),
+    ] {
+        let _ = up;
+        let area = bar.sub_control_rect(rect, control);
+        if area.width <= 0.0 || area.height <= 0.0 {
+            continue;
+        }
+        let inner = match (bar.orientation, control) {
+            (QOrientation::Horizontal, QScrollBarSubControl::SubLine) => {
+                Some(QRectF::new(area.right(), area.y, 1.0, area.height))
+            }
+            (QOrientation::Horizontal, QScrollBarSubControl::AddLine) => {
+                Some(QRectF::new(area.x - 1.0, area.y, 1.0, area.height))
+            }
+            (QOrientation::Vertical, QScrollBarSubControl::SubLine) => {
+                Some(QRectF::new(area.x, area.bottom(), area.width, 1.0))
+            }
+            (QOrientation::Vertical, QScrollBarSubControl::AddLine) => {
+                Some(QRectF::new(area.x, area.y - 1.0, area.width, 1.0))
+            }
+            _ => None,
+        };
+        if let Some(line) = inner {
+            painter.fill_rect(line, border);
         }
     }
 
@@ -749,24 +772,35 @@ pub fn paint_scroll_bar(
         };
         painter.fill_rect(slider, fill);
     }
-    // Qt's slider has a single 1 px border on its sides only: it spans the
-    // full groove height, so the top and bottom merge with the scrollbar's
-    // own frame (gallery/tables/35_table_2x5: our rounded box looked
-    // thicker than Qt's).
-    painter.fill_rect(QRectF::new(slider.x, slider.y, 1.0, slider.height), border);
-    painter.fill_rect(
-        QRectF::new(slider.right() - 1.0, slider.y, 1.0, slider.height),
-        border,
-    );
-    // The scrollbar's frame line along the groove (top edge for a horizontal
-    // bar, left edge for a vertical one), crossing both the page regions and
-    // the handle like Qt's 186/196 probe values.
+    // Qt's slider end caps: a horizontal handle has 1 px side borders; a
+    // vertical one has 1 px top/bottom borders and no side lines — its sides
+    // are the bar's own frame line (tables/181: the double 193+193 left edge
+    // was the feedback's '2px thick' handle).
     match bar.orientation {
         QOrientation::Horizontal => {
-            painter.fill_rect(QRectF::new(groove.x, rect.y, groove.width, 1.0), border);
+            painter.fill_rect(QRectF::new(slider.x, slider.y, 1.0, slider.height), border);
+            painter.fill_rect(
+                QRectF::new(slider.right() - 1.0, slider.y, 1.0, slider.height),
+                border,
+            );
         }
         QOrientation::Vertical => {
-            painter.fill_rect(QRectF::new(rect.x, groove.y, 1.0, groove.height), border);
+            painter.fill_rect(QRectF::new(slider.x, slider.y, slider.width, 1.0), border);
+            painter.fill_rect(
+                QRectF::new(slider.x, slider.bottom() - 1.0, slider.width, 1.0),
+                border,
+            );
+        }
+    }
+    // The bar's own frame line along its cross axis, drawn across the whole
+    // bar (over the arrow buttons too) so one line unifies groove, arrows
+    // and handle — Qt's 186/196 probe values.
+    match bar.orientation {
+        QOrientation::Horizontal => {
+            painter.fill_rect(QRectF::new(rect.x, rect.y, rect.width, 1.0), border);
+        }
+        QOrientation::Vertical => {
+            painter.fill_rect(QRectF::new(rect.x, rect.y, 1.0, rect.height), border);
         }
     }
 }
@@ -1272,7 +1306,16 @@ fn paint_table(
                     fill = fill.with_alpha(30.0 / 255.0);
                     painter.fill_linear_gradient_rect(cell, 0.0, fill.lighter(160), fill);
                     focus_border = Some((
-                        QRectF::new(cell.x, cell.y, (cell.width - 1.0).max(1.0), cell.height),
+                        // Qt's current-cell frame stops one pixel above the
+                        // grid line below the row: the bottom edge must stay
+                        // as thick as the sides/top (tables/33 probe: frame
+                        // rows 33..61, grid line 62).
+                        QRectF::new(
+                            cell.x,
+                            cell.y,
+                            (cell.width - 1.0).max(1.0),
+                            (cell.height - 1.0).max(1.0),
+                        ),
                         QColor::rgb(0xb1, 0xc9, 0xd7),
                     ));
                 }
