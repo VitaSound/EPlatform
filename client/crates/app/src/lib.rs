@@ -653,7 +653,10 @@ impl App {
     fn drain_socket_events(&mut self) {
         while let Ok(event) = self.rx.try_recv() {
             match event {
-                SocketEvent::Opened => Self::log("websocket opened"),
+                SocketEvent::Opened => {
+                    Self::log("websocket opened");
+                    connection_error_banner(false, "");
+                }
                 SocketEvent::Joined => {
                     Self::log("channel joined");
                     self.joined = true;
@@ -678,8 +681,12 @@ impl App {
                     Self::log("websocket closed");
                     self.joined = false;
                     self.start_sent = false;
+                    connection_error_banner(true, CONNECTION_FAILED);
                 }
-                SocketEvent::Error(err) => Self::log(format!("websocket error: {err}")),
+                SocketEvent::Error(err) => {
+                    Self::log(format!("websocket error: {err}"));
+                    connection_error_banner(true, CONNECTION_FAILED);
+                }
             }
         }
 
@@ -3487,6 +3494,32 @@ fn text_input_action(kind: &str, text: &str) -> (KeyEdit, bool) {
         _ => KeyEdit::Ignore,
     };
     (action, shift)
+}
+
+/// English banner for server connection failures (E1): shown over the
+/// canvas whenever the websocket errors or closes without ever opening.
+const CONNECTION_FAILED: &str = "Failed to connect to the server. Check that the backend is running, then reload the page.";
+
+#[cfg(not(target_arch = "wasm32"))]
+fn connection_error_banner(_show: bool, _message: &str) {}
+
+#[cfg(target_arch = "wasm32")]
+fn connection_error_banner(show: bool, message: &str) {
+    use wasm_bindgen::{JsCast, JsValue};
+
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    let name = if show {
+        "__epShowConnectionError"
+    } else {
+        "__epHideConnectionError"
+    };
+    if let Ok(function) = js_sys::Reflect::get(window.as_ref(), &JsValue::from_str(name)) {
+        if let Ok(function) = function.dyn_into::<js_sys::Function>() {
+            let _ = function.call1(&JsValue::NULL, &JsValue::from_str(message));
+        }
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
