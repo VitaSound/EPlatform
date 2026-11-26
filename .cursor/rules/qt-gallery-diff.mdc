@@ -1,0 +1,56 @@
+---
+description: Gallery Qt vs rust — verify via Chrome 10.0.0.5:9223, check diff %, open images if over 2%
+alwaysApply: true
+---
+
+# Gallery / Qt raster diff gate
+
+After `rqt_render` (or review goldens) vs Qt PNG for a new/changed widget:
+
+1. Compute overlap diff and **read the percentages**: **mean** (0–255 channel), **max**, and **% of pixels with any channel delta** / `>30`. Do not skip the numbers — treat the case as done only when mean is small and over-threshold **% is under ~2** (or remaining delta is a documented known gap).
+2. If **diff pixels > 2%** (or mean is large / sizes differ): **do not** treat the case as done.
+3. **Open both images** (Read tool / crops) and find the cause. Check in order:
+   - overall **width/height** of the form and of the widget bbox (painted rows, not only `sizeHint`)
+   - **sizePolicy** / Fixed vs Preferred vertical growth (common: control stretched tall)
+   - **sizeHint** / `pixel_metric` vs Qt probe (`qt_reference` JSON `hint_h` / layout item `h`)
+   - frame/chrome insets (Fusion rounded frame leaves outer corners as Window; sharp `FillRect` reads taller)
+   - borders covered by children / wrong focus ring
+4. Fix the geometry/paint cause, re-render, rewrite review `index.html` metrics from current PNGs, re-check until under ~2% — never ignore an obvious height/width mismatch or stale index %.
+
+## Live verify (required)
+
+- Check the live wasm gallery / review UI yourself via **Chrome DevTools on `10.0.0.5:9223`** (port **9222** is usually refused; use **9223**). CDP: `http://10.0.0.5:9223/json/list`, then page WebSocket.
+- Hard-reload (cache off) after `trunk build` / `serve_dist.py` so you are not looking at a stale wasm or old review PNGs/index %.
+- Confirm both the on-page **diff %** and the painted widget (focus ring, arrows, geometry) — screenshot/crop if needed. Do not claim parity from code alone.
+
+## Chrome launch (tell the user if CDP is down)
+
+Chrome on the Windows host must listen for DevTools; the agent reaches it at **`10.0.0.5:9223`** via relay (Chrome itself stays on localhost **9222**).
+
+1. Quit other Chrome instances that own the profile, then start a dedicated debugging Chrome (PowerShell / cmd), e.g.:
+
+```text
+"C:\Program Files\Google\Chrome\Application\chrome.exe" ^
+  --remote-debugging-port=9222 ^
+  --user-data-dir=%TEMP%\chrome-cdp-eplatform ^
+  --no-first-run --no-default-browser-check ^
+  http://172.25.21.226:8080/?main=gallery.lua&mainui=&backend=ws://172.25.21.226:4010/socket/websocket
+```
+
+   - **`--remote-debugging-port=9222`** — CDP on loopback (required).
+   - **`--user-data-dir=…`** — separate profile so this instance actually starts with debugging (reusing the main profile often fails silently).
+   - Do **not** rely on `--remote-debugging-address=0.0.0.0` alone; use the relay below.
+   - Optional review UI: `http://172.25.21.226:8125/#gallery/spin`.
+
+2. On the same Windows host, run the TCP relay so WSL/agents can connect:
+
+```text
+powershell -File <repo>\client\tools\cdp_relay.ps1
+```
+
+   Relays **`0.0.0.0:9223` → `127.0.0.1:9222`**. Agent checks: `curl http://10.0.0.5:9223/json/version` (NO_PROXY).
+
+If `9223` connection-refused: remind the user to start Chrome with the flags above **and** `cdp_relay.ps1`.
+
+Also in `client/AGENTS.md` §8. Never edit `client/review/comments.md` when regenerating review.
+

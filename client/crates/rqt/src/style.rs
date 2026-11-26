@@ -757,28 +757,43 @@ impl QStyle for QFusionStyle {
                     },
                 ]
             }
-            QControlElement::LineEdit => vec![
-                QPaintCommand::FillRect {
-                    rect: option.rect,
-                    // Qt fills disabled line edits with the window colour
-                    // instead of white (gallery/hbox/88_disabled_mix).
-                    color: if option.state.contains(QStyleState::ENABLED) {
-                        palette.color(crate::gui::QPaletteRole::Base)
-                    } else {
-                        palette.color(crate::gui::QPaletteRole::Window)
+            QControlElement::LineEdit => {
+                // Fusion paints the rounded frame inset on top/left/bottom; the
+                // right outline sits on `geometry.right()-1` (half-open stroke
+                // needs width-1, not width-2). Probe: h=25 → rows 105..127.
+                let outer = option.rect;
+                let frame = QRectF::new(
+                    outer.x + 1.0,
+                    outer.y + 1.0,
+                    (outer.width - 1.0).max(1.0),
+                    (outer.height - 2.0).max(1.0),
+                );
+                let outline = if option.state.contains(QStyleState::FOCUSED) {
+                    palette.color(crate::gui::QPaletteRole::Highlight)
+                } else {
+                    palette
+                        .color(crate::gui::QPaletteRole::Window)
+                        .darker(140)
+                };
+                let fill = if option.state.contains(QStyleState::ENABLED) {
+                    palette.color(crate::gui::QPaletteRole::Base)
+                } else {
+                    palette.color(crate::gui::QPaletteRole::Window)
+                };
+                vec![
+                    QPaintCommand::FillRoundedRect {
+                        rect: frame,
+                        radius: 2.0,
+                        color: fill,
                     },
-                },
-                QPaintCommand::StrokeRoundedRect {
-                    rect: option.rect,
-                    radius: 2.0,
-                    width: self.pixel_metric(QPixelMetric::DefaultFrameWidth),
-                    color: if option.state.contains(QStyleState::FOCUSED) {
-                        palette.color(crate::gui::QPaletteRole::Highlight)
-                    } else {
-                        palette.color(crate::gui::QPaletteRole::Mid)
+                    QPaintCommand::StrokeRoundedRect {
+                        rect: frame,
+                        radius: 2.0,
+                        width: self.pixel_metric(QPixelMetric::DefaultFrameWidth),
+                        color: outline,
                     },
-                },
-            ],
+                ]
+            }
             QControlElement::Label => Vec::new(),
             QControlElement::TableView => vec![
                 QPaintCommand::FillRect {

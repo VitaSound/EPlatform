@@ -2,8 +2,8 @@
 //!
 //! Only the subset used by the platform's forms is parsed: widgets,
 //! layouts (`QVBoxLayout`/`QHBoxLayout`/`QGridLayout`/`QFormLayout`),
-//! spacers and the common property value tags (`string`, `number`, `bool`,
-//! `enum`, `rect`, `size`, `set`, `sizepolicy`). Unknown constructs are
+//! spacers and the common property value tags (`string`, `number`, `double`,
+//! `bool`, `enum`, `rect`, `size`, `set`, `sizepolicy`). Unknown constructs are
 //! tolerated rather than fatal.
 
 use roxmltree::Node;
@@ -562,8 +562,16 @@ fn parse_value(node: Node<'_, '_>) -> Option<PropValue> {
             Some(
                 text.parse::<i64>()
                     .map(PropValue::Int)
+                    // Non-integer numerics (e.g. `12.5`) stay as text; callers
+                    // that need a float parse the string. Prefer `<double>` in
+                    // `.ui` so Qt's QUiLoader accepts the same value.
                     .unwrap_or_else(|_| PropValue::Str(text.to_string())),
             )
+        }
+        // Qt Designer writes QDoubleSpinBox floats as `<double>`, not `<number>`.
+        "double" => {
+            let text = node.text().unwrap_or("").trim();
+            Some(PropValue::Str(text.to_string()))
         }
         "bool" => Some(PropValue::Bool(node.text().unwrap_or("").trim() == "true")),
         "enum" => Some(PropValue::Enum(node.text().unwrap_or("").to_string())),

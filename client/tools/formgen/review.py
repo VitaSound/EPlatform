@@ -77,13 +77,19 @@ def spin_box(name, value=0, minimum=0, maximum=99, suffix=""):
     return widget("QSpinBox", name, props)
 
 
+def prop_double(name, value):
+    return f'<property name="{name}"><double>{value}</double></property>'
+
+
 def double_spin_box(name, value="0.00", minimum="0", maximum="99.99", decimals=2, prefix=""):
+    # Qt QUiLoader only applies float spin props from `<double>` tags;
+    # `<number>12.5</number>` is ignored and the box stays at 0.00.
     props = (
         prop_int("decimals", decimals)
-        + f'<property name="minimum"><number>{minimum}</number></property>'
-        + f'<property name="maximum"><number>{maximum}</number></property>'
-        + f'<property name="value"><number>{value}</number></property>'
-        + '<property name="singleStep"><number>0.5</number></property>'
+        + prop_double("minimum", minimum)
+        + prop_double("maximum", maximum)
+        + prop_double("value", value)
+        + prop_double("singleStep", "0.5")
     )
     if prefix:
         props += prop_text("prefix", prefix)

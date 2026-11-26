@@ -751,7 +751,12 @@ fn paint_widget_text(
     }
     // Align using metrics, but always draw through `content.right()`.
     // Metric-tight widths clip the last glyph under glyphon (OK→O, value→valu).
-    let y = content.y + ((content.height - line_height) / 2.0).max(0.0);
+    let mut y = content.y + ((content.height - line_height) / 2.0).max(0.0);
+    // Glyphon places ink ~1px lower than Qt inside a tall VCenter label
+    // (gallery/spin #129: "Количество:" starts at y=49 in Qt, y=50 here).
+    if widget.class_name == "QLabel" && content.height > line_height + 2.0 {
+        y = (y - 1.0).max(content.y);
+    }
     let mut text_x = content.x;
     match widget.class_name.as_str() {
         "QPushButton" | "QToolButton" => {

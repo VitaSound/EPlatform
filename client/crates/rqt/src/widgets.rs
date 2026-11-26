@@ -226,7 +226,8 @@ impl QTabWidget {
 pub const QTAB_H_SPACE: f32 = 24.0;
 
 /// Width of the up/down button column on a Fusion spin box.
-pub const QSPIN_BUTTON_W: f32 = 16.0;
+/// Qt probe (gallery/spin): divider at `geometry.right() - 15`.
+pub const QSPIN_BUTTON_W: f32 = 15.0;
 
 /// `QSpinBox` / `QDoubleSpinBox` state.
 #[derive(Clone, Debug, PartialEq)]
@@ -289,6 +290,30 @@ impl QSpinBox {
             } => format!("{value:.prec$}", prec = *decimals as usize),
         };
         format!("{}{}{}", self.prefix, body, self.suffix)
+    }
+
+    /// Whether stepping up would change the value (not already at maximum).
+    pub fn can_step_up(&self) -> bool {
+        match &self.kind {
+            QSpinKind::Int {
+                value, maximum, ..
+            } => *value < *maximum,
+            QSpinKind::Double {
+                value, maximum, ..
+            } => *value < *maximum,
+        }
+    }
+
+    /// Whether stepping down would change the value (not already at minimum).
+    pub fn can_step_down(&self) -> bool {
+        match &self.kind {
+            QSpinKind::Int {
+                value, minimum, ..
+            } => *value > *minimum,
+            QSpinKind::Double {
+                value, minimum, ..
+            } => *value > *minimum,
+        }
     }
 
     pub fn step(&mut self, up: bool) {
@@ -551,13 +576,14 @@ impl QWidget {
             "QSplitter" => QSizeF::new(256.0, 192.0),
             "QTabWidget" => QSizeF::new(256.0, 192.0),
             "QSpinBox" | "QDoubleSpinBox" => {
+                // Qt Fusion probe: hint height 25, width from contents + buttons.
                 let text = self
                     .spin
                     .as_deref()
                     .map(QSpinBox::display_text)
                     .unwrap_or_else(|| "0".into());
                 let width = metrics.horizontal_advance(&text) + QSPIN_BUTTON_W + 16.0;
-                QSizeF::new(width.max(60.0), (font_height + 8.7).round())
+                QSizeF::new(width.max(60.0), 25.0)
             }
             "QGroupBox" => {
                 // QGroupBox stores its caption in `title`, not `text`.
@@ -1837,11 +1863,12 @@ impl QWidgetTree {
             return None;
         }
         let frame = node.geometry;
+        // Keep in sync with `paint::spin` (inset inside the 1px rounded frame).
         let button = QRectF::new(
             frame.right() - QSPIN_BUTTON_W,
-            frame.y,
-            QSPIN_BUTTON_W,
-            frame.height,
+            frame.y + 2.0,
+            (QSPIN_BUTTON_W - 2.0).max(1.0),
+            (frame.height - 4.0).max(1.0),
         );
         let half = (button.height / 2.0).max(1.0);
         let up = QRectF::new(button.x, button.y, button.width, half);
@@ -4124,7 +4151,9 @@ impl QWidgetTree {
             "QLabel" | "QGroupBox" | "QDialog" | "QWidget" | "QMdiSubWindow" => {
                 QSizePolicy::Preferred
             }
-            "QLineEdit" => {
+            "QLineEdit" | "QSpinBox" | "QDoubleSpinBox" => {
+                // Qt: Expanding horizontally, Fixed vertically (spin probe
+                // policy_v=0) — otherwise a vbox stretches the control tall.
                 if horizontal {
                     QSizePolicy::Expanding
                 } else {
@@ -6516,6 +6545,11 @@ mod tests {
         tree.set_property(dspin, "singleStep", QVariant::Double(0.5));
         tree.layout(root, tree.widget(root).unwrap().geometry);
         let spin = tree.find_widget("spin").expect("spin");
+        let spin_h = tree.widget(spin).unwrap().geometry.height;
+        assert!(
+            (spin_h - 25.0).abs() < 1.0,
+            "QSpinBox height should stay Fixed at ~25 like Qt Fusion, got {spin_h}"
+        );
         assert_eq!(
             tree.widget(spin).unwrap().spin.as_ref().unwrap().display_text(),
             "3 шт"
@@ -6548,5 +6582,76 @@ mod tests {
                 .display_text(),
             "~1.5"
         );
+
+        // At minimum the down arrow is disabled (gallery #130 when value was 0).
+        tree.set_property(spin, "value", QVariant::Int(0));
+        assert!(
+            tree.widget(spin)
+                .unwrap()
+                .spin
+                .as_ref()
+                .unwrap()
+                .can_step_up()
+        );
+        assert!(
+            !tree
+                .widget(spin)
+                .unwrap()
+                .spin
+                .as_ref()
+                .unwrap()
+                .can_step_down()
+        );
+        tree.set_property(spin, "value", QVariant::Int(10));
+        assert!(
+            !tree
+                .widget(spin)
+                .unwrap()
+                .spin
+                .as_ref()
+                .unwrap()
+                .can_step_up()
+        );
+        assert!(
+            tree.widget(spin)
+                .unwrap()
+                .spin
+                .as_ref()
+                .unwrap()
+                .can_step_down()
+        );
     }
+
+    #[test]
+    fn double_spin_loads_double_ui_tag() {
+        const UI: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0"><class>Dialog</class>
+ <widget class="QDialog" name="Dialog">
+  <property name="geometry"><rect><x>0</x><y>0</y><width>280</width><height>80</height></rect></property>
+  <layout class="QVBoxLayout" name="verticalLayout">
+   <item>
+    <widget class="QDoubleSpinBox" name="dspin">
+     <property name="decimals"><number>2</number></property>
+     <property name="minimum"><double>0</double></property>
+     <property name="maximum"><double>100</double></property>
+     <property name="value"><double>12.5</double></property>
+     <property name="prefix"><string>₽ </string></property>
+    </widget>
+   </item>
+  </layout>
+ </widget>
+</ui>"#;
+        let (tree, _) = load_ui(UI).expect("loads ui");
+        let dspin = tree.find_widget("dspin").expect("dspin");
+        assert_eq!(
+            tree.widget(dspin)
+                .unwrap()
+                .spin
+                .as_ref()
+                .unwrap()
+                .display_text(),
+            "₽ 12.50"
+        );
+    }
+
 }

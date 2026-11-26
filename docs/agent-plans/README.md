@@ -28,7 +28,7 @@ Then:
 
 Later (handoff-only until requested):
   04 → 20 → 21 → 22
-  30…35, 40…42
+  30…35, 40…43
 ```
 
 ## Index
@@ -56,6 +56,7 @@ Later (handoff-only until requested):
 | [40-qpainter-path-pen.md](40-qpainter-path-pen.md) | Path / dash / opacity | P2 |
 | [41-qss-url-border-image.md](41-qss-url-border-image.md) | QSS `url()` / border-image | P2 |
 | [42-perf-dirty-scissor-letterbox.md](42-perf-dirty-scissor-letterbox.md) | Dirty paint, scissor, letterbox UX | P2 |
+| [43-layout-metrics-dedup.md](43-layout-metrics-dedup.md) | Layout/style metrics dedup (re-audit first) | P2 |
 
 ## Hard rules (all agents)
 

@@ -5,11 +5,18 @@
 ### Волна: agent-plan 31 — QSpinBox / QDoubleSpinBox
 
 - **Model.** `QSpinBox` / `QDoubleSpinBox`: min/max/step/value, prefix/suffix,
-  decimals; step up/down с clamp; свойство `value` синхронизируется.
-- **Paint/events.** Frame как line-edit + колонка up/down со стрелками; клик
-  по кнопкам и Up/Down при фокусе.
-- **Gallery.** `#129`/`#130` — `gallery/spin/214_int_suffix`,
-  `215_double_prefix`.
+  decimals; step up/down с clamp; свойство `value` синхронизируется;
+  `can_step_up`/`can_step_down` для серых стрелок на границах.
+- **Paint/events.** Fusion LineEdit-frame (inset rounded), Fixed V / hint ≈25,
+  колонка up/down 15px с градиентом 254→238, без средней горизонтали;
+  стрелки ~α0.63 ButtonText, центрированы; фокус только через LineEdit
+  Highlight (убран второй `stroke_rect` — «двойная» синяя обводка).
+- **Parse/gallery.** `#129`/`#130` — `gallery/spin/214_int_suffix`,
+  `215_double_prefix`; Qt float props через `<double>` (не `<number>`),
+  иначе префиксный spin остаётся 0. Review mean ~0.39 / ~0.36.
+- **Агент.** Правило gallery-diff: смотреть mean/max/%, чинить при >2%;
+  живая проверка в Chrome CDP `10.0.0.5:9223` (+ флаги запуска /
+  `cdp_relay.ps1` в `.cursor/rules/qt-gallery-diff.mdc`).
 - **Тесты.** `spin_box_steps_value_on_button_click`; crates lib tests зелёные.
 
 ### Волна: agent-plan 30 — QTabWidget / QTabBar

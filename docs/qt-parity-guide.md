@@ -46,7 +46,7 @@ Full widget/primitive tables: see agent plan pack and historical review in chat 
 | **G2-Tables** | grouped headers + table paint | `10`–`11` |
 | **G1** | QStyle / paint structure | `20`–`22` |
 | **G2-Other** | Tab/Spin/Slider/… | `30`–`35` |
-| **G3** | Path/QSS/perf | `40`–`42` |
+| **G3** | Path/QSS/perf / metrics hygiene | `40`–`43` |
 
 **Order:** G0 foundation before new shiny widgets (otherwise they inherit strip/square GPU bugs). Tables are product P0 alongside G0.
 
