@@ -1624,5 +1624,21 @@
     "description": "three tabs with form controls",
     "path": "review/forms/gallery/tabs/213_fields_three.ui",
     "number": 128
+  },
+  {
+    "id": "gallery/spin/214_int_suffix",
+    "category": "gallery/spin",
+    "title": "#129 spin/214_int_suffix",
+    "description": "QSpinBox with suffix",
+    "path": "review/forms/gallery/spin/214_int_suffix.ui",
+    "number": 129
+  },
+  {
+    "id": "gallery/spin/215_double_prefix",
+    "category": "gallery/spin",
+    "title": "#130 spin/215_double_prefix",
+    "description": "QDoubleSpinBox with prefix",
+    "path": "review/forms/gallery/spin/215_double_prefix.ui",
+    "number": 130
   }
 ]

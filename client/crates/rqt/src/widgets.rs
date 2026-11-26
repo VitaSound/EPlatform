@@ -225,6 +225,105 @@ impl QTabWidget {
 /// Horizontal padding around a tab label (Fusion `PM_TabBarTabHSpace`).
 pub const QTAB_H_SPACE: f32 = 24.0;
 
+/// Width of the up/down button column on a Fusion spin box.
+pub const QSPIN_BUTTON_W: f32 = 16.0;
+
+/// `QSpinBox` / `QDoubleSpinBox` state.
+#[derive(Clone, Debug, PartialEq)]
+pub struct QSpinBox {
+    pub kind: QSpinKind,
+    pub prefix: String,
+    pub suffix: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum QSpinKind {
+    Int {
+        value: i64,
+        minimum: i64,
+        maximum: i64,
+        single_step: i64,
+    },
+    Double {
+        value: f64,
+        minimum: f64,
+        maximum: f64,
+        single_step: f64,
+        decimals: u32,
+    },
+}
+
+impl QSpinBox {
+    pub fn int_default() -> Self {
+        Self {
+            kind: QSpinKind::Int {
+                value: 0,
+                minimum: 0,
+                maximum: 99,
+                single_step: 1,
+            },
+            prefix: String::new(),
+            suffix: String::new(),
+        }
+    }
+
+    pub fn double_default() -> Self {
+        Self {
+            kind: QSpinKind::Double {
+                value: 0.0,
+                minimum: 0.0,
+                maximum: 99.99,
+                single_step: 1.0,
+                decimals: 2,
+            },
+            prefix: String::new(),
+            suffix: String::new(),
+        }
+    }
+
+    pub fn display_text(&self) -> String {
+        let body = match &self.kind {
+            QSpinKind::Int { value, .. } => value.to_string(),
+            QSpinKind::Double {
+                value, decimals, ..
+            } => format!("{value:.prec$}", prec = *decimals as usize),
+        };
+        format!("{}{}{}", self.prefix, body, self.suffix)
+    }
+
+    pub fn step(&mut self, up: bool) {
+        match &mut self.kind {
+            QSpinKind::Int {
+                value,
+                minimum,
+                maximum,
+                single_step,
+            } => {
+                let next = if up {
+                    value.saturating_add(*single_step)
+                } else {
+                    value.saturating_sub(*single_step)
+                };
+                *value = next.clamp(*minimum, *maximum);
+            }
+            QSpinKind::Double {
+                value,
+                minimum,
+                maximum,
+                single_step,
+                ..
+            } => {
+                let next = if up {
+                    *value + *single_step
+                } else {
+                    *value - *single_step
+                };
+                *value = next.clamp(*minimum, *maximum);
+            }
+        }
+    }
+}
+
 /// `QComboBox` popup view state. Item strings live in the `items` property
 /// (the same source the closed combo paints); only the transient open state
 /// is kept here, like `QComboBoxPrivateContainer` in Qt.
@@ -286,6 +385,7 @@ pub struct QWidget {
     pub tree: Option<Box<QTreeWidget>>,
     pub splitter: Option<Box<QSplitter>>,
     pub tabs: Option<Box<QTabWidget>>,
+    pub spin: Option<Box<QSpinBox>>,
     pub combo_popup: Option<QComboBoxPopup>,
 }
 
@@ -316,11 +416,15 @@ impl QWidget {
         } else {
             None
         };
+        let spin = match class_name.as_str() {
+            "QSpinBox" => Some(Box::new(QSpinBox::int_default())),
+            "QDoubleSpinBox" => Some(Box::new(QSpinBox::double_default())),
+            _ => None,
+        };
         let focus_policy = match class_name.as_str() {
             "QLineEdit" | "QPushButton" | "QTableWidget" | "QListWidget" | "QTreeWidget"
-            | "QComboBox" | "QCheckBox" | "QRadioButton" | "QTabWidget" => {
-                QFocusPolicy::StrongFocus
-            }
+            | "QComboBox" | "QCheckBox" | "QRadioButton" | "QTabWidget" | "QSpinBox"
+            | "QDoubleSpinBox" => QFocusPolicy::StrongFocus,
             "QAbstractButton" | "QToolButton" => QFocusPolicy::StrongFocus,
             _ => QFocusPolicy::NoFocus,
         };
@@ -360,6 +464,7 @@ impl QWidget {
             tree,
             splitter,
             tabs,
+            spin,
             combo_popup: None,
         }
     }
@@ -445,6 +550,15 @@ impl QWidget {
             "QListWidget" | "QTreeWidget" => QSizeF::new(256.0, 192.0),
             "QSplitter" => QSizeF::new(256.0, 192.0),
             "QTabWidget" => QSizeF::new(256.0, 192.0),
+            "QSpinBox" | "QDoubleSpinBox" => {
+                let text = self
+                    .spin
+                    .as_deref()
+                    .map(QSpinBox::display_text)
+                    .unwrap_or_else(|| "0".into());
+                let width = metrics.horizontal_advance(&text) + QSPIN_BUTTON_W + 16.0;
+                QSizeF::new(width.max(60.0), (font_height + 8.7).round())
+            }
             "QGroupBox" => {
                 // QGroupBox stores its caption in `title`, not `text`.
                 let title = self
@@ -512,6 +626,120 @@ fn value_as_i64(value: &QVariant) -> Option<i64> {
         QVariant::Double(value) => Some(*value as i64),
         QVariant::String(text) | QVariant::Enum(text) => text.parse().ok(),
         _ => None,
+    }
+}
+
+fn value_as_f64(value: &QVariant) -> Option<f64> {
+    match value {
+        QVariant::Double(value) => Some(*value),
+        QVariant::Int(value) => Some(*value as f64),
+        QVariant::String(text) | QVariant::Enum(text) => text.parse().ok(),
+        _ => None,
+    }
+}
+
+fn apply_spin_property(spin: &mut QSpinBox, name: &str, value: &QVariant) {
+    match name {
+        "prefix" => {
+            if let Some(text) = variant_text(value) {
+                spin.prefix = text;
+            }
+        }
+        "suffix" => {
+            if let Some(text) = variant_text(value) {
+                spin.suffix = text;
+            }
+        }
+        "value" => match &mut spin.kind {
+            QSpinKind::Int {
+                value: current,
+                minimum,
+                maximum,
+                ..
+            } => {
+                if let Some(v) = value_as_i64(value) {
+                    *current = v.clamp(*minimum, *maximum);
+                }
+            }
+            QSpinKind::Double {
+                value: current,
+                minimum,
+                maximum,
+                ..
+            } => {
+                if let Some(v) = value_as_f64(value) {
+                    *current = v.clamp(*minimum, *maximum);
+                }
+            }
+        },
+        "minimum" => match &mut spin.kind {
+            QSpinKind::Int {
+                value: current,
+                minimum,
+                maximum,
+                ..
+            } => {
+                if let Some(v) = value_as_i64(value) {
+                    *minimum = v;
+                    *current = (*current).clamp(*minimum, *maximum);
+                }
+            }
+            QSpinKind::Double {
+                value: current,
+                minimum,
+                maximum,
+                ..
+            } => {
+                if let Some(v) = value_as_f64(value) {
+                    *minimum = v;
+                    *current = (*current).clamp(*minimum, *maximum);
+                }
+            }
+        },
+        "maximum" => match &mut spin.kind {
+            QSpinKind::Int {
+                value: current,
+                minimum,
+                maximum,
+                ..
+            } => {
+                if let Some(v) = value_as_i64(value) {
+                    *maximum = v;
+                    *current = (*current).clamp(*minimum, *maximum);
+                }
+            }
+            QSpinKind::Double {
+                value: current,
+                minimum,
+                maximum,
+                ..
+            } => {
+                if let Some(v) = value_as_f64(value) {
+                    *maximum = v;
+                    *current = (*current).clamp(*minimum, *maximum);
+                }
+            }
+        },
+        "singleStep" => match &mut spin.kind {
+            QSpinKind::Int { single_step, .. } => {
+                if let Some(v) = value_as_i64(value) {
+                    *single_step = v.max(1);
+                }
+            }
+            QSpinKind::Double { single_step, .. } => {
+                if let Some(v) = value_as_f64(value) {
+                    *single_step = if v == 0.0 { 1.0 } else { v.abs() };
+                }
+            }
+        },
+        "decimals" => {
+            if let QSpinKind::Double { decimals, .. } = &mut spin.kind {
+                if let Some(v) = value_as_i64(value) {
+                    *decimals = v.clamp(0, 10) as u32;
+                }
+            }
+        }
+        _ => {}
     }
 }
 
@@ -761,6 +989,9 @@ impl QWidgetTree {
                     tabs.current_index = index.max(0) as usize;
                 }
             }
+        }
+        if widget.spin.is_some() {
+            apply_spin_property(widget.spin.as_mut().unwrap(), &name, &value);
         }
         if widget.class_name == "QComboBox" && name == "text" {
             // `setCurrentText` style updates are represented by `text`; keep
@@ -1599,6 +1830,82 @@ impl QWidgetTree {
         true
     }
 
+    /// Up and down button rects inside a spin box (right column, split in half).
+    pub fn spin_button_rects(&self, widget: QWidgetId) -> Option<(QRectF, QRectF)> {
+        let node = self.widgets.get(widget)?;
+        if node.spin.is_none() {
+            return None;
+        }
+        let frame = node.geometry;
+        let button = QRectF::new(
+            frame.right() - QSPIN_BUTTON_W,
+            frame.y,
+            QSPIN_BUTTON_W,
+            frame.height,
+        );
+        let half = (button.height / 2.0).max(1.0);
+        let up = QRectF::new(button.x, button.y, button.width, half);
+        let down = QRectF::new(
+            button.x,
+            button.y + half,
+            button.width,
+            (button.height - half).max(1.0),
+        );
+        Some((up, down))
+    }
+
+    pub fn spin_button_at(&self, point: QPointF) -> Option<(QWidgetId, bool)> {
+        for (id, widget) in self.widgets.iter().enumerate().rev() {
+            if widget.spin.is_none() || !widget.visible || !widget.enabled {
+                continue;
+            }
+            if !widget.geometry.contains(point) {
+                continue;
+            }
+            let (up, down) = self.spin_button_rects(id)?;
+            if up.contains(point) {
+                return Some((id, true));
+            }
+            if down.contains(point) {
+                return Some((id, false));
+            }
+        }
+        None
+    }
+
+    pub fn spin_step(&mut self, widget: QWidgetId, up: bool) -> bool {
+        let value_prop = {
+            let Some(node) = self.widgets.get_mut(widget) else {
+                return false;
+            };
+            let Some(spin) = node.spin.as_mut() else {
+                return false;
+            };
+            let before = spin.display_text();
+            spin.step(up);
+            if before == spin.display_text() {
+                return false;
+            }
+            match &spin.kind {
+                QSpinKind::Int { value, .. } => QVariant::Int(*value),
+                QSpinKind::Double { value, .. } => {
+                    if value.fract() == 0.0
+                        && *value >= i64::MIN as f64
+                        && *value <= i64::MAX as f64
+                    {
+                        QVariant::Int(*value as i64)
+                    } else {
+                        QVariant::String(value.to_string())
+                    }
+                }
+            }
+        };
+        if let Some(node) = self.widgets.get_mut(widget) {
+            node.set_property("value", value_prop);
+        }
+        true
+    }
+
     fn measure_tab_widget(&mut self, widget: QWidgetId) -> QSizeF {
         let Some(node) = self.widgets.get(widget) else {
             return QSizeF::default();
@@ -2107,6 +2414,16 @@ impl QWidgetTree {
             self.mouse_grab = Some(tabs);
             return Some(QWidgetEvent {
                 widget: tabs,
+                event_type: QEventType::MouseButtonPress,
+                clicked: false,
+            });
+        }
+        if let Some((spin, up)) = self.spin_button_at(point) {
+            self.set_focus(spin);
+            self.spin_step(spin, up);
+            self.mouse_grab = Some(spin);
+            return Some(QWidgetEvent {
+                widget: spin,
                 event_type: QEventType::MouseButtonPress,
                 clicked: false,
             });
@@ -3960,6 +4277,8 @@ impl QWidgetTree {
             widget.size_policy == QSizePolicy::Expanding
                 || widget.size_policy == QSizePolicy::MinimumExpanding
                 || widget.class_name == "QLineEdit"
+                || widget.class_name == "QSpinBox"
+                || widget.class_name == "QDoubleSpinBox"
                 || widget.class_name == "QTableWidget"
                 || widget.class_name == "QListWidget"
                 || widget.class_name == "QTreeWidget"
@@ -6160,5 +6479,74 @@ mod tests {
         tree.set_property(tabs, "currentIndex", QVariant::Int(0));
         assert!(tree.widget(page_a).unwrap().visible);
         assert!(!tree.widget(page_b).unwrap().visible);
+    }
+
+    #[test]
+    fn spin_box_steps_value_on_button_click() {
+        const UI: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0"><class>Dialog</class>
+ <widget class="QDialog" name="Dialog">
+  <property name="geometry"><rect><x>0</x><y>0</y><width>280</width><height>120</height></rect></property>
+  <layout class="QVBoxLayout" name="verticalLayout">
+   <item>
+    <widget class="QSpinBox" name="spin">
+     <property name="minimum"><number>0</number></property>
+     <property name="maximum"><number>10</number></property>
+     <property name="value"><number>3</number></property>
+     <property name="suffix"><string> шт</string></property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QDoubleSpinBox" name="dspin">
+     <property name="minimum"><number>0</number></property>
+     <property name="maximum"><number>5</number></property>
+     <property name="singleStep"><number>0</number></property>
+     <property name="decimals"><number>1</number></property>
+     <property name="value"><number>1</number></property>
+     <property name="prefix"><string>~</string></property>
+    </widget>
+   </item>
+  </layout>
+ </widget>
+</ui>"#;
+        let (mut tree, root) = load_ui(UI).expect("loads ui");
+        // Fix double step: XML number 0 becomes Int 0; apply_spin clamps to 1.0 abs.
+        // Set a proper step for the test.
+        let dspin = tree.find_widget("dspin").expect("dspin");
+        tree.set_property(dspin, "singleStep", QVariant::Double(0.5));
+        tree.layout(root, tree.widget(root).unwrap().geometry);
+        let spin = tree.find_widget("spin").expect("spin");
+        assert_eq!(
+            tree.widget(spin).unwrap().spin.as_ref().unwrap().display_text(),
+            "3 шт"
+        );
+        let (up, _down) = tree.spin_button_rects(spin).expect("buttons");
+        let click = crate::gui::QPointF::new(up.x + up.width / 2.0, up.y + up.height / 2.0);
+        tree.mouse_press(root, click);
+        assert_eq!(
+            tree.widget(spin).unwrap().spin.as_ref().unwrap().display_text(),
+            "4 шт"
+        );
+        assert_eq!(tree.property(spin, "value"), Some(&QVariant::Int(4)));
+
+        assert_eq!(
+            tree.widget(dspin)
+                .unwrap()
+                .spin
+                .as_ref()
+                .unwrap()
+                .display_text(),
+            "~1.0"
+        );
+        assert!(tree.spin_step(dspin, true));
+        assert_eq!(
+            tree.widget(dspin)
+                .unwrap()
+                .spin
+                .as_ref()
+                .unwrap()
+                .display_text(),
+            "~1.5"
+        );
     }
 }

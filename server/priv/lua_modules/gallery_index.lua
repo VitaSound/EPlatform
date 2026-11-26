@@ -129,4 +129,6 @@ return {
     { number = 126, id = "gallery/mixed/211_table_and_tree", category = "gallery/mixed", ui = "gallery/mixed/211_table_and_tree.ui" },
     { number = 127, id = "gallery/tabs/212_basic_two", category = "gallery/tabs", ui = "gallery/tabs/212_basic_two.ui" },
     { number = 128, id = "gallery/tabs/213_fields_three", category = "gallery/tabs", ui = "gallery/tabs/213_fields_three.ui" },
+    { number = 129, id = "gallery/spin/214_int_suffix", category = "gallery/spin", ui = "gallery/spin/214_int_suffix.ui" },
+    { number = 130, id = "gallery/spin/215_double_prefix", category = "gallery/spin", ui = "gallery/spin/215_double_prefix.ui" },
 }

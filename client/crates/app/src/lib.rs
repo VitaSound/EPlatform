@@ -2601,6 +2601,10 @@ impl App {
             return;
         }
 
+        if self.spin_key(&action) {
+            return;
+        }
+
         if self.editing.is_some() {
             self.edit_key(action);
             return;
@@ -2760,6 +2764,28 @@ impl App {
     /// Keyboard handling for `QComboBox`: arrows change the current item
     /// when closed and move the popup highlight when open; Enter commits or
     /// opens, Escape closes, Space opens (Qt behavior).
+    fn spin_key(&mut self, action: &KeyEdit) -> bool {
+        let up = match action {
+            KeyEdit::Up | KeyEdit::PageUp => true,
+            KeyEdit::Down | KeyEdit::PageDown => false,
+            _ => return false,
+        };
+        let Some(form_id) = self.active_form_id() else {
+            return false;
+        };
+        let Some(widget) = self.forms.get(&form_id).and_then(|form| {
+            let widget = form.tree.focus_widget()?;
+            let node = form.tree.widget(widget)?;
+            matches!(node.class_name.as_str(), "QSpinBox" | "QDoubleSpinBox").then_some(widget)
+        }) else {
+            return false;
+        };
+        let Some(form) = self.forms.get_mut(&form_id) else {
+            return false;
+        };
+        form.tree.spin_step(widget, up)
+    }
+
     fn combo_key(&mut self, action: &KeyEdit) -> bool {
         let Some(form_id) = self.active_form_id() else {
             return false;

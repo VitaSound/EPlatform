@@ -2,6 +2,16 @@
 
 ## 2026-11-27
 
+### Волна: agent-plan 31 — QSpinBox / QDoubleSpinBox
+
+- **Model.** `QSpinBox` / `QDoubleSpinBox`: min/max/step/value, prefix/suffix,
+  decimals; step up/down с clamp; свойство `value` синхронизируется.
+- **Paint/events.** Frame как line-edit + колонка up/down со стрелками; клик
+  по кнопкам и Up/Down при фокусе.
+- **Gallery.** `#129`/`#130` — `gallery/spin/214_int_suffix`,
+  `215_double_prefix`.
+- **Тесты.** `spin_box_steps_value_on_button_click`; crates lib tests зелёные.
+
 ### Волна: agent-plan 30 — QTabWidget / QTabBar
 
 - **Parse.** `form-xml` читает `<attribute>` (title страниц вкладки).

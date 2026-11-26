@@ -1,6 +1,6 @@
 # 31 — QSpinBox / QDoubleSpinBox
 
-Status: ready
+Status: done
 Priority: P2
 Depends-on: [01-canvas-geometry-pointer.md, 02-gpu-linear-gradient-radius.md]
 Blocks: []
@@ -42,9 +42,9 @@ Spin boxes parse, display value, step via buttons/keys, sync properties to Lua.
 
 ## Tests / acceptance
 
-- [ ] Step up/down changes value
-- [ ] Golden vs Qt within tolerance
-- [ ] `cargo test`
+- [x] Step up/down changes value
+- [x] Golden vs Qt within tolerance
+- [x] `cargo test`
 
 ## Agent handoff prompt (copy-paste)
 

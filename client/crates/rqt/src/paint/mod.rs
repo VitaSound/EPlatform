@@ -6,6 +6,7 @@ use crate::widgets::{wrap_text_lines, QWidget, QWidgetId, QWidgetTree, QCOMBO_PO
 
 mod focus;
 mod scroll;
+mod spin;
 mod table;
 mod tabs;
 
@@ -13,6 +14,7 @@ pub use scroll::paint_scroll_bar;
 
 use focus::paint_focus_indicators;
 use scroll::paint_item_views;
+use spin::paint_spin_box;
 use table::paint_table;
 use tabs::paint_tab_widget;
 
@@ -107,6 +109,12 @@ fn paint_widget(
     }
     if widget.class_name == "QTabWidget" {
         paint_tab_widget(widget, style, painter);
+    }
+    if matches!(
+        widget.class_name.as_str(),
+        "QSpinBox" | "QDoubleSpinBox"
+    ) {
+        paint_spin_box(widget, style, &option, painter);
     }
     paint_table(widget, painter, style, &item_qss, &header_qss);
     paint_item_views(widget, painter, style, &item_qss, &header_qss);
@@ -271,6 +279,9 @@ fn paint_widget_background(
         }
         "QTabWidget" => {
             // Chrome is drawn in `paint_tab_widget` after the background pass.
+        }
+        "QSpinBox" | "QDoubleSpinBox" => {
+            // Frame/text/buttons drawn in `paint_spin_box`.
         }
         _ => {}
     }

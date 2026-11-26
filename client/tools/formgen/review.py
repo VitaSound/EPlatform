@@ -65,6 +65,31 @@ def tab_widget(name, pages, current=0):
     return widget("QTabWidget", name, prop_int("currentIndex", current), body)
 
 
+def spin_box(name, value=0, minimum=0, maximum=99, suffix=""):
+    props = (
+        prop_int("minimum", minimum)
+        + prop_int("maximum", maximum)
+        + prop_int("value", value)
+        + prop_int("singleStep", 1)
+    )
+    if suffix:
+        props += prop_text("suffix", suffix)
+    return widget("QSpinBox", name, props)
+
+
+def double_spin_box(name, value="0.00", minimum="0", maximum="99.99", decimals=2, prefix=""):
+    props = (
+        prop_int("decimals", decimals)
+        + f'<property name="minimum"><number>{minimum}</number></property>'
+        + f'<property name="maximum"><number>{maximum}</number></property>'
+        + f'<property name="value"><number>{value}</number></property>'
+        + '<property name="singleStep"><number>0.5</number></property>'
+    )
+    if prefix:
+        props += prop_text("prefix", prefix)
+    return widget("QDoubleSpinBox", name, props)
+
+
 def label(name, text):
     return widget("QLabel", name, prop_text("text", text))
 
@@ -1765,6 +1790,14 @@ def build_gallery_cases():
                button("b1", "Сохранить"),
            ]),
        ], current=1)], width=500, height=320)
+
+    category = "gallery/spin"
+    vg(category, "int_suffix", "QSpinBox with suffix",
+       [label("l1", "Количество:"), spin_box("spin", 3, 0, 20, " шт")],
+       width=360, height=140)
+    vg(category, "double_prefix", "QDoubleSpinBox with prefix",
+       [label("l1", "Сумма:"), double_spin_box("dspin", "12.5", "0", "100", 2, "₽ ")],
+       width=360, height=140)
 
     assert len(cases) >= 100, f"gallery too small: {len(cases)}"
     return cases
