@@ -1,6 +1,6 @@
 # 20 — QStyle indicators and single radio path
 
-Status: ready
+Status: done
 Priority: P1
 Depends-on: [04-gpu-texture-blit-circle.md]
 Blocks: []
@@ -49,9 +49,9 @@ Estimate: M
 
 ## Tests / acceptance
 
-- [ ] Radio/check gallery states match Qt within tolerance
-- [ ] No dual square+circle for radio
-- [ ] `cargo test -p rqt`
+- [x] Radio/check gallery states match Qt within tolerance
+- [x] No dual square+circle for radio
+- [x] `cargo test -p rqt`
 
 ## Agent handoff prompt (copy-paste)
 

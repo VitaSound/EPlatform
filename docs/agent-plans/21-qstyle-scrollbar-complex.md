@@ -1,6 +1,6 @@
 # 21 — ScrollBar via QStyle complex control
 
-Status: ready
+Status: done
 Priority: P1
 Depends-on: [02-gpu-linear-gradient-radius.md, 05-render-primitive-lower.md]
 Blocks: [32-qslider.md]
@@ -49,8 +49,8 @@ Estimate: L
 
 ## Tests / acceptance
 
-- [ ] Scroll visuals unchanged vs prior review baselines
-- [ ] `cargo test -p rqt`
+- [x] Scroll visuals unchanged vs prior review baselines
+- [x] `cargo test -p rqt`
 
 ## Agent handoff prompt (copy-paste)
 

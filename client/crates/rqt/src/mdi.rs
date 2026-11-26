@@ -1,4 +1,4 @@
-use crate::gui::{QPointF, QRectF, QSizeF};
+use crate::gui::{QColor, QPainter, QPointF, QRectF, QSizeF};
 
 pub const QMDI_TITLE_H: f32 = 24.0;
 pub const QMDI_BUTTON: f32 = 18.0;
@@ -754,6 +754,188 @@ impl<T> QMdiArea<T> {
     pub fn set_title(&mut self, index: usize, title: impl Into<String>) {
         if let Some(subwindow) = self.subwindows.get_mut(index) {
             subwindow.title = title.into();
+        }
+    }
+}
+
+/// Paint title bar, border, window buttons and resize grip for an MDI subwindow.
+pub fn paint_subwindow_chrome<T>(
+    painter: &mut QPainter,
+    subwindow: &QMdiSubWindow<T>,
+    active: bool,
+    hover: Option<QMdiSubWindowHit>,
+) {
+    let frame = subwindow.frame;
+    let (title_start, title_end) = if active {
+        (
+            QColor::rgba8(74, 159, 220, 255),
+            QColor::rgba8(39, 121, 180, 255),
+        )
+    } else {
+        (
+            QColor::rgba8(235, 237, 241, 255),
+            QColor::rgba8(202, 206, 214, 255),
+        )
+    };
+    let border = QColor::rgba8(148, 156, 168, 255);
+    let text_color = if active {
+        QColor::rgba8(255, 255, 255, 255)
+    } else {
+        QColor::rgba8(24, 24, 30, 255)
+    };
+    let icon_color = if active {
+        QColor::rgba8(255, 255, 255, 255)
+    } else {
+        QColor::rgba8(38, 38, 44, 255)
+    };
+    let hover_fill = if active {
+        QColor::rgba8(126, 190, 238, 255)
+    } else {
+        QColor::rgba8(214, 218, 226, 255)
+    };
+
+    painter.fill_linear_gradient_rect(
+        QRectF::new(frame.x, frame.y, frame.width, QMDI_TITLE_H),
+        0.0,
+        title_start,
+        title_end,
+    );
+    for border_rect in [
+        QRectF::new(frame.x, frame.y, 1.0, frame.height),
+        QRectF::new(frame.right() - 1.0, frame.y, 1.0, frame.height),
+        QRectF::new(frame.x, frame.bottom() - 1.0, frame.width, 1.0),
+    ] {
+        painter.fill_rect(border_rect, border);
+    }
+
+    let buttons = subwindow.title_buttons();
+    let mut title_right = frame.right() - 8.0;
+    for (button, rect) in &buttons {
+        if *button != QMdiSubWindowButton::SystemMenu {
+            title_right = title_right.min(rect.x - 4.0);
+        }
+        let button_hit = match button {
+            QMdiSubWindowButton::SystemMenu => QMdiSubWindowHit::SystemMenu,
+            QMdiSubWindowButton::Minimize => QMdiSubWindowHit::Minimize,
+            QMdiSubWindowButton::Maximize => QMdiSubWindowHit::Maximize,
+            QMdiSubWindowButton::Restore => {
+                if subwindow.minimized {
+                    QMdiSubWindowHit::Minimize
+                } else {
+                    QMdiSubWindowHit::Maximize
+                }
+            }
+            QMdiSubWindowButton::Close => QMdiSubWindowHit::Close,
+        };
+        if hover == Some(button_hit) {
+            painter.fill_rounded_rect(
+                QRectF::new(
+                    rect.x + 1.0,
+                    rect.y + 1.0,
+                    rect.width - 2.0,
+                    rect.height - 2.0,
+                ),
+                4.0,
+                hover_fill,
+            );
+        }
+        let cx = rect.x + rect.width / 2.0;
+        let cy = rect.y + rect.height / 2.0;
+        match button {
+            QMdiSubWindowButton::Close => {
+                let d = 4.0;
+                painter.draw_line(
+                    QPointF::new(cx - d, cy - d),
+                    QPointF::new(cx + d, cy + d),
+                    1.0,
+                    icon_color,
+                );
+                painter.draw_line(
+                    QPointF::new(cx + d, cy - d),
+                    QPointF::new(cx - d, cy + d),
+                    1.0,
+                    icon_color,
+                );
+            }
+            QMdiSubWindowButton::Minimize => {
+                painter.draw_line(
+                    QPointF::new(rect.x + 5.0, rect.y + 12.5),
+                    QPointF::new(rect.x + 13.0, rect.y + 12.5),
+                    1.0,
+                    icon_color,
+                );
+            }
+            QMdiSubWindowButton::Maximize => {
+                painter.stroke_rect(
+                    QRectF::new(rect.x + 5.0, rect.y + 6.0, 8.0, 6.0),
+                    1.0,
+                    icon_color,
+                );
+                painter.fill_rect(
+                    QRectF::new(rect.x + 5.0, rect.y + 6.0, 8.0, 2.0),
+                    icon_color,
+                );
+            }
+            QMdiSubWindowButton::Restore => {
+                painter.stroke_rect(
+                    QRectF::new(rect.x + 6.0, rect.y + 4.0, 7.0, 5.0),
+                    1.0,
+                    icon_color,
+                );
+                painter.fill_rect(
+                    QRectF::new(rect.x + 6.0, rect.y + 4.0, 7.0, 1.0),
+                    icon_color,
+                );
+                painter.stroke_rect(
+                    QRectF::new(rect.x + 4.0, rect.y + 7.0, 7.0, 5.0),
+                    1.0,
+                    icon_color,
+                );
+                painter.fill_rect(
+                    QRectF::new(rect.x + 4.0, rect.y + 7.0, 7.0, 1.0),
+                    icon_color,
+                );
+            }
+            QMdiSubWindowButton::SystemMenu => {
+                painter.stroke_rect(
+                    QRectF::new(rect.x + 4.0, rect.y + 4.0, 10.0, 10.0),
+                    1.0,
+                    icon_color,
+                );
+                painter.fill_rect(
+                    QRectF::new(rect.x + 4.0, rect.y + 4.0, 10.0, 2.0),
+                    icon_color,
+                );
+            }
+        }
+    }
+
+    let label_left = frame.x + 8.0;
+    let label_width = (title_right - label_left).max(1.0);
+    painter.save();
+    painter.set_clip_rect(Some(QRectF::new(
+        label_left,
+        frame.y,
+        label_width,
+        QMDI_TITLE_H,
+    )));
+    painter.draw_text(
+        QRectF::new(label_left, frame.y + 4.0, label_width, QMDI_TITLE_H),
+        subwindow.title.clone(),
+        text_color,
+    );
+    painter.restore();
+
+    if subwindow.can_resize() {
+        let resize = subwindow.resize_rect();
+        for step in 0..3 {
+            let offset = step as f32 * 4.0;
+            painter.draw_line(
+                QPointF::new(resize.right() - 3.0 - offset, resize.bottom() - 1.0),
+                QPointF::new(resize.right() - 1.0, resize.bottom() - 3.0 - offset),
+                1.0,
+                border,
+            );
         }
     }
 }

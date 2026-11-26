@@ -1,5 +1,26 @@
 # Changelog
 
+## 2026-11-27
+
+### Волна: agent-plans 00–22 (Qt graphics parity)
+
+Закрыты handoff-планы из `docs/agent-plans/` (Status: done). Кратко по номерам:
+
+- **00 — remove-diag.** Убраны `?diag` HUD и хуки `window.__ep*` из prod-пути wasm-клиента.
+- **01 — canvas geometry / pointer.** Геометрия canvas и pointer÷dpr изолированы и согласованы с режимами рендера; документ §2/§8 приведён к факту (mode 2: `backing ≈ css`).
+- **05 — RenderPrimitive.** Общий IR между `QPaintCommand` и GPU/`raster`, без расходящегося lowering.
+- **02 — GPU linear gradient + radius.** `FillLinearGradientRect` с `radius`/`horizontal` одним SDF-quad, без полос по logical px.
+- **03 — rounded rect fill/stroke.** `FillRoundedRect` / `StrokeRoundedRect` на GPU SDF, без O(height) strip.
+- **06 — buttons/combo Fusion rounding.** QPushButton / QToolButton / QComboBox: радиус ≈ 2 как Fusion на DPR 1.0 и 1.5.
+- **04 — texture blit + circle SDF.** `DrawPixmap` — textured quad; круги индикаторов — SDF, без 1×1 сетки.
+- **10 — groupedHeader / tableLayout (B6).** Протокол → spans → paint → hit/resize → gallery.
+- **11 — paint_table parity.** Заголовки, сетка, selection, disabled, scrollbar + frame-over-bars vs Qt gallery.
+- **20 — QStyle indicators / single radio path.** `PE_Indicator*` и стрелки в `draw_primitive`; radio только через style (Fusion ink bake под linear GPU).
+- **21 — CC_ScrollBar via QStyle.** `draw_complex_control(ScrollBar)`; угол двух баров (`paint_scroll_corner`) — линии стыка у стрелок AddLine (#098 / tables/183).
+- **22 — paint modules + MDI chrome.** `paint.rs` → `paint/{mod,focus,scroll,table}.rs`; chrome subwindow → `rqt::mdi::paint_subwindow_chrome`; `collect_paint` тонкий.
+
+Тесты: `cargo test -p rqt -p app --lib` (rqt 147, app 69 + 1 ignored). Offline: tree gallery pixel-match; 183 — угол скроллбаров; MDI goldens (`shell_overlapping_windows_*`, minimize) зелёные.
+
 ## 2026-11-25
 
 ### Волна 0.17.1: мобильный ввод и touch-сценарии

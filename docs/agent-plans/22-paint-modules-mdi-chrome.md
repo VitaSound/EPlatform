@@ -1,6 +1,6 @@
 # 22 — Split paint modules; MDI chrome into rqt
 
-Status: ready
+Status: done
 Priority: P2
 Depends-on: []
 Blocks: []
@@ -48,8 +48,8 @@ Qt module boundaries (widgets vs gui); chrome still QPainter-based.
 
 ## Tests / acceptance
 
-- [ ] `cargo test --workspace` client crates
-- [ ] No visual change (same commands order)
+- [x] `cargo test --workspace` client crates
+- [x] No visual change (same commands order)
 
 ## Agent handoff prompt (copy-paste)
 
