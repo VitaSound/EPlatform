@@ -326,6 +326,12 @@ impl Gfx {
         self.dpr
     }
 
+    /// The device's maximum texture size; a window wider or taller than this
+    /// must expose a clamped surface (the browser then scales the canvas).
+    pub fn max_dim(&self) -> u32 {
+        self.max_dim
+    }
+
     pub fn size(&self) -> (u32, u32) {
         (self.config.width, self.config.height)
     }

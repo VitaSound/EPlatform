@@ -4183,15 +4183,15 @@ impl App {
         };
         use wasm_bindgen::JsCast;
         let win: js_sys::Object = window.unchecked_into();
-        let (surface_w, surface_h, app_scale) = self
+        let (surface_w, surface_h, app_scale, max_dim) = self
             .gfx
             .borrow()
             .as_ref()
-            .map(|gfx| (gfx.size().0, gfx.size().1, gfx.ui_scale()))
-            .unwrap_or((0, 0, 1.0));
+            .map(|gfx| (gfx.size().0, gfx.size().1, gfx.ui_scale(), gfx.max_dim()))
+            .unwrap_or((0, 0, 1.0, 0));
         let viewport = self.floating.viewport();
         let text = format!(
-            "winit=({:.1}, {:.1}) pointer_scale={:.4} logical=({:.1}, {:.1}) app_surface={}x{} app_scale={:.4} viewport=({:.0},{:.0},{:.0}x{:.0})",
+            "winit=({:.1}, {:.1}) pointer_scale={:.4} logical=({:.1}, {:.1}) app_surface={}x{} app_scale={:.4} gpu_max={} viewport=({:.0},{:.0},{:.0}x{:.0})",
             x,
             y,
             scale,
@@ -4200,6 +4200,7 @@ impl App {
             surface_w,
             surface_h,
             app_scale,
+            max_dim,
             viewport.x,
             viewport.y,
             viewport.width,
