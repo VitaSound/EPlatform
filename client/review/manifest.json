@@ -600,5 +600,1013 @@
     "title": "Form in group box",
     "description": "nested group box with a form layout inside",
     "path": "review/forms/form/85_group.ui"
+  },
+  {
+    "id": "gallery/hbox/86_label_line_btn",
+    "category": "gallery/hbox",
+    "title": "#001 hbox/86_label_line_btn",
+    "description": "label + line edit + button in one row",
+    "path": "review/forms/gallery/hbox/86_label_line_btn.ui",
+    "number": 1
+  },
+  {
+    "id": "gallery/hbox/87_spacer_between",
+    "category": "gallery/hbox",
+    "title": "#002 hbox/87_spacer_between",
+    "description": "buttons pushed apart by a horizontal spacer",
+    "path": "review/forms/gallery/hbox/87_spacer_between.ui",
+    "number": 2
+  },
+  {
+    "id": "gallery/hbox/88_disabled_mix",
+    "category": "gallery/hbox",
+    "title": "#003 hbox/88_disabled_mix",
+    "description": "disabled label/line/button in a row",
+    "path": "review/forms/gallery/hbox/88_disabled_mix.ui",
+    "number": 3
+  },
+  {
+    "id": "gallery/hbox/89_long_text",
+    "category": "gallery/hbox",
+    "title": "#004 hbox/89_long_text",
+    "description": "long label next to a fixed field",
+    "path": "review/forms/gallery/hbox/89_long_text.ui",
+    "number": 4
+  },
+  {
+    "id": "gallery/hbox/90_cyrillic",
+    "category": "gallery/hbox",
+    "title": "#005 hbox/90_cyrillic",
+    "description": "cyrillic label and button",
+    "path": "review/forms/gallery/hbox/90_cyrillic.ui",
+    "number": 5
+  },
+  {
+    "id": "gallery/hbox/91_checks_radio",
+    "category": "gallery/hbox",
+    "title": "#006 hbox/91_checks_radio",
+    "description": "checkbox, radio and another checkbox",
+    "path": "review/forms/gallery/hbox/91_checks_radio.ui",
+    "number": 6
+  },
+  {
+    "id": "gallery/hbox/92_combo_line",
+    "category": "gallery/hbox",
+    "title": "#007 hbox/92_combo_line",
+    "description": "combo box beside a line edit",
+    "path": "review/forms/gallery/hbox/92_combo_line.ui",
+    "number": 7
+  },
+  {
+    "id": "gallery/hbox/93_button_states_row",
+    "category": "gallery/hbox",
+    "title": "#008 hbox/93_button_states_row",
+    "description": "normal/default/disabled buttons in a row",
+    "path": "review/forms/gallery/hbox/93_button_states_row.ui",
+    "number": 8
+  },
+  {
+    "id": "gallery/hbox/94_fixed_sizes",
+    "category": "gallery/hbox",
+    "title": "#009 hbox/94_fixed_sizes",
+    "description": "fixed-size widgets inside a horizontal row",
+    "path": "review/forms/gallery/hbox/94_fixed_sizes.ui",
+    "number": 9
+  },
+  {
+    "id": "gallery/hbox/95_empty_and_widgets",
+    "category": "gallery/hbox",
+    "title": "#010 hbox/95_empty_and_widgets",
+    "description": "empty label keeps the row layout honest",
+    "path": "review/forms/gallery/hbox/95_empty_and_widgets.ui",
+    "number": 10
+  },
+  {
+    "id": "gallery/vbox/96_labels_only",
+    "category": "gallery/vbox",
+    "title": "#011 vbox/96_labels_only",
+    "description": "four labels stacked",
+    "path": "review/forms/gallery/vbox/96_labels_only.ui",
+    "number": 11
+  },
+  {
+    "id": "gallery/vbox/97_fields_stack",
+    "category": "gallery/vbox",
+    "title": "#012 vbox/97_fields_stack",
+    "description": "label plus three inputs",
+    "path": "review/forms/gallery/vbox/97_fields_stack.ui",
+    "number": 12
+  },
+  {
+    "id": "gallery/vbox/98_buttons_stack",
+    "category": "gallery/vbox",
+    "title": "#013 vbox/98_buttons_stack",
+    "description": "three buttons right aligned with spacers",
+    "path": "review/forms/gallery/vbox/98_buttons_stack.ui",
+    "number": 13
+  },
+  {
+    "id": "gallery/vbox/99_mixed_disabled",
+    "category": "gallery/vbox",
+    "title": "#014 vbox/99_mixed_disabled",
+    "description": "stack with disabled and enabled widgets",
+    "path": "review/forms/gallery/vbox/99_mixed_disabled.ui",
+    "number": 14
+  },
+  {
+    "id": "gallery/vbox/100_long_lines",
+    "category": "gallery/vbox",
+    "title": "#015 vbox/100_long_lines",
+    "description": "long texts wrapping behaviour",
+    "path": "review/forms/gallery/vbox/100_long_lines.ui",
+    "number": 15
+  },
+  {
+    "id": "gallery/vbox/101_stretch",
+    "category": "gallery/vbox",
+    "title": "#016 vbox/101_stretch",
+    "description": "content pushed to the top by a vertical spacer",
+    "path": "review/forms/gallery/vbox/101_stretch.ui",
+    "number": 16
+  },
+  {
+    "id": "gallery/vbox/102_group_in_vbox",
+    "category": "gallery/vbox",
+    "title": "#017 vbox/102_group_in_vbox",
+    "description": "group box with controls inside a vbox",
+    "path": "review/forms/gallery/vbox/102_group_in_vbox.ui",
+    "number": 17
+  },
+  {
+    "id": "gallery/vbox/103_dense_rows",
+    "category": "gallery/vbox",
+    "title": "#018 vbox/103_dense_rows",
+    "description": "six compact rows of label+value",
+    "path": "review/forms/gallery/vbox/103_dense_rows.ui",
+    "number": 18
+  },
+  {
+    "id": "gallery/vbox/104_empty_label_row",
+    "category": "gallery/vbox",
+    "title": "#019 vbox/104_empty_label_row",
+    "description": "empty label between fields",
+    "path": "review/forms/gallery/vbox/104_empty_label_row.ui",
+    "number": 19
+  },
+  {
+    "id": "gallery/vbox/105_cyrillic_long",
+    "category": "gallery/vbox",
+    "title": "#020 vbox/105_cyrillic_long",
+    "description": "long cyrillic caption and button",
+    "path": "review/forms/gallery/vbox/105_cyrillic_long.ui",
+    "number": 20
+  },
+  {
+    "id": "gallery/grid/106_label_field_2x2",
+    "category": "gallery/grid",
+    "title": "#021 grid/106_label_field_2x2",
+    "description": "2x2 label/field grid",
+    "path": "review/forms/gallery/grid/106_label_field_2x2.ui",
+    "number": 21
+  },
+  {
+    "id": "gallery/grid/107_span_colspan",
+    "category": "gallery/grid",
+    "title": "#022 grid/107_span_colspan",
+    "description": "colspan over two columns",
+    "path": "review/forms/gallery/grid/107_span_colspan.ui",
+    "number": 22
+  },
+  {
+    "id": "gallery/grid/108_span_rowspan_align",
+    "category": "gallery/grid",
+    "title": "#023 grid/108_span_rowspan_align",
+    "description": "rowspan with centred alignment",
+    "path": "review/forms/gallery/grid/108_span_rowspan_align.ui",
+    "number": 23
+  },
+  {
+    "id": "gallery/grid/109_dense_4x4",
+    "category": "gallery/grid",
+    "title": "#024 grid/109_dense_4x4",
+    "description": "16-cell mixed grid",
+    "path": "review/forms/gallery/grid/109_dense_4x4.ui",
+    "number": 24
+  },
+  {
+    "id": "gallery/grid/110_sparse_empty",
+    "category": "gallery/grid",
+    "title": "#025 grid/110_sparse_empty",
+    "description": "grid with intentionally empty cells",
+    "path": "review/forms/gallery/grid/110_sparse_empty.ui",
+    "number": 25
+  },
+  {
+    "id": "gallery/grid/111_nested_hbox_cell",
+    "category": "gallery/grid",
+    "title": "#026 grid/111_nested_hbox_cell",
+    "description": "hbox layout inside a grid cell",
+    "path": "review/forms/gallery/grid/111_nested_hbox_cell.ui",
+    "number": 26
+  },
+  {
+    "id": "gallery/grid/112_policy_cells",
+    "category": "gallery/grid",
+    "title": "#027 grid/112_policy_cells",
+    "description": "Fixed vs Expanding cells",
+    "path": "review/forms/gallery/grid/112_policy_cells.ui",
+    "number": 27
+  },
+  {
+    "id": "gallery/grid/113_table_span",
+    "category": "gallery/grid",
+    "title": "#028 grid/113_table_span",
+    "description": "table spanning two columns",
+    "path": "review/forms/gallery/grid/113_table_span.ui",
+    "number": 28
+  },
+  {
+    "id": "gallery/grid/114_combo_check_grid",
+    "category": "gallery/grid",
+    "title": "#029 grid/114_combo_check_grid",
+    "description": "combo and checkbox rows",
+    "path": "review/forms/gallery/grid/114_combo_check_grid.ui",
+    "number": 29
+  },
+  {
+    "id": "gallery/grid/115_long_text_cell",
+    "category": "gallery/grid",
+    "title": "#030 grid/115_long_text_cell",
+    "description": "long label cell versus short fields",
+    "path": "review/forms/gallery/grid/115_long_text_cell.ui",
+    "number": 30
+  },
+  {
+    "id": "gallery/grid/116_spacers_grid",
+    "category": "gallery/grid",
+    "title": "#031 grid/116_spacers_grid",
+    "description": "spacers inside grid cells",
+    "path": "review/forms/gallery/grid/116_spacers_grid.ui",
+    "number": 31
+  },
+  {
+    "id": "gallery/grid/117_mixed_widgets",
+    "category": "gallery/grid",
+    "title": "#032 grid/117_mixed_widgets",
+    "description": "every supported class in one grid",
+    "path": "review/forms/gallery/grid/117_mixed_widgets.ui",
+    "number": 32
+  },
+  {
+    "id": "gallery/grid/118_wide_table_cell",
+    "category": "gallery/grid",
+    "title": "#033 grid/118_wide_table_cell",
+    "description": "wide table in a spanned cell",
+    "path": "review/forms/gallery/grid/118_wide_table_cell.ui",
+    "number": 33
+  },
+  {
+    "id": "gallery/grid/119_vertical_stack_cell",
+    "category": "gallery/grid",
+    "title": "#034 grid/119_vertical_stack_cell",
+    "description": "vbox inside a grid cell",
+    "path": "review/forms/gallery/grid/119_vertical_stack_cell.ui",
+    "number": 34
+  },
+  {
+    "id": "gallery/form/120_basic",
+    "category": "gallery/form",
+    "title": "#035 form/120_basic",
+    "description": "plain label/field pairs",
+    "path": "review/forms/gallery/form/120_basic.ui",
+    "number": 35
+  },
+  {
+    "id": "gallery/form/121_wrap_long",
+    "category": "gallery/form",
+    "title": "#036 form/121_wrap_long",
+    "description": "WrapLongRows for a long label",
+    "path": "review/forms/gallery/form/121_wrap_long.ui",
+    "number": 36
+  },
+  {
+    "id": "gallery/form/122_wrap_all",
+    "category": "gallery/form",
+    "title": "#037 form/122_wrap_all",
+    "description": "WrapAllRows puts fields on their own line",
+    "path": "review/forms/gallery/form/122_wrap_all.ui",
+    "number": 37
+  },
+  {
+    "id": "gallery/form/123_stay_size_hint",
+    "category": "gallery/form",
+    "title": "#038 form/123_stay_size_hint",
+    "description": "FieldsStayAtSizeHint keeps fields narrow",
+    "path": "review/forms/gallery/form/123_stay_size_hint.ui",
+    "number": 38
+  },
+  {
+    "id": "gallery/form/124_align_right",
+    "category": "gallery/form",
+    "title": "#039 form/124_align_right",
+    "description": "right-aligned labels and centred form",
+    "path": "review/forms/gallery/form/124_align_right.ui",
+    "number": 39
+  },
+  {
+    "id": "gallery/form/125_in_group",
+    "category": "gallery/form",
+    "title": "#040 form/125_in_group",
+    "description": "form layout inside a group box",
+    "path": "review/forms/gallery/form/125_in_group.ui",
+    "number": 40
+  },
+  {
+    "id": "gallery/form/126_combo_check_rows",
+    "category": "gallery/form",
+    "title": "#041 form/126_combo_check_rows",
+    "description": "combo and check rows",
+    "path": "review/forms/gallery/form/126_combo_check_rows.ui",
+    "number": 41
+  },
+  {
+    "id": "gallery/form/127_long_labels",
+    "category": "gallery/form",
+    "title": "#042 form/127_long_labels",
+    "description": "long labels vs fixed field column",
+    "path": "review/forms/gallery/form/127_long_labels.ui",
+    "number": 42
+  },
+  {
+    "id": "gallery/form/128_disabled_field",
+    "category": "gallery/form",
+    "title": "#043 form/128_disabled_field",
+    "description": "disabled field among enabled rows",
+    "path": "review/forms/gallery/form/128_disabled_field.ui",
+    "number": 43
+  },
+  {
+    "id": "gallery/form/129_fixed_field",
+    "category": "gallery/form",
+    "title": "#044 form/129_fixed_field",
+    "description": "fixed-width field with a minimum",
+    "path": "review/forms/gallery/form/129_fixed_field.ui",
+    "number": 44
+  },
+  {
+    "id": "gallery/nested/130_vbox_grid_hbox",
+    "category": "gallery/nested",
+    "title": "#045 nested/130_vbox_grid_hbox",
+    "description": "vbox > grid > hbox three levels",
+    "path": "review/forms/gallery/nested/130_vbox_grid_hbox.ui",
+    "number": 45
+  },
+  {
+    "id": "gallery/nested/131_group_vbox_group_hbox",
+    "category": "gallery/nested",
+    "title": "#046 nested/131_group_vbox_group_hbox",
+    "description": "group > vbox > group > hbox",
+    "path": "review/forms/gallery/nested/131_group_vbox_group_hbox.ui",
+    "number": 46
+  },
+  {
+    "id": "gallery/nested/132_grid_group_form",
+    "category": "gallery/nested",
+    "title": "#047 nested/132_grid_group_form",
+    "description": "grid root wrapping a group with a form layout",
+    "path": "review/forms/gallery/nested/132_grid_group_form.ui",
+    "number": 47
+  },
+  {
+    "id": "gallery/nested/133_hbox_vbox_grid",
+    "category": "gallery/nested",
+    "title": "#048 nested/133_hbox_vbox_grid",
+    "description": "hbox of vbox and grid columns",
+    "path": "review/forms/gallery/nested/133_hbox_vbox_grid.ui",
+    "number": 48
+  },
+  {
+    "id": "gallery/nested/134_three_levels_table",
+    "category": "gallery/nested",
+    "title": "#049 nested/134_three_levels_table",
+    "description": "vbox > hbox > vbox around a table",
+    "path": "review/forms/gallery/nested/134_three_levels_table.ui",
+    "number": 49
+  },
+  {
+    "id": "gallery/nested/135_group_in_group_in_group",
+    "category": "gallery/nested",
+    "title": "#050 nested/135_group_in_group_in_group",
+    "description": "three nested group boxes",
+    "path": "review/forms/gallery/nested/135_group_in_group_in_group.ui",
+    "number": 50
+  },
+  {
+    "id": "gallery/nested/136_vbox_hbox_vbox_btns",
+    "category": "gallery/nested",
+    "title": "#051 nested/136_vbox_hbox_vbox_btns",
+    "description": "alternating box directions",
+    "path": "review/forms/gallery/nested/136_vbox_hbox_vbox_btns.ui",
+    "number": 51
+  },
+  {
+    "id": "gallery/nested/137_grid_hbox_spacers",
+    "category": "gallery/nested",
+    "title": "#052 nested/137_grid_hbox_spacers",
+    "description": "grid cells filled with boxes and spacers",
+    "path": "review/forms/gallery/nested/137_grid_hbox_spacers.ui",
+    "number": 52
+  },
+  {
+    "id": "gallery/nested/138_form_in_vbox_in_group",
+    "category": "gallery/nested",
+    "title": "#053 nested/138_form_in_vbox_in_group",
+    "description": "form layout nested through vbox and group",
+    "path": "review/forms/gallery/nested/138_form_in_vbox_in_group.ui",
+    "number": 53
+  },
+  {
+    "id": "gallery/nested/139_deep_mixed",
+    "category": "gallery/nested",
+    "title": "#054 nested/139_deep_mixed",
+    "description": "four levels with line, check and table",
+    "path": "review/forms/gallery/nested/139_deep_mixed.ui",
+    "number": 54
+  },
+  {
+    "id": "gallery/policies/140_fixed_btn_expanding_line",
+    "category": "gallery/policies",
+    "title": "#055 policies/140_fixed_btn_expanding_line",
+    "description": "fixed button + expanding line",
+    "path": "review/forms/gallery/policies/140_fixed_btn_expanding_line.ui",
+    "number": 55
+  },
+  {
+    "id": "gallery/policies/141_expanding_label",
+    "category": "gallery/policies",
+    "title": "#056 policies/141_expanding_label",
+    "description": "expanding label in a row",
+    "path": "review/forms/gallery/policies/141_expanding_label.ui",
+    "number": 56
+  },
+  {
+    "id": "gallery/policies/142_minimum_size_field",
+    "category": "gallery/policies",
+    "title": "#057 policies/142_minimum_size_field",
+    "description": "minimumSize larger than the hint",
+    "path": "review/forms/gallery/policies/142_minimum_size_field.ui",
+    "number": 57
+  },
+  {
+    "id": "gallery/policies/143_maximum_size_label",
+    "category": "gallery/policies",
+    "title": "#058 policies/143_maximum_size_label",
+    "description": "maximumSize caps a long label",
+    "path": "review/forms/gallery/policies/143_maximum_size_label.ui",
+    "number": 58
+  },
+  {
+    "id": "gallery/policies/144_fixed_vs_expanding_grid",
+    "category": "gallery/policies",
+    "title": "#059 policies/144_fixed_vs_expanding_grid",
+    "description": "policy contrast inside a grid",
+    "path": "review/forms/gallery/policies/144_fixed_vs_expanding_grid.ui",
+    "number": 59
+  },
+  {
+    "id": "gallery/policies/145_preferred_everything",
+    "category": "gallery/policies",
+    "title": "#060 policies/145_preferred_everything",
+    "description": "all widgets preferred (baseline)",
+    "path": "review/forms/gallery/policies/145_preferred_everything.ui",
+    "number": 60
+  },
+  {
+    "id": "gallery/policies/146_expanding_btn_grid",
+    "category": "gallery/policies",
+    "title": "#061 policies/146_expanding_btn_grid",
+    "description": "expanding button stretches in the grid",
+    "path": "review/forms/gallery/policies/146_expanding_btn_grid.ui",
+    "number": 61
+  },
+  {
+    "id": "gallery/policies/147_fixed_width_label_grid",
+    "category": "gallery/policies",
+    "title": "#062 policies/147_fixed_width_label_grid",
+    "description": "fixed-width label column",
+    "path": "review/forms/gallery/policies/147_fixed_width_label_grid.ui",
+    "number": 62
+  },
+  {
+    "id": "gallery/policies/148_line_fixed_btn_expanding",
+    "category": "gallery/policies",
+    "title": "#063 policies/148_line_fixed_btn_expanding",
+    "description": "opposite pairing: fixed line, expanding button",
+    "path": "review/forms/gallery/policies/148_line_fixed_btn_expanding.ui",
+    "number": 63
+  },
+  {
+    "id": "gallery/policies/149_table_expanding_grid",
+    "category": "gallery/policies",
+    "title": "#064 policies/149_table_expanding_grid",
+    "description": "expanding table cell",
+    "path": "review/forms/gallery/policies/149_table_expanding_grid.ui",
+    "number": 64
+  },
+  {
+    "id": "gallery/states/150_disabled_label",
+    "category": "gallery/states",
+    "title": "#065 states/150_disabled_label",
+    "description": "disabled label",
+    "path": "review/forms/gallery/states/150_disabled_label.ui",
+    "number": 65
+  },
+  {
+    "id": "gallery/states/151_disabled_line",
+    "category": "gallery/states",
+    "title": "#066 states/151_disabled_line",
+    "description": "disabled line edit with text",
+    "path": "review/forms/gallery/states/151_disabled_line.ui",
+    "number": 66
+  },
+  {
+    "id": "gallery/states/152_disabled_button",
+    "category": "gallery/states",
+    "title": "#067 states/152_disabled_button",
+    "description": "disabled button among enabled",
+    "path": "review/forms/gallery/states/152_disabled_button.ui",
+    "number": 67
+  },
+  {
+    "id": "gallery/states/153_disabled_check_radio",
+    "category": "gallery/states",
+    "title": "#068 states/153_disabled_check_radio",
+    "description": "disabled checkbox and radio",
+    "path": "review/forms/gallery/states/153_disabled_check_radio.ui",
+    "number": 68
+  },
+  {
+    "id": "gallery/states/154_disabled_combo",
+    "category": "gallery/states",
+    "title": "#069 states/154_disabled_combo",
+    "description": "disabled combo box",
+    "path": "review/forms/gallery/states/154_disabled_combo.ui",
+    "number": 69
+  },
+  {
+    "id": "gallery/states/155_disabled_table",
+    "category": "gallery/states",
+    "title": "#070 states/155_disabled_table",
+    "description": "disabled table",
+    "path": "review/forms/gallery/states/155_disabled_table.ui",
+    "number": 70
+  },
+  {
+    "id": "gallery/states/156_disabled_group",
+    "category": "gallery/states",
+    "title": "#071 states/156_disabled_group",
+    "description": "disabled group box cascades to children",
+    "path": "review/forms/gallery/states/156_disabled_group.ui",
+    "number": 71
+  },
+  {
+    "id": "gallery/states/157_checks_pair",
+    "category": "gallery/states",
+    "title": "#072 states/157_checks_pair",
+    "description": "checked and unchecked pair",
+    "path": "review/forms/gallery/states/157_checks_pair.ui",
+    "number": 72
+  },
+  {
+    "id": "gallery/states/158_radio_trio",
+    "category": "gallery/states",
+    "title": "#073 states/158_radio_trio",
+    "description": "exclusive radio trio",
+    "path": "review/forms/gallery/states/158_radio_trio.ui",
+    "number": 73
+  },
+  {
+    "id": "gallery/states/159_default_button",
+    "category": "gallery/states",
+    "title": "#074 states/159_default_button",
+    "description": "default button gets the initial focus ring",
+    "path": "review/forms/gallery/states/159_default_button.ui",
+    "number": 74
+  },
+  {
+    "id": "gallery/states/160_toggle_checked",
+    "category": "gallery/states",
+    "title": "#075 states/160_toggle_checked",
+    "description": "checkable buttons with checked state",
+    "path": "review/forms/gallery/states/160_toggle_checked.ui",
+    "number": 75
+  },
+  {
+    "id": "gallery/states/161_all_disabled",
+    "category": "gallery/states",
+    "title": "#076 states/161_all_disabled",
+    "description": "whole form disabled except the title",
+    "path": "review/forms/gallery/states/161_all_disabled.ui",
+    "number": 76
+  },
+  {
+    "id": "gallery/text/162_single_char",
+    "category": "gallery/text",
+    "title": "#077 text/162_single_char",
+    "description": "single character labels",
+    "path": "review/forms/gallery/text/162_single_char.ui",
+    "number": 77
+  },
+  {
+    "id": "gallery/text/163_empty_label",
+    "category": "gallery/text",
+    "title": "#078 text/163_empty_label",
+    "description": "empty strings everywhere",
+    "path": "review/forms/gallery/text/163_empty_label.ui",
+    "number": 78
+  },
+  {
+    "id": "gallery/text/164_very_long_wrapping",
+    "category": "gallery/text",
+    "title": "#079 text/164_very_long_wrapping",
+    "description": "wordWrap label with a long sentence",
+    "path": "review/forms/gallery/text/164_very_long_wrapping.ui",
+    "number": 79
+  },
+  {
+    "id": "gallery/text/165_numbers",
+    "category": "gallery/text",
+    "title": "#080 text/165_numbers",
+    "description": "numeric content in widgets",
+    "path": "review/forms/gallery/text/165_numbers.ui",
+    "number": 80
+  },
+  {
+    "id": "gallery/text/166_punctuation",
+    "category": "gallery/text",
+    "title": "#081 text/166_punctuation",
+    "description": "punctuation-heavy strings",
+    "path": "review/forms/gallery/text/166_punctuation.ui",
+    "number": 81
+  },
+  {
+    "id": "gallery/text/167_cyrillic_upper",
+    "category": "gallery/text",
+    "title": "#082 text/167_cyrillic_upper",
+    "description": "cyrillic uppercase and mixed case",
+    "path": "review/forms/gallery/text/167_cyrillic_upper.ui",
+    "number": 82
+  },
+  {
+    "id": "gallery/text/168_mixed_ru_en",
+    "category": "gallery/text",
+    "title": "#083 text/168_mixed_ru_en",
+    "description": "mixed russian and english text",
+    "path": "review/forms/gallery/text/168_mixed_ru_en.ui",
+    "number": 83
+  },
+  {
+    "id": "gallery/text/169_spaces",
+    "category": "gallery/text",
+    "title": "#084 text/169_spaces",
+    "description": "leading/trailing/double spaces",
+    "path": "review/forms/gallery/text/169_spaces.ui",
+    "number": 84
+  },
+  {
+    "id": "gallery/text/170_button_long_text",
+    "category": "gallery/text",
+    "title": "#085 text/170_button_long_text",
+    "description": "long button captions",
+    "path": "review/forms/gallery/text/170_button_long_text.ui",
+    "number": 85
+  },
+  {
+    "id": "gallery/text/171_group_long_title",
+    "category": "gallery/text",
+    "title": "#086 text/171_group_long_title",
+    "description": "long group box title",
+    "path": "review/forms/gallery/text/171_group_long_title.ui",
+    "number": 86
+  },
+  {
+    "id": "gallery/tables/172_size_1x1",
+    "category": "gallery/tables",
+    "title": "#087 tables/172_size_1x1",
+    "description": "QTableWidget 1x1",
+    "path": "review/forms/gallery/tables/172_size_1x1.ui",
+    "number": 87
+  },
+  {
+    "id": "gallery/tables/173_size_2x2",
+    "category": "gallery/tables",
+    "title": "#088 tables/173_size_2x2",
+    "description": "QTableWidget 2x2",
+    "path": "review/forms/gallery/tables/173_size_2x2.ui",
+    "number": 88
+  },
+  {
+    "id": "gallery/tables/174_size_4x3",
+    "category": "gallery/tables",
+    "title": "#089 tables/174_size_4x3",
+    "description": "QTableWidget 4x3",
+    "path": "review/forms/gallery/tables/174_size_4x3.ui",
+    "number": 89
+  },
+  {
+    "id": "gallery/tables/175_size_8x5",
+    "category": "gallery/tables",
+    "title": "#090 tables/175_size_8x5",
+    "description": "QTableWidget 8x5",
+    "path": "review/forms/gallery/tables/175_size_8x5.ui",
+    "number": 90
+  },
+  {
+    "id": "gallery/tables/176_size_20x3",
+    "category": "gallery/tables",
+    "title": "#091 tables/176_size_20x3",
+    "description": "QTableWidget 20x3",
+    "path": "review/forms/gallery/tables/176_size_20x3.ui",
+    "number": 91
+  },
+  {
+    "id": "gallery/tables/177_size_3x12",
+    "category": "gallery/tables",
+    "title": "#092 tables/177_size_3x12",
+    "description": "QTableWidget 3x12",
+    "path": "review/forms/gallery/tables/177_size_3x12.ui",
+    "number": 92
+  },
+  {
+    "id": "gallery/tables/178_narrow_tall",
+    "category": "gallery/tables",
+    "title": "#093 tables/178_narrow_tall",
+    "description": "narrow table with vertical overflow",
+    "path": "review/forms/gallery/tables/178_narrow_tall.ui",
+    "number": 93
+  },
+  {
+    "id": "gallery/tables/179_wide_short",
+    "category": "gallery/tables",
+    "title": "#094 tables/179_wide_short",
+    "description": "short table with horizontal overflow",
+    "path": "review/forms/gallery/tables/179_wide_short.ui",
+    "number": 94
+  },
+  {
+    "id": "gallery/tables/180_in_grid",
+    "category": "gallery/tables",
+    "title": "#095 tables/180_in_grid",
+    "description": "table inside a grid cell",
+    "path": "review/forms/gallery/tables/180_in_grid.ui",
+    "number": 95
+  },
+  {
+    "id": "gallery/tables/181_in_form_filter",
+    "category": "gallery/tables",
+    "title": "#096 tables/181_in_form_filter",
+    "description": "table behind a filter row",
+    "path": "review/forms/gallery/tables/181_in_form_filter.ui",
+    "number": 96
+  },
+  {
+    "id": "gallery/tables/182_policy_off",
+    "category": "gallery/tables",
+    "title": "#097 tables/182_policy_off",
+    "description": "scrollbars forced off (content clips)",
+    "path": "review/forms/gallery/tables/182_policy_off.ui",
+    "number": 97
+  },
+  {
+    "id": "gallery/tables/183_policy_always",
+    "category": "gallery/tables",
+    "title": "#098 tables/183_policy_always",
+    "description": "scrollbars always on even when unused",
+    "path": "review/forms/gallery/tables/183_policy_always.ui",
+    "number": 98
+  },
+  {
+    "id": "gallery/lists/184_list_small",
+    "category": "gallery/lists",
+    "title": "#099 lists/184_list_small",
+    "description": "list widget in a small form",
+    "path": "review/forms/gallery/lists/184_list_small.ui",
+    "number": 99
+  },
+  {
+    "id": "gallery/lists/185_list_tall",
+    "category": "gallery/lists",
+    "title": "#100 lists/185_list_tall",
+    "description": "tall list",
+    "path": "review/forms/gallery/lists/185_list_tall.ui",
+    "number": 100
+  },
+  {
+    "id": "gallery/lists/186_tree_small",
+    "category": "gallery/lists",
+    "title": "#101 lists/186_tree_small",
+    "description": "tree widget in a small form",
+    "path": "review/forms/gallery/lists/186_tree_small.ui",
+    "number": 101
+  },
+  {
+    "id": "gallery/lists/187_tree_overflow",
+    "category": "gallery/lists",
+    "title": "#102 lists/187_tree_overflow",
+    "description": "tree with vertical overflow",
+    "path": "review/forms/gallery/lists/187_tree_overflow.ui",
+    "number": 102
+  },
+  {
+    "id": "gallery/lists/188_list_disabled",
+    "category": "gallery/lists",
+    "title": "#103 lists/188_list_disabled",
+    "description": "disabled list among active widgets",
+    "path": "review/forms/gallery/lists/188_list_disabled.ui",
+    "number": 103
+  },
+  {
+    "id": "gallery/lists/189_tree_disabled",
+    "category": "gallery/lists",
+    "title": "#104 lists/189_tree_disabled",
+    "description": "disabled tree",
+    "path": "review/forms/gallery/lists/189_tree_disabled.ui",
+    "number": 104
+  },
+  {
+    "id": "gallery/lists/190_list_in_grid",
+    "category": "gallery/lists",
+    "title": "#105 lists/190_list_in_grid",
+    "description": "list inside a grid cell",
+    "path": "review/forms/gallery/lists/190_list_in_grid.ui",
+    "number": 105
+  },
+  {
+    "id": "gallery/lists/191_tree_hbox",
+    "category": "gallery/lists",
+    "title": "#106 lists/191_tree_hbox",
+    "description": "tree beside an hbox detail column",
+    "path": "review/forms/gallery/lists/191_tree_hbox.ui",
+    "number": 106
+  },
+  {
+    "id": "gallery/lists/192_list_wide",
+    "category": "gallery/lists",
+    "title": "#107 lists/192_list_wide",
+    "description": "wide list inside a grid",
+    "path": "review/forms/gallery/lists/192_list_wide.ui",
+    "number": 107
+  },
+  {
+    "id": "gallery/lists/193_combo_in_grid",
+    "category": "gallery/lists",
+    "title": "#108 lists/193_combo_in_grid",
+    "description": "combo boxes in a grid column",
+    "path": "review/forms/gallery/lists/193_combo_in_grid.ui",
+    "number": 108
+  },
+  {
+    "id": "gallery/groups/194_single_group",
+    "category": "gallery/groups",
+    "title": "#109 groups/194_single_group",
+    "description": "one group with mixed controls",
+    "path": "review/forms/gallery/groups/194_single_group.ui",
+    "number": 109
+  },
+  {
+    "id": "gallery/groups/195_two_groups",
+    "category": "gallery/groups",
+    "title": "#110 groups/195_two_groups",
+    "description": "two sibling groups",
+    "path": "review/forms/gallery/groups/195_two_groups.ui",
+    "number": 110
+  },
+  {
+    "id": "gallery/groups/196_nested_groups",
+    "category": "gallery/groups",
+    "title": "#111 groups/196_nested_groups",
+    "description": "group inside a group",
+    "path": "review/forms/gallery/groups/196_nested_groups.ui",
+    "number": 111
+  },
+  {
+    "id": "gallery/groups/197_group_hbox",
+    "category": "gallery/groups",
+    "title": "#112 groups/197_group_hbox",
+    "description": "hbox layout inside a group box",
+    "path": "review/forms/gallery/groups/197_group_hbox.ui",
+    "number": 112
+  },
+  {
+    "id": "gallery/groups/198_group_grid",
+    "category": "gallery/groups",
+    "title": "#113 groups/198_group_grid",
+    "description": "grid layout inside a group box",
+    "path": "review/forms/gallery/groups/198_group_grid.ui",
+    "number": 113
+  },
+  {
+    "id": "gallery/groups/199_group_disabled",
+    "category": "gallery/groups",
+    "title": "#114 groups/199_group_disabled",
+    "description": "disabled sibling group",
+    "path": "review/forms/gallery/groups/199_group_disabled.ui",
+    "number": 114
+  },
+  {
+    "id": "gallery/groups/200_three_groups",
+    "category": "gallery/groups",
+    "title": "#115 groups/200_three_groups",
+    "description": "three compact groups stacked",
+    "path": "review/forms/gallery/groups/200_three_groups.ui",
+    "number": 115
+  },
+  {
+    "id": "gallery/groups/201_group_with_table",
+    "category": "gallery/groups",
+    "title": "#116 groups/201_group_with_table",
+    "description": "table inside a group box",
+    "path": "review/forms/gallery/groups/201_group_with_table.ui",
+    "number": 116
+  },
+  {
+    "id": "gallery/mixed/202_login_form",
+    "category": "gallery/mixed",
+    "title": "#117 mixed/202_login_form",
+    "description": "login dialog shape",
+    "path": "review/forms/gallery/mixed/202_login_form.ui",
+    "number": 117
+  },
+  {
+    "id": "gallery/mixed/203_filter_bar",
+    "category": "gallery/mixed",
+    "title": "#118 mixed/203_filter_bar",
+    "description": "filter controls above a table",
+    "path": "review/forms/gallery/mixed/203_filter_bar.ui",
+    "number": 118
+  },
+  {
+    "id": "gallery/mixed/204_properties_grid",
+    "category": "gallery/mixed",
+    "title": "#119 mixed/204_properties_grid",
+    "description": "grid of checkboxes like a properties panel",
+    "path": "review/forms/gallery/mixed/204_properties_grid.ui",
+    "number": 119
+  },
+  {
+    "id": "gallery/mixed/205_button_panel",
+    "category": "gallery/mixed",
+    "title": "#120 mixed/205_button_panel",
+    "description": "two aligned button rows",
+    "path": "review/forms/gallery/mixed/205_button_panel.ui",
+    "number": 120
+  },
+  {
+    "id": "gallery/mixed/206_splitter_h",
+    "category": "gallery/mixed",
+    "title": "#121 mixed/206_splitter_h",
+    "description": "horizontal splitter: list and detail",
+    "path": "review/forms/gallery/mixed/206_splitter_h.ui",
+    "number": 121
+  },
+  {
+    "id": "gallery/mixed/207_splitter_v",
+    "category": "gallery/mixed",
+    "title": "#122 mixed/207_splitter_v",
+    "description": "vertical splitter: list above a table",
+    "path": "review/forms/gallery/mixed/207_splitter_v.ui",
+    "number": 122
+  },
+  {
+    "id": "gallery/mixed/208_form_with_table",
+    "category": "gallery/mixed",
+    "title": "#123 mixed/208_form_with_table",
+    "description": "form rows, table and buttons together",
+    "path": "review/forms/gallery/mixed/208_form_with_table.ui",
+    "number": 123
+  },
+  {
+    "id": "gallery/mixed/209_checks_panel",
+    "category": "gallery/mixed",
+    "title": "#124 mixed/209_checks_panel",
+    "description": "panels of toggles with actions",
+    "path": "review/forms/gallery/mixed/209_checks_panel.ui",
+    "number": 124
+  },
+  {
+    "id": "gallery/mixed/210_nav_plus_detail",
+    "category": "gallery/mixed",
+    "title": "#125 mixed/210_nav_plus_detail",
+    "description": "list navigation with a detail column",
+    "path": "review/forms/gallery/mixed/210_nav_plus_detail.ui",
+    "number": 125
+  },
+  {
+    "id": "gallery/mixed/211_table_and_tree",
+    "category": "gallery/mixed",
+    "title": "#126 mixed/211_table_and_tree",
+    "description": "table and tree side by side",
+    "path": "review/forms/gallery/mixed/211_table_and_tree.ui",
+    "number": 126
   }
 ]

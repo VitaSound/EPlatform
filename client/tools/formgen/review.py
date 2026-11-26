@@ -18,6 +18,8 @@ QT_TOOL = ROOT / "tools" / "qt_reference"
 QT_BIN = QT_TOOL / "qt_reference"
 RQT_RENDER = ROOT / "target" / "debug" / "rqt_render"
 ICONS = REVIEW / "icons"
+SERVER_QT_FORMS = ROOT.parent / "server" / "priv" / "qt_forms"
+SERVER_LUA_MODULES = ROOT.parent / "server" / "priv" / "lua_modules"
 
 
 def esc(text):
@@ -131,6 +133,8 @@ def table_with_policy(name, rows, cols, vertical=None, horizontal=None):
 
 
 def layout(cls, name, items, spacing=6, margins=11):
+    if isinstance(items, str):
+        items = [items]
     body = "".join(f"<item>{item}</item>" for item in items)
     props = "".join(
         f'<property name="{key}"><number>{value}</number></property>'
@@ -987,6 +991,743 @@ QTableWidget { background-color: #ffffff; border: 2px solid #3f51b5; }
     return cases
 
 
+def build_gallery_cases():
+    """Deterministic matrix of forms for manual widget testing (0.18.5).
+
+    Ids are stable: `gallery/<category>/<case>`. The window title carries
+    the sequential `#NNN` number assigned in `main()` (via `make_xml`),
+    matching `gallery_index.lua` that drives `gallery.lua`.
+    Only supported widget classes are used; views stay item-less (parity
+    with Qt renders, items would come from Lua at runtime).
+    """
+    cases = []
+
+    def add_case(category, name, description, make_xml):
+        cases.append(
+            {
+                "id": f"{category}/{name}",
+                "category": category,
+                "name": name,
+                "title": "",
+                "description": description,
+                "make_xml": make_xml,
+            }
+        )
+
+    def vg(category, name, description, body, width=460, height=320, spacing=6, margins=11):
+        def make_xml(title, body=body, width=width, height=height,
+                     spacing=spacing, margins=margins):
+            return form(title, width, height, body, spacing=spacing, margins=margins)
+        add_case(category, name, description, make_xml)
+
+    def gr(category, name, description, items, width=460, height=320, spacing=6, margins=11):
+        def make_xml(title, items=items, width=width, height=height,
+                     spacing=spacing, margins=margins):
+            return form_grid(
+                title, width, height,
+                grid_layout("gridLayout", items, spacing, margins),
+            )
+        add_case(category, name, description, make_xml)
+
+    def fl(category, name, description, items, props="", width=460, height=320):
+        def make_xml(title, items=items, props=props, width=width, height=height):
+            return form_grid(
+                title, width, height,
+                form_layout("formLayout", items, props),
+            )
+        add_case(category, name, description, make_xml)
+
+    # ---- gallery/hbox: horizontal mixes ----
+    category = "gallery/hbox"
+    vg(category, "label_line_btn", "label + line edit + button in one row",
+       [layout("QHBoxLayout", "row",
+               [label("label_1", "Name:"), line("lineEdit_1", "value"),
+                button("ok", "OK")], 6, 0)])
+    vg(category, "spacer_between", "buttons pushed apart by a horizontal spacer",
+       [layout("QHBoxLayout", "row",
+               [button("left", "Left"), spacer(True), button("right", "Right")], 6, 0)])
+    vg(category, "disabled_mix", "disabled label/line/button in a row",
+       [layout("QHBoxLayout", "row",
+               [widget("QLabel", "label_1",
+                       prop_text("text", "Locked") + prop_bool("enabled", False)),
+                widget("QLineEdit", "lineEdit_1",
+                       prop_text("text", "read-only") + prop_bool("enabled", False)),
+                widget("QPushButton", "go",
+                       prop_text("text", "Go") + prop_bool("enabled", False))], 6, 0)])
+    vg(category, "long_text", "long label next to a fixed field",
+       [layout("QHBoxLayout", "row",
+               [label("label_1", "A very long label that must not be clipped in the row"),
+                line("lineEdit_1")], 6, 0)])
+    vg(category, "cyrillic", "cyrillic label and button",
+       [layout("QHBoxLayout", "row",
+               [label("label_1", "Итого:"), line("lineEdit_1", "1 234,56"),
+                button("calc", "Рассчитать")], 6, 0)])
+    vg(category, "checks_radio", "checkbox, radio and another checkbox",
+       [layout("QHBoxLayout", "row",
+               [checkbox("check_1", "Включить", True),
+                radio("radio_1", "Выбор", True),
+                checkbox("check_2", "Ещё", False)], 6, 0)])
+    vg(category, "combo_line", "combo box beside a line edit",
+       [layout("QHBoxLayout", "row",
+               [combo("comboBox_1"), line("lineEdit_1", "text")], 6, 0)])
+    vg(category, "button_states_row", "normal/default/disabled buttons in a row",
+       [layout("QHBoxLayout", "row",
+               [button_state("btn_normal", "Обычная"),
+                button_state("btn_default", "Default", default=True),
+                button_state("btn_disabled", "Отключена", enabled=False)], 6, 0)],
+       width=520)
+    vg(category, "fixed_sizes", "fixed-size widgets inside a horizontal row",
+       [layout("QHBoxLayout", "row",
+               [widget("QPushButton", "fixed_btn",
+                       prop_size_policy("Fixed", "Fixed") + prop_text("text", "Fixed")),
+                widget("QLineEdit", "fixed_edit",
+                       prop_size_policy("Fixed", "Fixed")
+                       + '<property name="minimumSize"><size><width>140</width><height>0</height></size></property>'),
+                widget("QLabel", "grow_label",
+                       prop_size_policy("Expanding", "Preferred") + prop_text("text", "Expanding"))],
+               6, 0)])
+    vg(category, "empty_and_widgets", "empty label keeps the row layout honest",
+       [layout("QHBoxLayout", "row",
+               [label("label_empty", ""), line("lineEdit_1"),
+                button("ok", "OK"), label("label_tail", "хвост")], 6, 0)])
+
+    # ---- gallery/vbox: vertical stacks ----
+    category = "gallery/vbox"
+    vg(category, "labels_only", "four labels stacked",
+       [label("l1", "Первая строка"), label("l2", "Вторая строка"),
+        label("l3", "Третья строка"), label("l4", "Четвёртая")])
+    vg(category, "fields_stack", "label plus three inputs",
+       [label("l1", "Поля:"), line("e1", "один"), line("e2", "два"),
+        line("e3", "три")], height=280)
+    vg(category, "buttons_stack", "three buttons right aligned with spacers",
+       [button("b1", "Применить"), spacer(False), button("b2", "Сохранить"),
+        button("b3", "Отмена")], height=280)
+    vg(category, "mixed_disabled", "stack with disabled and enabled widgets",
+       [label("l1", "Активная подпись"),
+        widget("QLineEdit", "e1", prop_text("text", "живое поле")),
+        widget("QLineEdit", "e2",
+               prop_text("text", "мёртвое поле") + prop_bool("enabled", False)),
+        widget("QPushButton", "b1",
+               prop_text("text", "Мёртвая кнопка") + prop_bool("enabled", False))])
+    vg(category, "long_lines", "long texts wrapping behaviour",
+       [label("l1", "Очень длинная подпись, которая не помещается в одну строку"),
+        line("e1", "длинное значение в поле ввода"),
+        button("b1", "Тоже очень длинная надпись на кнопке")], height=300)
+    vg(category, "stretch", "content pushed to the top by a vertical spacer",
+       [label("l1", "Вверху"), button("b1", "Кнопка"), spacer(False)])
+    vg(category, "group_in_vbox", "group box with controls inside a vbox",
+       [group("Параметры", "group",
+              [checkbox("c1", "Флажок", True), radio("r1", "Переключатель", True),
+               line("e1", "значение")]),
+        layout("QHBoxLayout", "buttons", [spacer(True), button("ok", "OK")], 6, 0)],
+       height=340)
+    vg(category, "dense_rows", "six compact rows of label+value",
+       [layout("QHBoxLayout", f"row{index}",
+               [label(f"k{index}", f"Ключ {index}:"), line(f"v{index}", str(index * 11))],
+               6, 2)
+        for index in range(6)], height=340)
+    vg(category, "empty_label_row", "empty label between fields",
+       [label("l_empty", ""), line("e1", "до"), label("l_mid", "между"),
+        line("e2", "после")])
+    vg(category, "cyrillic_long", "long cyrillic caption and button",
+       [label("l1", "Непрерывная русская подпись для проверки метрик шрифта"),
+        button("b1", "Выполнить действие")], height=260)
+
+    # ---- gallery/grid: QGridLayout combinations ----
+    category = "gallery/grid"
+    gr(category, "label_field_2x2", "2x2 label/field grid",
+       [grid_item(0, 0, label("l1", "Имя:")),
+        grid_item(0, 1, line("e1", "Иван")),
+        grid_item(1, 0, label("l2", "Код:")),
+        grid_item(1, 1, combo("c1"))], width=360, height=220)
+    gr(category, "span_colspan", "colspan over two columns",
+       [grid_item(0, 0, label("l1", "Фильтр:")),
+        grid_item(0, 1, line("e1"), colspan=2),
+        grid_item(1, 0, button("b1", "Найти")),
+        grid_item(1, 1, label("l2", "Готово"), colspan=2)], width=420, height=240)
+    gr(category, "span_rowspan_align", "rowspan with centred alignment",
+       [grid_item(0, 0, button("b1", "Вверх"), rowspan=2,
+                  alignment="Qt::AlignHCenter|Qt::AlignVCenter"),
+        grid_item(0, 1, table("table", 6, 2)),
+        grid_item(1, 1, checkbox("c1", "Галочка")),
+        grid_item(2, 0, label("l1", "Статус:")),
+        grid_item(2, 1, label("l2", "OK"))], width=440, height=300)
+    gr(category, "dense_4x4", "16-cell mixed grid",
+       [grid_item(row, column,
+                  label(f"l{row}{column}", f"{row},{column}")
+                  if (row + column) % 2 == 0
+                  else line(f"e{row}{column}"))
+        for row in range(4) for column in range(4)], width=440, height=300)
+    gr(category, "sparse_empty", "grid with intentionally empty cells",
+       [grid_item(0, 0, label("l1", "0,0")),
+        grid_item(0, 3, label("l2", "0,3")),
+        grid_item(3, 0, label("l3", "3,0")),
+        grid_item(3, 3, button("b1", "3,3"))], width=400, height=280)
+    gr(category, "nested_hbox_cell", "hbox layout inside a grid cell",
+       [grid_item(0, 0, label("l1", "Строка:")),
+        grid_item(0, 1, layout("QHBoxLayout", "cellRow",
+                               [line("e1", "значение"), button("b1", "…")], 6, 0),
+                  colspan=2),
+        grid_item(1, 0, label("l2", "Ёщё:")),
+        grid_item(1, 1, line("e2"), colspan=2)], width=420, height=240)
+    gr(category, "policy_cells", "Fixed vs Expanding cells",
+       [grid_item(0, 0, widget("QPushButton", "fixed",
+                               prop_size_policy("Fixed", "Fixed") + prop_text("text", "Fixed"))),
+        grid_item(0, 1, line("e1")),
+        grid_item(1, 0, widget("QLabel", "grow",
+                               prop_size_policy("Expanding", "Preferred")
+                               + prop_text("text", "Status:"))),
+        grid_item(1, 1, label("l1", "ready"))], width=440, height=240)
+    gr(category, "table_span", "table spanning two columns",
+       [grid_item(0, 0, label("l1", "Таблица:")),
+        grid_item(1, 0, table("table", 8, 3), colspan=2),
+        grid_item(2, 0, button("b1", "Добавить")),
+        grid_item(2, 1, button("b2", "Удалить"))], width=500, height=340)
+    gr(category, "combo_check_grid", "combo and checkbox rows",
+       [grid_item(0, 0, label("l1", "Режим:")),
+        grid_item(0, 1, combo("c1")),
+        grid_item(1, 0, label("l2", "Флаги:")),
+        grid_item(1, 1, checkbox("c2", "Использовать", True)),
+        grid_item(2, 0, label("l3", "Повтор:")),
+        grid_item(2, 1, radio("r1", "Да", True))], width=420, height=260)
+    gr(category, "long_text_cell", "long label cell versus short fields",
+       [grid_item(0, 0, label("l1", "Подпись, которая существенно длиннее соседних полей")),
+        grid_item(0, 1, line("e1", "x")),
+        grid_item(1, 0, label("l2", "Короткая:")),
+        grid_item(1, 1, line("e2", "y"))], width=480, height=220)
+    gr(category, "spacers_grid", "spacers inside grid cells",
+       [grid_item(0, 0, button("b1", "Слева")),
+        grid_item(0, 1, spacer(True), colspan=2),
+        grid_item(1, 0, spacer(False), rowspan=2,
+                  alignment="Qt::AlignVCenter"),
+        grid_item(1, 1, label("l1", "Справа")),
+        grid_item(2, 2, button("b2", "Угол"))], width=440, height=260)
+    gr(category, "mixed_widgets", "every supported class in one grid",
+       [grid_item(0, 0, label("l1", "Метка")),
+        grid_item(0, 1, line("e1", "поле")),
+        grid_item(1, 0, checkbox("c1", "Флажок", True)),
+        grid_item(1, 1, radio("r1", "Радио", True)),
+        grid_item(2, 0, combo("c2")),
+        grid_item(2, 1, button("b1", "Кнопка")),
+        grid_item(3, 0, table("table", 3, 2), colspan=2)], width=460, height=360)
+    gr(category, "wide_table_cell", "wide table in a spanned cell",
+       [grid_item(0, 0, label("l1", "Таблица"), colspan=3),
+        grid_item(1, 0, table("table", 2, 12), colspan=3)], width=520, height=240)
+    gr(category, "vertical_stack_cell", "vbox inside a grid cell",
+       [grid_item(0, 0, label("l1", "Стек:")),
+        grid_item(0, 1, layout("QVBoxLayout", "cellStack",
+                               [line("e1"), line("e2"), button("b1", "Ок")], 4, 0)),
+        grid_item(1, 0, label("l2", "Итог:")),
+        grid_item(1, 1, label("l3", "2 значения"))], width=420, height=280)
+
+    # ---- gallery/form: QFormLayout policies ----
+    category = "gallery/form"
+    fl(category, "basic", "plain label/field pairs",
+       [grid_item(0, 0, label("l1", "Имя:")), grid_item(0, 1, line("e1", "Иван")),
+        grid_item(1, 0, label("l2", "Код:")), grid_item(1, 1, combo("c1"))],
+       width=360, height=200)
+    fl(category, "wrap_long", "WrapLongRows for a long label",
+       [grid_item(0, 0, label("l1", "Очень длинная подпись, требующая переноса:")),
+        grid_item(0, 1, line("e1")),
+        grid_item(1, 0, label("l2", "Короткая:")),
+        grid_item(1, 1, line("e2"))],
+       props=form_prop_enum("rowWrapPolicy", "WrapLongRows"), width=320, height=240)
+    fl(category, "wrap_all", "WrapAllRows puts fields on their own line",
+       [grid_item(0, 0, label("l1", "Имя:")), grid_item(0, 1, line("e1")),
+        grid_item(1, 0, label("l2", "Описание:")), grid_item(1, 1, line("e2")),
+        grid_item(2, 0, label("l3", "Флаг:")), grid_item(2, 1, checkbox("c1", "Да"))],
+       props=form_prop_enum("rowWrapPolicy", "WrapAllRows"), width=340, height=300)
+    fl(category, "stay_size_hint", "FieldsStayAtSizeHint keeps fields narrow",
+       [grid_item(0, 0, label("l1", "Имя:")), grid_item(0, 1, line("e1")),
+        grid_item(1, 0, label("l2", "Статус:")),
+        grid_item(1, 1, label("l3", "готов"))],
+       props=form_prop_enum("fieldGrowthPolicy", "FieldsStayAtSizeHint"), width=380, height=200)
+    fl(category, "align_right", "right-aligned labels and centred form",
+       [grid_item(0, 0, label("l1", "Имя:")), grid_item(0, 1, line("e1")),
+        grid_item(1, 0, label("l2", "Код:")), grid_item(1, 1, combo("c1"))],
+       props=(form_prop_enum("fieldGrowthPolicy", "FieldsStayAtSizeHint")
+              + form_prop_set("labelAlignment", "Qt::AlignRight|Qt::AlignVCenter")
+              + form_prop_set("formAlignment", "Qt::AlignHCenter|Qt::AlignTop")
+              + '<property name="horizontalSpacing"><number>12</number></property>'
+              + '<property name="verticalSpacing"><number>9</number></property>'),
+       width=420, height=220)
+    fl(category, "in_group", "form layout inside a group box",
+       [grid_item(0, 0, label("l1", "Имя:")), grid_item(0, 1, line("e1")),
+        grid_item(1, 0, label("l2", "Пароль:")), grid_item(1, 1, line("e2"))],
+       width=360, height=200)
+    fl(category, "combo_check_rows", "combo and check rows",
+       [grid_item(0, 0, label("l1", "Режим:")), grid_item(0, 1, combo("c1")),
+        grid_item(1, 0, label("l2", "Опции:")),
+        grid_item(1, 1, checkbox("c2", "Запомнить", True))], width=380, height=200)
+    fl(category, "long_labels", "long labels vs fixed field column",
+       [grid_item(0, 0, label("l1", "Непрерывно длинная подпись слева")),
+        grid_item(0, 1, line("e1", "a")),
+        grid_item(1, 0, label("l2", "B:")),
+        grid_item(1, 1, line("e2", "b"))], width=420, height=220)
+    fl(category, "disabled_field", "disabled field among enabled rows",
+       [grid_item(0, 0, label("l1", "Живое:")), grid_item(0, 1, line("e1", "ok")),
+        grid_item(1, 0, label("l2", "Мёртвое:")),
+        grid_item(1, 1, widget("QLineEdit", "e2",
+                               prop_text("text", "нет") + prop_bool("enabled", False)))],
+       width=380, height=200)
+    fl(category, "fixed_field", "fixed-width field with a minimum",
+       [grid_item(0, 0, label("l1", "Код:")),
+        grid_item(0, 1, widget("QLineEdit", "e1",
+                               prop_size_policy("Fixed", "Fixed")
+                               + '<property name="minimumSize"><size><width>160</width><height>0</height></size></property>')),
+        grid_item(1, 0, label("l2", "Значение:")), grid_item(1, 1, line("e2"))],
+       width=400, height=200)
+
+    # ---- gallery/nested: deep layout nesting ----
+    category = "gallery/nested"
+    vg(category, "vbox_grid_hbox", "vbox > grid > hbox three levels",
+       [label("l1", "Верх"),
+        grid_layout("innerGrid",
+                    [grid_item(0, 0, label("l2", "Ключ:")),
+                     grid_item(0, 1, line("e1", "значение")),
+                     grid_item(1, 0, label("l3", "Ёщё:")),
+                     grid_item(1, 1, combo("c1"))]),
+        layout("QHBoxLayout", "buttons", [spacer(True), button("ok", "OK"),
+                                           button("cancel", "Отмена")], 6, 0)],
+       height=340)
+    vg(category, "group_vbox_group_hbox", "group > vbox > group > hbox",
+       [group("Внешняя", "g1",
+              [label("l1", "внутри внешней"),
+               group("Вложенная", "g2",
+                     [line("e1", "глубоко"),
+                      layout("QHBoxLayout", "row",
+                             [button("b1", "A"), button("b2", "B")], 6, 0)])]),
+        spacer(False)], height=380)
+    vg(category, "grid_group_form", "grid root wrapping a group with a form layout",
+       [group("Свойства", "g1",
+              [form_layout("formLayout",
+                           [grid_item(0, 0, label("l1", "Имя:")),
+                            grid_item(0, 1, line("e1")),
+                            grid_item(1, 0, label("l2", "Тип:")),
+                            grid_item(1, 1, combo("c1"))])]),
+        layout("QHBoxLayout", "buttons", [spacer(True), button("ok", "OK")], 6, 0)],
+       height=340)
+    vg(category, "hbox_vbox_grid", "hbox of vbox and grid columns",
+       [layout("QHBoxLayout", "split",
+               [layout("QVBoxLayout", "left",
+                       [label("l1", "Лево"), line("e1"), button("b1", "←")], 4, 0),
+                layout("QVBoxLayout", "right",
+                       [label("l2", "Право"),
+                        grid_layout("g",
+                                    [grid_item(0, 0, checkbox("c1", "1")),
+                                     grid_item(0, 1, checkbox("c2", "2")),
+                                     grid_item(1, 0, checkbox("c3", "3")),
+                                     grid_item(1, 1, checkbox("c4", "4"))]),
+                        button("b2", "→")], 4, 0)], 8, 0)],
+       width=520, height=300)
+    vg(category, "three_levels_table", "vbox > hbox > vbox around a table",
+       [layout("QHBoxLayout", "toolbarRow",
+               [label("l1", "Фильтр:"), line("e1"), button("b1", "Применить")], 6, 0),
+        table("table", 10, 3),
+        layout("QHBoxLayout", "statusRow", [label("l2", "Строк: 10"),
+                                             spacer(True), button("b2", "Закрыть")], 6, 0)],
+       width=520, height=400)
+    vg(category, "group_in_group_in_group", "three nested group boxes",
+       [group("Уровень 1", "g1",
+              [group("Уровень 2", "g2",
+                     [group("Уровень 3", "g3",
+                            [label("l1", "Глубоко внутри"), line("e1", "value")])])]),
+        spacer(False)], height=420)
+    vg(category, "vbox_hbox_vbox_btns", "alternating box directions",
+       [layout("QHBoxLayout", "top", [label("l1", "Заголовок"), spacer(True),
+                                       button("settings", "⚙")], 6, 0),
+        layout("QVBoxLayout", "body",
+               [line("e1"), layout("QHBoxLayout", "mid", [button("b1", "Ок"),
+                                                           button("b2", "Ещё")], 6, 0),
+                label("l2", "подвал")], 4, 0)], height=300)
+    vg(category, "grid_hbox_spacers", "grid cells filled with boxes and spacers",
+       [grid_layout("g",
+                    [grid_item(0, 0, layout("QHBoxLayout", "r1",
+                                           [button("b1", "1"), spacer(True)], 6, 0),
+                               colspan=2),
+                     grid_item(1, 0, label("l1", "Ячейка")),
+                     grid_item(1, 1, line("e1")),
+                     grid_item(2, 0, spacer(False)),
+                     grid_item(2, 1, button("b2", "Готово"))]),
+        spacer(False)], height=320)
+    vg(category, "form_in_vbox_in_group", "form layout nested through vbox and group",
+       [group("Данные", "g1",
+              [layout("QVBoxLayout", "stack",
+                      [form_layout("formLayout",
+                                   [grid_item(0, 0, label("l1", "Поле 1:")),
+                                    grid_item(0, 1, line("e1")),
+                                    grid_item(1, 0, label("l2", "Поле 2:")),
+                                    grid_item(1, 1, combo("c1"))]),
+                       checkbox("c2", "Сохранить", True)], 6, 0)]),
+        layout("QHBoxLayout", "buttons", [spacer(True), button("ok", "OK")], 6, 0)],
+       height=360)
+    vg(category, "deep_mixed", "four levels with line, check and table",
+       [group("Блок", "g1",
+              [layout("QHBoxLayout", "row",
+                      [label("l1", "Имя:"), line("e1", "текст"),
+                       checkbox("c1", "ок", True)], 6, 0),
+               table("table", 6, 2),
+               layout("QHBoxLayout", "buttons", [spacer(True), button("b1", "Применить"),
+                                                  button("b2", "Сброс")], 6, 0)])],
+       width=520, height=380)
+
+    # ---- gallery/policies: size policies and constraints ----
+    category = "gallery/policies"
+    vg(category, "fixed_btn_expanding_line", "fixed button + expanding line",
+       [layout("QHBoxLayout", "row",
+               [widget("QPushButton", "b1",
+                       prop_size_policy("Fixed", "Fixed") + prop_text("text", "Fixed")),
+                widget("QLineEdit", "e1",
+                       prop_size_policy("Expanding", "Fixed") + prop_text("text", "Expanding"))],
+               6, 0)])
+    vg(category, "expanding_label", "expanding label in a row",
+       [layout("QHBoxLayout", "row",
+               [widget("QLabel", "l1",
+                       prop_size_policy("Expanding", "Preferred")
+                       + prop_text("text", "Растягиваемая подпись")),
+                button("b1", "OK")], 6, 0)])
+    vg(category, "minimum_size_field", "minimumSize larger than the hint",
+       [layout("QHBoxLayout", "row",
+               [label("l1", "Минимум:"),
+                widget("QLineEdit", "e1",
+                       '<property name="minimumSize"><size><width>220</width><height>0</height></size></property>'
+                       + prop_text("text", "220px"))], 6, 0)], width=520)
+    vg(category, "maximum_size_label", "maximumSize caps a long label",
+       [layout("QHBoxLayout", "row",
+               [widget("QLabel", "l1",
+                       '<property name="maximumSize"><size><width>120</width><height>0</height></size></property>'
+                       + prop_text("text", "Очень длинная подпись с ограничением ширины")),
+                button("b1", "OK")], 6, 0)], width=480)
+    gr(category, "fixed_vs_expanding_grid", "policy contrast inside a grid",
+       [grid_item(0, 0, widget("QPushButton", "b1",
+                               prop_size_policy("Fixed", "Fixed") + prop_text("text", "Fixed"))),
+        grid_item(0, 1, widget("QLineEdit", "e1",
+                               prop_size_policy("Expanding", "Expanding"))),
+        grid_item(1, 0, widget("QLabel", "l1",
+                               prop_size_policy("Minimum", "Preferred") + prop_text("text", "Minimum"))),
+        grid_item(1, 1, widget("QLineEdit", "e2",
+                               prop_size_policy("Preferred", "Preferred")))],
+       width=440, height=220)
+    vg(category, "preferred_everything", "all widgets preferred (baseline)",
+       [layout("QHBoxLayout", "row",
+               [label("l1", "Preferred"), line("e1"), button("b1", "Btn")], 6, 0)])
+    gr(category, "expanding_btn_grid", "expanding button stretches in the grid",
+       [grid_item(0, 0, widget("QPushButton", "b1",
+                               prop_size_policy("Expanding", "Preferred")
+                               + prop_text("text", "Растянуть")), colspan=2),
+        grid_item(1, 0, label("l1", "Ряд:")),
+        grid_item(1, 1, line("e1"))], width=420, height=220)
+    gr(category, "fixed_width_label_grid", "fixed-width label column",
+       [grid_item(0, 0, widget("QLabel", "l1",
+                               prop_size_policy("Fixed", "Fixed")
+                               + prop_text("text", "Фикс:"))),
+        grid_item(0, 1, line("e1")),
+        grid_item(1, 0, widget("QLabel", "l2",
+                               prop_size_policy("Fixed", "Fixed")
+                               + prop_text("text", "Ещё:"))),
+        grid_item(1, 1, line("e2"))], width=400, height=200)
+    vg(category, "line_fixed_btn_expanding", "opposite pairing: fixed line, expanding button",
+       [layout("QHBoxLayout", "row",
+               [widget("QLineEdit", "e1",
+                       prop_size_policy("Fixed", "Fixed") + prop_text("text", "fixed")),
+                widget("QPushButton", "b1",
+                       prop_size_policy("Expanding", "Fixed") + prop_text("text", "Expanding"))],
+               6, 0)])
+    gr(category, "table_expanding_grid", "expanding table cell",
+       [grid_item(0, 0, table("table", 6, 3)),
+        grid_item(1, 0, button("b1", "Вниз"))], width=500, height=320)
+
+    # ---- gallery/states: enabled/checked/focus states ----
+    category = "gallery/states"
+    vg(category, "disabled_label", "disabled label",
+       [widget("QLabel", "l1", prop_text("text", "Отключённая метка") + prop_bool("enabled", False)),
+        label("l2", "Активная метка")])
+    vg(category, "disabled_line", "disabled line edit with text",
+       [line("e1", "активное"),
+        widget("QLineEdit", "e2", prop_text("text", "отключённое") + prop_bool("enabled", False))])
+    vg(category, "disabled_button", "disabled button among enabled",
+       [button("b1", "Активная"),
+        widget("QPushButton", "b2", prop_text("text", "Отключённая") + prop_bool("enabled", False)),
+        button("b3", "Тоже активная")])
+    vg(category, "disabled_check_radio", "disabled checkbox and radio",
+       [checkbox("c1", "Активный флажок", True),
+        widget("QCheckBox", "c2",
+               prop_text("text", "Отключённый флажок") + prop_bool("enabled", False)),
+        radio("r1", "Активный переключатель", True),
+        widget("QRadioButton", "r2",
+               prop_text("text", "Отключённый переключатель") + prop_bool("enabled", False))],
+       height=280)
+    vg(category, "disabled_combo", "disabled combo box",
+       [combo("c1"),
+        widget("QComboBox", "c2", prop_bool("enabled", False))], height=240)
+    vg(category, "disabled_table", "disabled table",
+       [table("table", 4, 3),
+        widget("QTableWidget", "table2",
+               prop_int("rowCount", 2) + prop_int("columnCount", 2) + prop_bool("enabled", False))],
+       height=340)
+    vg(category, "disabled_group", "disabled group box cascades to children",
+       [group("Отключённая группа", "g1",
+              [checkbox("c1", "Флажок", True), line("e1", "поле"), button("b1", "Кнопка")]),
+        button("b2", "Снаружи активна")], height=320)
+    vg(category, "checks_pair", "checked and unchecked pair",
+       [checkbox("c1", "Включено", True), checkbox("c2", "Выключено", False)])
+    vg(category, "radio_trio", "exclusive radio trio",
+       [radio("r1", "Первый", True), radio("r2", "Второй", False),
+        radio("r3", "Третий", False)], height=240)
+    vg(category, "default_button", "default button gets the initial focus ring",
+       [line("e1", "поле ввода"),
+        layout("QHBoxLayout", "buttons",
+               [spacer(True), button_state("ok", "OK", default=True),
+                button("cancel", "Отмена")], 6, 0)])
+    vg(category, "toggle_checked", "checkable buttons with checked state",
+       [layout("QHBoxLayout", "row",
+               [button_state("t1", "Вкл", checked=True),
+                button_state("t2", "Выкл", checked=False)], 6, 0)])
+    vg(category, "all_disabled", "whole form disabled except the title",
+       [widget("QLabel", "l1", prop_text("text", "Тоже отключено") + prop_bool("enabled", False)),
+        widget("QLineEdit", "e1", prop_text("text", "нет доступа") + prop_bool("enabled", False)),
+        widget("QPushButton", "b1", prop_text("text", "Нельзя") + prop_bool("enabled", False))])
+
+    # ---- gallery/text: text metrics edge cases ----
+    category = "gallery/text"
+    vg(category, "single_char", "single character labels",
+       [layout("QHBoxLayout", "row",
+               [label("l1", "x"), label("l2", "Я"), button("b1", "!"),
+                label("l3", "—")], 6, 0)])
+    vg(category, "empty_label", "empty strings everywhere",
+       [label("l1", ""), line("e1", ""), button("b1", ""), label("l2", "после пустых")])
+    vg(category, "very_long_wrapping", "wordWrap label with a long sentence",
+       [widget("QLabel", "l1",
+               prop_text("text", "Это очень длинная подпись, которая переносится по словам, чтобы проверить вертикальные метрики компоновки")
+               + prop_bool("wordWrap", True)),
+        button("b1", "OK")], width=360, height=240)
+    vg(category, "numbers", "numeric content in widgets",
+       [label("l1", "3.14159"), line("e1", "0123456789"),
+        button("b1", "1000000")])
+    vg(category, "punctuation", "punctuation-heavy strings",
+       [label("l1", "<> [] {} | \\ / ? ! @ # $ % ^ & * ( )"),
+        line("e1", "key=value; flag:true;"), button("b1", "a + b = c")])
+    vg(category, "cyrillic_upper", "cyrillic uppercase and mixed case",
+       [label("l1", "ЗАГОЛОВОК"), line("e1", "Смешанный Регистр Текста"),
+        button("b1", "ВЫПОЛНИТЬ")])
+    vg(category, "mixed_ru_en", "mixed russian and english text",
+       [label("l1", "Имя файла: report_Q3 (final).xlsx"),
+        line("e1", "user@example.com"), button("b1", "Отправить send")])
+    vg(category, "spaces", "leading/trailing/double spaces",
+       [label("l1", "   отступы   "), line("e1", "двойной  пробел"),
+        button("b1", "  кнопка  ")])
+    vg(category, "button_long_text", "long button captions",
+       [button("b1", "Очень длинная надпись на кнопке, длиннее соседних"),
+        button("b2", "Короткая")])
+    vg(category, "group_long_title", "long group box title",
+       [group("Название группы, существенно длиннее обычного заголовка", "g1",
+              [label("l1", "внутри"), line("e1")]),
+        spacer(False)], height=300)
+
+    # ---- gallery/tables ----
+    category = "gallery/tables"
+    for rows, cols, width, height in [
+        (1, 1, 320, 200), (2, 2, 360, 220), (4, 3, 460, 280),
+        (8, 5, 540, 340), (20, 3, 480, 340), (3, 12, 520, 240),
+    ]:
+        vg(category, f"size_{rows}x{cols}", f"QTableWidget {rows}x{cols}",
+           [table("table", rows, cols)], width=width, height=height)
+    vg(category, "narrow_tall", "narrow table with vertical overflow",
+       [table("table", 60, 1)], width=300, height=260)
+    vg(category, "wide_short", "short table with horizontal overflow",
+       [table("table", 2, 20)], width=340, height=220)
+    vg(category, "in_grid", "table inside a grid cell",
+       [grid_layout("g",
+                    [grid_item(0, 0, label("l1", "Данные:")),
+                     grid_item(0, 1, button("b1", "Обновить")),
+                     grid_item(1, 0, table("table", 8, 3), colspan=2)]),
+        spacer(False)], width=520, height=380)
+    vg(category, "in_form_filter", "table behind a filter row",
+       [row("Фильтр:", "value"), table("table", 12, 4),
+        layout("QHBoxLayout", "buttons", [spacer(True), button("b1", "Применить")], 6, 0)],
+       width=520, height=420)
+    vg(category, "policy_off", "scrollbars forced off (content clips)",
+       [table_with_policy("table", 50, 8,
+                          "Qt::ScrollBarAlwaysOff", "Qt::ScrollBarAlwaysOff")],
+       width=460, height=260)
+    vg(category, "policy_always", "scrollbars always on even when unused",
+       [table_with_policy("table", 2, 2,
+                          "Qt::ScrollBarAlwaysOn", "Qt::ScrollBarAlwaysOn")],
+       width=460, height=260)
+
+    # ---- gallery/lists: lists, trees, combos ----
+    category = "gallery/lists"
+    vg(category, "list_small", "list widget in a small form",
+       [list_widget("list")], width=360, height=240)
+    vg(category, "list_tall", "tall list",
+       [list_widget("list")], width=360, height=420)
+    vg(category, "tree_small", "tree widget in a small form",
+       [tree_widget("tree")], width=380, height=240)
+    vg(category, "tree_overflow", "tree with vertical overflow",
+       [tree_widget("tree")], width=380, height=420)
+    vg(category, "list_disabled", "disabled list among active widgets",
+       [line("e1", "живой"),
+        widget("QListWidget", "list", prop_bool("enabled", False))], height=320)
+    vg(category, "tree_disabled", "disabled tree",
+       [tree_widget("tree"), button("b1", "Добавить")], height=320,
+       spacing=4)
+    vg(category, "list_in_grid", "list inside a grid cell",
+       [grid_layout("g",
+                    [grid_item(0, 0, label("l1", "Элементы:")),
+                     grid_item(0, 1, button("b1", "+")),
+                     grid_item(1, 0, list_widget("list"), rowspan=2),
+                     grid_item(1, 1, line("e1")),
+                     grid_item(2, 1, checkbox("c1", "Только чтение"))]),
+        spacer(False)], width=520, height=380)
+    vg(category, "tree_hbox", "tree beside an hbox detail column",
+       [layout("QHBoxLayout", "split",
+               [tree_widget("tree"),
+                layout("QVBoxLayout", "detail",
+                       [label("l1", "Свойства"), line("e1"), line("e2"),
+                        button("b1", "Изменить")], 4, 0)], 8, 0)],
+       width=560, height=380)
+    vg(category, "list_wide", "wide list inside a grid",
+       [grid_layout("g",
+                    [grid_item(0, 0, combo("c1"), colspan=2),
+                     grid_item(1, 0, list_widget("list"), colspan=2)]),
+        spacer(False)], width=560, height=340)
+    vg(category, "combo_in_grid", "combo boxes in a grid column",
+       [grid_layout("g",
+                    [grid_item(0, 0, label("l1", "Источник:")),
+                     grid_item(0, 1, combo("c1")),
+                     grid_item(1, 0, label("l2", "Формат:")),
+                     grid_item(1, 1, combo("c2")),
+                     grid_item(2, 0, label("l3", "Период:")),
+                     grid_item(2, 1, combo("c3"))]),
+        spacer(False)], width=420, height=280)
+
+    # ---- gallery/groups: group box layouts ----
+    category = "gallery/groups"
+    vg(category, "single_group", "one group with mixed controls",
+       [group("Основное", "g1",
+              [label("l1", "Подпись"), line("e1", "значение"),
+               checkbox("c1", "Флажок", True), button("b1", "Применить")]),
+        spacer(False)], height=340)
+    vg(category, "two_groups", "two sibling groups",
+       [group("Левая", "g1", [radio("r1", "A", True), radio("r2", "B", False)]),
+        group("Правая", "g2", [checkbox("c1", "X", False), checkbox("c2", "Y", True)]),
+        spacer(False)], height=360)
+    vg(category, "nested_groups", "group inside a group",
+       [group("Внешняя", "g1",
+              [group("Внутренняя", "g2", [line("e1", "глубоко"), button("b1", "Ок")]),
+               label("l1", "рядом")]),
+        spacer(False)], height=380)
+    vg(category, "group_hbox", "hbox layout inside a group box",
+       [group("Панель", "g1",
+              [layout("QHBoxLayout", "row",
+                      [button("b1", "◀"), button("b2", "▶"), spacer(True),
+                       button("b3", "⏹")], 6, 0)]),
+        spacer(False)], height=260)
+    vg(category, "group_grid", "grid layout inside a group box",
+       [group("Сетка", "g1",
+              [grid_layout("g",
+                           [grid_item(0, 0, label("l1", "A:")),
+                            grid_item(0, 1, line("e1")),
+                            grid_item(1, 0, label("l2", "B:")),
+                            grid_item(1, 1, line("e2"))])]),
+        spacer(False)], height=320)
+    vg(category, "group_disabled", "disabled sibling group",
+       [group("Заблокировано", "g1",
+              [line("e1", "нет"), button("b1", "нет")]),
+        group("Активно", "g2", [line("e2", "да"), button("b2", "да")]),
+        spacer(False)], height=380)
+    vg(category, "three_groups", "three compact groups stacked",
+       [group("1", "g1", [checkbox("c1", "один", True)]),
+        group("2", "g2", [checkbox("c2", "два", False)]),
+        group("3", "g3", [checkbox("c3", "три", False)]),
+        spacer(False)], height=340)
+    vg(category, "group_with_table", "table inside a group box",
+       [group("Таблица данных", "g1", [table("table", 6, 3)]),
+        layout("QHBoxLayout", "buttons", [spacer(True), button("ok", "OK")], 6, 0)],
+       width=520, height=400)
+
+    # ---- gallery/mixed: realistic combinations ----
+    category = "gallery/mixed"
+    vg(category, "login_form", "login dialog shape",
+       [label("l1", "Вход в систему"),
+        layout("QVBoxLayout", "fields",
+               [label("l2", "Логин:"), line("e1", "user"),
+                label("l3", "Пароль:"), line("e2", "1234")], 4, 0),
+        layout("QHBoxLayout", "buttons",
+               [spacer(True), button("ok", "Войти"), button("cancel", "Отмена")], 6, 0)],
+       width=380, height=300)
+    vg(category, "filter_bar", "filter controls above a table",
+       [layout("QHBoxLayout", "filters",
+               [label("l1", "Поиск:"), line("e1"), combo("c1"),
+                checkbox("c2", "Только активные", True)], 6, 0),
+        table("table", 12, 4),
+        layout("QHBoxLayout", "buttons",
+               [label("l2", "12 строк"), spacer(True),
+                button("b1", "Экспорт")], 6, 0)], width=560, height=420)
+    vg(category, "properties_grid", "grid of checkboxes like a properties panel",
+       [grid_layout("g",
+                    [grid_item(row, column,
+                               checkbox(f"c{row}{column}", f"Опция {row}.{column}",
+                                        (row + column) % 3 == 0))
+                     for row in range(3) for column in range(2)]),
+        layout("QHBoxLayout", "buttons", [spacer(True), button("ok", "Применить")], 6, 0)],
+       width=440, height=320)
+    vg(category, "button_panel", "two aligned button rows",
+       [layout("QHBoxLayout", "row1",
+               [button("b1", "Новый"), button("b2", "Открыть"),
+                button("b3", "Сохранить"), spacer(True)], 6, 0),
+        layout("QHBoxLayout", "row2",
+               [button("b4", "Вырезать"), button("b5", "Копировать"),
+                button("b6", "Вставить"), spacer(True)], 6, 0),
+        spacer(False)], width=520, height=260)
+    vg(category, "splitter_h", "horizontal splitter: list and detail",
+       [widget("QSplitter", "splitter",
+               prop_enum("orientation", "Qt::Orientation::Horizontal"),
+               widget("QListWidget", "leftList")
+               + widget("QTreeWidget", "rightTree",
+                        "<column>" + prop_text("text", "Имя") + "</column>"))],
+       width=560, height=380)
+    vg(category, "splitter_v", "vertical splitter: list above a table",
+       [widget("QSplitter", "splitter",
+               prop_enum("orientation", "Qt::Orientation::Vertical"),
+               list_widget("topList") + table("bottomTable", 6, 3))],
+       width=560, height=380)
+    vg(category, "form_with_table", "form rows, table and buttons together",
+       [row("Название:", "Отчёт"),
+        table("table", 8, 3),
+        layout("QHBoxLayout", "buttons",
+               [spacer(True), button("save", "Сохранить"),
+                button("close", "Закрыть")], 6, 0)], width=540, height=420)
+    vg(category, "checks_panel", "panels of toggles with actions",
+       [group("Фильтры", "g1",
+              [checkbox("c1", "Показывать скрытые", False),
+               checkbox("c2", "Группировать", True),
+               radio("r1", "По дате", True), radio("r2", "По имени", False)]),
+        layout("QHBoxLayout", "buttons", [spacer(True), button("ok", "Обновить")], 6, 0)],
+       width=460, height=380)
+    vg(category, "nav_plus_detail", "list navigation with a detail column",
+       [layout("QHBoxLayout", "split",
+               [list_widget("nav"),
+                layout("QVBoxLayout", "detail",
+                       [label("l1", "Карточка"),
+                        label("l2", "Имя:"), line("e1", "Значение"),
+                        label("l3", "Тип:"), combo("c1"),
+                        spacer(False),
+                        layout("QHBoxLayout", "row",
+                               [button("b1", "Изменить"),
+                                button("b2", "Удалить")], 6, 0)], 4, 0)], 8, 0)],
+       width=600, height=400)
+    vg(category, "table_and_tree", "table and tree side by side",
+       [layout("QHBoxLayout", "split",
+               [table("table", 8, 3), tree_widget("tree")], 8, 0),
+        layout("QHBoxLayout", "buttons",
+               [label("l1", "Строк: 8"), spacer(True),
+                button("b1", "Выполнить")], 6, 0)], width=620, height=380)
+
+    assert len(cases) >= 100, f"gallery too small: {len(cases)}"
+    return cases
+
+
 def ensure_comments(cases):
     if COMMENTS.exists():
         text = COMMENTS.read_text(encoding="utf-8")
@@ -1087,15 +1828,16 @@ def diff_images(cases):
 def write_manifest(cases):
     manifest = []
     for case in cases:
-        manifest.append(
-            {
-                "id": case["id"],
-                "category": case["category"],
-                "title": case["title"],
-                "description": case["description"],
-                "path": case["path"],
-            }
-        )
+        entry = {
+            "id": case["id"],
+            "category": case["category"],
+            "title": case["title"],
+            "description": case["description"],
+            "path": case["path"],
+        }
+        if "number" in case:
+            entry["number"] = case["number"]
+        manifest.append(entry)
     MANIFEST.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
@@ -1152,12 +1894,60 @@ nav{{background:white;border:1px solid #d8dde6;padding:10px 12px;border-radius:6
     (REVIEW / "index.html").write_text(document, encoding="utf-8")
 
 
+def sync_gallery_to_server(cases):
+    """Copy generated gallery forms to the server's runtime directory."""
+    gallery_cases = [case for case in cases if case["id"].startswith("gallery/")]
+    target_root = SERVER_QT_FORMS / "gallery"
+    if target_root.exists():
+        shutil.rmtree(target_root)
+    for case in gallery_cases:
+        relative = case["path"].split("forms/", 1)[-1]
+        target = SERVER_QT_FORMS / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT / case["path"], target)
+    return gallery_cases
+
+
+def write_gallery_index(gallery_cases):
+    """Stable ordered index consumed by server/priv/lua_modules/gallery.lua."""
+    lines = [
+        "-- GENERATED by client/tools/formgen/review.py — do not edit.",
+        "-- Порядок и номера форм галереи; драйвер main-сессии: gallery.lua.",
+        "return {",
+    ]
+    for case in gallery_cases:
+        ui = case["path"].split("forms/", 1)[-1]
+        lines.append(
+            "    { number = %d, id = \"%s\", category = \"%s\", ui = \"%s\" },"
+            % (case["number"], case["id"], case["category"], ui)
+        )
+    lines += ["}", ""]
+    (SERVER_LUA_MODULES / "gallery_index.lua").write_text(
+        "\n".join(lines), encoding="utf-8"
+    )
+
+
 def main():
+    forms_only = "--forms-only" in sys.argv
     cases = build_cases()
     for index, case in enumerate(cases):
         case["name"] = f"{index:02d}_{case['name']}"
         case["id"] = f"{case['category']}/{case['name']}"
         case["path"] = f"review/forms/{case['category']}/{case['name']}.ui"
+    gallery = build_gallery_cases()
+    base = len(cases)
+    for offset, case in enumerate(gallery):
+        number = offset + 1
+        case["name"] = f"{base + offset:02d}_{case['name']}"
+        case["id"] = f"{case['category']}/{case['name']}"
+        case["path"] = f"review/forms/{case['category']}/{case['name']}.ui"
+        case["number"] = number
+        # The window title carries the sequential number the driver shows
+        # in the status bar: "#007 grid/span_colspan".
+        short_id = case["id"][len("gallery/") :]
+        case["title"] = f"#{number:03d} {short_id}"
+        case["xml"] = case.pop("make_xml")(case["title"])
+    cases += gallery
     if FORMS.exists():
         shutil.rmtree(FORMS)
     FORMS.mkdir(parents=True, exist_ok=True)
@@ -1167,6 +1957,14 @@ def main():
         path.write_text(case["xml"], encoding="utf-8")
     ensure_comments(cases)
     write_manifest(cases)
+    gallery_cases = sync_gallery_to_server(cases)
+    write_gallery_index(gallery_cases)
+    if forms_only:
+        print(
+            f"generated {len(cases)} forms "
+            f"({len(gallery_cases)} gallery, forms only — no renders)"
+        )
+        return
     build_tools()
     render(cases)
     metrics = diff_images(cases)

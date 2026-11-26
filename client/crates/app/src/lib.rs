@@ -1238,7 +1238,45 @@ impl App {
         }
     }
 
+    /// Recompute both window layers' viewports from the current canvas and
+    /// shell chrome. Called on every redraw *and before creating a form*:
+    /// a form that opens right after `setToolBar` (e.g. the gallery's
+    /// auto-open) would otherwise be placed against a stale viewport and
+    /// slide under the toolbar.
+    fn refresh_viewports(&mut self) {
+        let viewport = {
+            let gfx = self.gfx.borrow();
+            gfx.as_ref().map(|gfx| {
+                let scale = gfx.ui_scale();
+                let (width, height) = gfx.size();
+                rqt::gui::QRectF::new(0.0, 0.0, width as f32 / scale, height as f32 / scale)
+            })
+        };
+        match viewport {
+            Some(viewport) => {
+                self.floating.set_viewport(viewport);
+                self.mdi.set_viewport(self.shell.central(viewport));
+            }
+            None => {
+                // Before the GPU is up the canvas size is unknown, but a
+                // form that auto-opens right after the shell gained its
+                // menu/toolbar must still be placed below the chrome.
+                // Tests (no GPU) are skipped unless the shell chrome is set.
+                let chrome = self.shell.visible
+                    && (!self.shell.menu.is_empty()
+                        || (self.shell.toolbar_visible && !self.shell.toolbar.is_empty()));
+                if chrome {
+                    let current = self.floating.viewport();
+                    self.mdi.set_viewport(self.shell.central(current));
+                }
+            }
+        }
+    }
+
     fn on_create_form(&mut self, payload: &serde_json::Value) {
+        // Place against the *current* chrome: the shell may have gained a
+        // menu/toolbar since the last redraw (auto-opened forms).
+        self.refresh_viewports();
         let form_id = payload
             .get("form_id")
             .and_then(|f| f.as_str())
@@ -4488,18 +4526,7 @@ impl ApplicationHandler for App {
             }
             WindowEvent::RedrawRequested => {
                 self.drain_socket_events();
-                let viewport = {
-                    let gfx = self.gfx.borrow();
-                    gfx.as_ref().map(|gfx| {
-                        let scale = gfx.ui_scale();
-                        let (width, height) = gfx.size();
-                        rqt::gui::QRectF::new(0.0, 0.0, width as f32 / scale, height as f32 / scale)
-                    })
-                };
-                if let Some(viewport) = viewport {
-                    self.floating.set_viewport(viewport);
-                    self.mdi.set_viewport(self.shell.central(viewport));
-                }
+                self.refresh_viewports();
                 if let Some((form_id, name)) = self.focused.clone() {
                     let visible = (now_ms() - self.caret_epoch) % 1000.0 < 500.0;
                     if let Some(form) = self.forms.get_mut(&form_id) {
