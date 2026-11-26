@@ -644,24 +644,6 @@ fn fusion_button_color(palette: &crate::gui::QPalette) -> QColor {
         .with_saturation_factor(75)
 }
 
-/// Qt paints a vertical scroll bar's gradients across the bar (probe on
-/// tables/181: 253 → 242 left to right), while our core gradient command is
-/// top-to-bottom — so paint the columns one by one for vertical bars.
-fn fill_columns_gradient(painter: &mut QPainter, rect: QRectF, start: QColor, end: QColor) {
-    let width = rect.width.round().max(1.0) as i32;
-    for column in 0..width {
-        let t = if width > 1 {
-            column as f32 / (width - 1) as f32
-        } else {
-            0.0
-        };
-        painter.fill_rect(
-            QRectF::new(rect.x + column as f32, rect.y, 1.0, rect.height),
-            start.lerp(end, t),
-        );
-    }
-}
-
 pub fn paint_scroll_bar(
     painter: &mut QPainter,
     rect: QRectF,
@@ -691,7 +673,7 @@ pub fn paint_scroll_bar(
                 painter.fill_linear_gradient_rect(groove, 0.0, base.lighter(106), base.lighter(101));
             }
             QOrientation::Vertical => {
-                fill_columns_gradient(painter, groove, base.lighter(106), base.lighter(101));
+                painter.fill_horizontal_gradient_rect(groove, 0.0, base.lighter(106), base.lighter(101));
             }
         }
     }
@@ -717,7 +699,7 @@ pub fn paint_scroll_bar(
                 painter.fill_linear_gradient_rect(area, 0.0, fill.lighter(106), fill.lighter(101));
             }
             QOrientation::Vertical => {
-                fill_columns_gradient(painter, area, fill.lighter(106), fill.lighter(101));
+                painter.fill_horizontal_gradient_rect(area, 0.0, fill.lighter(106), fill.lighter(101));
             }
         }
         paint_scroll_arrow(painter, area, bar.orientation, up, arrow_color);
@@ -807,7 +789,7 @@ pub fn paint_scroll_bar(
                 painter.fill_linear_gradient_rect(slider, 0.0, base.lighter(106), base.lighter(101));
             }
             QOrientation::Vertical => {
-                fill_columns_gradient(painter, slider, base.lighter(106), base.lighter(101));
+                painter.fill_horizontal_gradient_rect(slider, 0.0, base.lighter(106), base.lighter(101));
             }
         }
     } else {

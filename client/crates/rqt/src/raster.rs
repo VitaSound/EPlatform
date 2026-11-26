@@ -177,8 +177,11 @@ pub fn rasterize(
                 radius,
                 start,
                 end,
+                horizontal,
             } => {
-                fill_linear_gradient(&mut image, *rect, *radius, *start, *end, clip);
+                fill_linear_gradient(
+                    &mut image, *rect, *radius, *start, *end, *horizontal, clip,
+                );
             }
             QPaintCommand::StrokeRect { rect, width, color } => {
                 fill_rounded_border(&mut image, *rect, 0.0, *width, *color, clip);
@@ -502,12 +505,14 @@ fn fill_rounded(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn fill_linear_gradient(
     image: &mut QRasterImage,
     rect: QRectF,
     radius: f32,
     start: QColor,
     end: QColor,
+    horizontal: bool,
     clip: Option<QRectF>,
 ) {
     let left = rect.left().round() as i32;
@@ -532,10 +537,16 @@ fn fill_linear_gradient(
     ) else {
         return;
     };
-    let span = (bottom - top).max(1) as f32;
+    let span = if horizontal {
+        (right - left).max(1) as f32
+    } else {
+        (bottom - top).max(1) as f32
+    };
     for y in bounds.top().floor() as i32..bounds.bottom().ceil() as i32 {
-        let t = ((y as f32 + 0.5 - top as f32) / span).clamp(0.0, 1.0);
-        let color = start.lerp(end, t);
+        let column_t = |x: i32| {
+            ((x as f32 + 0.5 - left as f32) / span).clamp(0.0, 1.0)
+        };
+        let row_color = start.lerp(end, ((y as f32 + 0.5 - top as f32) / span).clamp(0.0, 1.0));
         for x in bounds.left().floor() as i32..bounds.right().ceil() as i32 {
             if inside_rounded_rect(
                 x as f32 + 0.5,
@@ -546,6 +557,7 @@ fn fill_linear_gradient(
                 bottom,
                 radius,
             ) {
+                let color = if horizontal { start.lerp(end, column_t(x)) } else { row_color };
                 image.blend_pixel(x, y, color, None);
             }
         }

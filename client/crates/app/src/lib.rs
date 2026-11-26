@@ -1441,6 +1441,7 @@ impl App {
         let mut batches = Vec::new();
         let style = rqt::style::QFusionStyle::default();
         let viewport = self.floating.viewport();
+        let scale = self.ui_scale();
         let technical = format!(
             "{}  ·  app {}  ·  forms {}",
             if self.joined { "online" } else { "offline" },
@@ -1451,7 +1452,7 @@ impl App {
         let mut base = rqt::gui::QPainter::new();
         self.shell
             .paint_base(&mut base, viewport, now_ms(), Some(&technical));
-        append_paint_commands(base.commands(), &mut batches);
+        append_paint_commands(base.commands(), &mut batches, scale);
 
         let active_form = self.active_form_id();
         for (layer, index) in self.window_order() {
@@ -1464,7 +1465,7 @@ impl App {
             if !subwindow.minimized {
                 let mut painter = rqt::gui::QPainter::new();
                 rqt::paint::paint_widget_tree_content(&form.tree, form.root, &style, &mut painter);
-                append_paint_commands(painter.commands(), &mut batches);
+                append_paint_commands(painter.commands(), &mut batches, scale);
             }
             let active = active_form.as_deref() == Some(subwindow.payload.as_str());
             let hover = self.mdi_hover.and_then(|(hover_layer, hover_index, hit)| {
@@ -1477,7 +1478,7 @@ impl App {
         // toolbar and form text underneath, so no masking is needed.
         let mut overlay = rqt::gui::QPainter::new();
         self.shell.paint_overlay(&mut overlay, viewport);
-        append_paint_commands(overlay.commands(), &mut batches);
+        append_paint_commands(overlay.commands(), &mut batches, scale);
 
         // Combo popups are top-level in Qt: paint them after MDI/top-level
         // chrome and shell popups so they cannot be covered by a frame.
@@ -1491,7 +1492,7 @@ impl App {
                 }
                 let mut painter = rqt::gui::QPainter::new();
                 rqt::paint::paint_combo_popups(&form.tree, &style, &mut painter);
-                append_paint_commands(painter.commands(), &mut batches);
+                append_paint_commands(painter.commands(), &mut batches, scale);
             }
         }
         batches
@@ -1508,7 +1509,7 @@ impl App {
 
         let mut painter = QPainter::new();
         self.paint_subwindow_chrome(&mut painter, subwindow, active, hover);
-        append_paint_commands(painter.commands(), batches);
+        append_paint_commands(painter.commands(), batches, self.ui_scale());
     }
 
     fn paint_subwindow_chrome(
@@ -3768,7 +3769,15 @@ fn form_title(tree: &QWidgetTree, root: QWidgetId, fallback: &str) -> String {
     }
 }
 
-fn append_paint_commands(commands: &[rqt::gui::QPaintCommand], batches: &mut Vec<gfx::PaintBatch>) {
+/// `scale` is `ui_scale`: gradients are expanded into one rect per *device*
+/// pixel row/column, otherwise a ramp stepped in logical pixels lands on
+/// 1.5 (or any fractional) device pixels and shows up as stripes.
+fn append_paint_commands(
+    commands: &[rqt::gui::QPaintCommand],
+    batches: &mut Vec<gfx::PaintBatch>,
+    scale: f32,
+) {
+    let scale = if scale > 0.0 { scale } else { 1.0 };
     use rqt::gui::{QPaintCommand, QRectF};
 
     let mut clip: Option<QRectF> = None;
@@ -3822,19 +3831,28 @@ fn append_paint_commands(commands: &[rqt::gui::QPaintCommand], batches: &mut Vec
                 color,
             } => push_rounded_rect(&mut rects, clip, *rect, *radius, *color),
             QPaintCommand::FillLinearGradientRect {
-                rect, start, end, ..
+                rect,
+                start,
+                end,
+                horizontal,
+                ..
             } => {
-                let top = rect.top().round() as i32;
-                let bottom = rect.bottom().round() as i32;
-                let span = (bottom - top).max(1) as f32;
-                for y in top..bottom {
-                    let t = ((y as f32 + 0.5 - top as f32) / span).clamp(0.0, 1.0);
-                    push_rect(
-                        &mut rects,
-                        clip,
-                        QRectF::new(rect.x, y as f32, rect.width, 1.0),
-                        start.lerp(*end, t),
-                    );
+                let (from, to) = if *horizontal {
+                    ((rect.left() * scale).round() as i32, (rect.right() * scale).round() as i32)
+                } else {
+                    ((rect.top() * scale).round() as i32, (rect.bottom() * scale).round() as i32)
+                };
+                let span = (to - from).max(1) as f32;
+                for device in from..to {
+                    let t = ((device as f32 + 0.5 - from as f32) / span).clamp(0.0, 1.0);
+                    let offset = device as f32 / scale;
+                    let thickness = 1.0 / scale;
+                    let band = if *horizontal {
+                        QRectF::new(offset, rect.y, thickness, rect.height)
+                    } else {
+                        QRectF::new(rect.x, offset, rect.width, thickness)
+                    };
+                    push_rect(&mut rects, clip, band, start.lerp(*end, t));
                 }
             }
             QPaintCommand::StrokeEllipse { rect, width, color } => {
@@ -6056,7 +6074,7 @@ mod tests {
         );
 
         let mut batches = Vec::new();
-        append_paint_commands(painter.commands(), &mut batches);
+        append_paint_commands(painter.commands(), &mut batches, 1.0);
 
         assert_eq!(batches.len(), 4);
         assert!(matches!(batches[0], gfx::PaintBatch::Rects(_)));

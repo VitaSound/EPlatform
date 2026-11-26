@@ -268,6 +268,7 @@ impl QStyle for QFusionStyle {
                             radius: 2.0,
                             start,
                             end: stop,
+                            horizontal: false,
                         }
                     },
                     QPaintCommand::StrokeRoundedRect {
@@ -396,6 +397,7 @@ impl QStyle for QFusionStyle {
                         radius: 2.0,
                         start,
                         end: stop,
+                        horizontal: false,
                     },
                     QPaintCommand::StrokeRoundedRect {
                         rect: r,

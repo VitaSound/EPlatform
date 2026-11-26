@@ -718,6 +718,9 @@ pub enum QPaintCommand {
         radius: f32,
         start: QColor,
         end: QColor,
+        /// `true` ramps left to right (Qt's vertical scroll bar gradients run
+        /// across the bar), `false` ramps top to bottom.
+        horizontal: bool,
     },
     FillEllipse {
         rect: QRectF,
@@ -931,6 +934,25 @@ impl QPainter {
             radius,
             start: start.with_alpha(start.alpha * self.current.opacity),
             end: end.with_alpha(end.alpha * self.current.opacity),
+            horizontal: false,
+        });
+    }
+
+    /// Qt paints a vertical scroll bar's gradients across the bar, not along
+    /// it (probe: 253 -> 242 left to right).
+    pub fn fill_horizontal_gradient_rect(
+        &mut self,
+        rect: QRectF,
+        radius: f32,
+        start: QColor,
+        end: QColor,
+    ) {
+        self.commands.push(QPaintCommand::FillLinearGradientRect {
+            rect,
+            radius,
+            start: start.with_alpha(start.alpha * self.current.opacity),
+            end: end.with_alpha(end.alpha * self.current.opacity),
+            horizontal: true,
         });
     }
 
