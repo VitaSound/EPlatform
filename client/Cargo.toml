@@ -11,5 +11,11 @@ version = "0.1.0"
 edition = "2021"
 
 [profile.release]
-opt-level = "s"
+# Mobile budget (0.18.4): smallest bundle first; the numbers live in
+# widgets-plan.md. `panic = "abort"` is a no-op on wasm32 (the target
+# aborts by default) and only affects native release builds.
+opt-level = "z"
 lto = true
+codegen-units = 1
+strip = "debuginfo"
+panic = "abort"

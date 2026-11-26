@@ -38,9 +38,90 @@
         -webkit-touch-callout: none;
         -webkit-tap-highlight-color: transparent;
       }
+      /* Loading overlay (0.18.4): paints with the very first HTML frame,
+         before any wasm/js is parsed, so mobile users see progress instead
+         of a blank screen. */
+      #ep-load {
+        position: fixed;
+        inset: 0;
+        z-index: 4000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: #1c1e22;
+        color: #cfd4dc;
+        font: 14px/1.5 "DejaVu Sans", system-ui, sans-serif;
+        transition: opacity 0.25s ease;
+      }
+      #ep-load.ep-load-done {
+        opacity: 0;
+        pointer-events: none;
+      }
+      .ep-load-card {
+        width: min(320px, calc(100vw - 48px));
+        text-align: center;
+      }
+      .ep-load-title {
+        font-size: 20px;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+        margin-bottom: 16px;
+        color: #eef1f5;
+      }
+      .ep-load-track {
+        position: relative;
+        height: 6px;
+        border-radius: 3px;
+        background: #2b2f36;
+        overflow: hidden;
+      }
+      .ep-load-fill {
+        position: absolute;
+        left: 0;
+        top: 0;
+        bottom: 0;
+        width: 0%;
+        border-radius: 3px;
+        background: #308cc6;
+        transition: width 0.15s ease-out;
+      }
+      .ep-load-track.ep-load-indeterminate .ep-load-fill {
+        width: 40%;
+        animation: ep-load-slide 1.2s ease-in-out infinite;
+        transition: none;
+      }
+      @keyframes ep-load-slide {
+        0% {
+          transform: translateX(-100%);
+        }
+        100% {
+          transform: translateX(300%);
+        }
+      }
+      .ep-load-label {
+        margin-top: 10px;
+        font-size: 13px;
+        color: #9aa2ad;
+        min-height: 1.5em;
+      }
+      #ep-load.ep-load-error .ep-load-fill {
+        background: #c6503f;
+      }
+      #ep-load.ep-load-error .ep-load-label {
+        color: #e6a49a;
+      }
     </style>
   </head>
   <body>
+    <div id="ep-load" role="status" aria-live="polite">
+      <div class="ep-load-card">
+        <div class="ep-load-title">EPlatform</div>
+        <div id="ep-load-track" class="ep-load-track ep-load-indeterminate">
+          <div id="ep-load-bar" class="ep-load-fill"></div>
+        </div>
+        <div id="ep-load-label" class="ep-load-label">Подготовка загрузки…</div>
+      </div>
+    </div>
     <script>
       // Capture wasm panics/errors for automated inspection.
       window.__epErrors = [];
@@ -313,6 +394,155 @@
           },
           true,
         );
+      })();
+    </script>
+    <script>
+      // Progressive wasm loader (0.18.4).
+      //
+      // The overlay above paints with the first HTML frame. This classic
+      // script runs during parsing (before trunk's deferred module script),
+      // so OUR fetch is the primary wasm request and its stream drives the
+      // progress bar. wasm-bindgen's init() is a singleton: whichever side
+      // creates the promise first, both converge on one instantiation.
+      (function () {
+        var overlay = document.getElementById("ep-load");
+        var track = document.getElementById("ep-load-track");
+        var bar = document.getElementById("ep-load-bar");
+        var label = document.getElementById("ep-load-label");
+        var lastPaint = 0;
+        var lastPct = -1;
+
+        function fmt(bytes) {
+          if (bytes >= 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + " МБ";
+          if (bytes >= 1024) return Math.round(bytes / 1024) + " КБ";
+          return bytes + " Б";
+        }
+
+        function setProgress(received, total) {
+          if (!overlay) return;
+          var now = Date.now();
+          if (total > 0) {
+            var pct = Math.min(100, Math.floor((received / total) * 100));
+            if (pct === lastPct && now - lastPaint < 200) return;
+            lastPct = pct;
+            lastPaint = now;
+            track.className = "ep-load-track";
+            bar.style.width = pct + "%";
+            label.textContent = "Загрузка " + pct + "% · " + fmt(received) + " из " + fmt(total);
+          } else {
+            // Compressed response without a known raw size: indeterminate
+            // bar plus a byte counter (still visible progress on phones).
+            if (now - lastPaint < 120) return;
+            lastPaint = now;
+            track.className = "ep-load-track ep-load-indeterminate";
+            label.textContent = "Загрузка… " + fmt(received);
+          }
+        }
+
+        function finish() {
+          track.className = "ep-load-track";
+          bar.style.width = "100%";
+          label.textContent = "Готово";
+          overlay.className = "ep-load-done";
+          setTimeout(function () {
+            if (overlay && overlay.parentNode) overlay.parentNode.removeChild(overlay);
+            overlay = null;
+          }, 350);
+        }
+
+        function fail(message) {
+          if (overlay) overlay.className = "ep-load-error";
+          track.className = "ep-load-track";
+          bar.style.width = "100%";
+          label.textContent = "Ошибка загрузки: " + message;
+        }
+
+        async function fetchWasm(url) {
+          var response = await fetch(url);
+          if (!response.ok) throw new Error(response.status + " " + response.statusText);
+          var encoding = response.headers.get("Content-Encoding");
+          var raw = parseInt(response.headers.get("X-Uncompressed-Length") || "0", 10);
+          var declared = parseInt(response.headers.get("Content-Length") || "0", 10);
+          var total = raw > 0 ? raw : encoding ? 0 : declared;
+          var received = 0;
+          var chunks = [];
+          var reader = response.body && response.body.getReader ? response.body.getReader() : null;
+          if (reader) {
+            while (true) {
+              var part = await reader.read();
+              if (part.done) break;
+              chunks.push(part.value);
+              received += part.value.length;
+              setProgress(received, total);
+            }
+          } else {
+            var buffer = await response.arrayBuffer();
+            chunks = [new Uint8Array(buffer)];
+            received = buffer.byteLength;
+            setProgress(received, total);
+          }
+          var bytes = new Uint8Array(received);
+          var offset = 0;
+          for (var i = 0; i < chunks.length; i++) {
+            bytes.set(chunks[i], offset);
+            offset += chunks[i].length;
+          }
+          return bytes;
+        }
+
+        async function run() {
+          var jsLink = document.querySelector('link[rel="modulepreload"]');
+          var wasmLink = document.querySelector('link[rel="preload"][as="fetch"]');
+          if (!jsLink || !wasmLink) throw new Error("не найдены ссылки на бандл");
+          // Start both downloads immediately; init() runs once either way.
+          var wasm = fetchWasm(wasmLink.href);
+          var bindingsPromise = import(jsLink.href);
+          var bytes = await wasm;
+          var bindings = await bindingsPromise;
+
+          var failed = false;
+          var init = bindings
+            .default({ module_or_path: bytes })
+            .then(
+              function () { return true; },
+              function (error) {
+                var message = String((error && error.message) || error);
+                // winit starts its event loop by throwing a JS exception
+                // whose whole purpose is control flow — the app is alive.
+                if (message.indexOf("don't mind me") !== -1) return true;
+                failed = true;
+                console.error("wasm init failed", error);
+                fail(message);
+                return false;
+              }
+            );
+          // The canvas appearing in the DOM also means the shell started;
+          // racing keeps the overlay from lingering on slow GPU setup.
+          await Promise.race([init, canvasAppears()]);
+          if (!failed) finish();
+          dispatchEvent(new CustomEvent("TrunkApplicationStarted", { detail: { ready: true } }));
+        }
+
+        function canvasAppears() {
+          return new Promise(function (resolve) {
+            if (document.querySelector("canvas")) {
+              resolve();
+              return;
+            }
+            var observer = new MutationObserver(function () {
+              if (document.querySelector("canvas")) {
+                observer.disconnect();
+                resolve();
+              }
+            });
+            observer.observe(document.body, { childList: true, subtree: true });
+          });
+        }
+
+        run().catch(function (error) {
+          console.error("EPlatform load failed", error);
+          fail(String((error && error.message) || error));
+        });
       })();
     </script>
     <link data-trunk rel="rust" href="Cargo.toml" data-wasm-opt="0" />

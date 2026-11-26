@@ -77,6 +77,10 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_header("Content-Type", self.guess_type(str(target)))
             self.send_header("Content-Encoding", "gzip")
             self.send_header("Content-Length", str(len(body)))
+            # The browser decodes gzip transparently, so the loading
+            # progress bar sees decoded chunks while Content-Length holds
+            # the compressed size. Expose the real size for percentages.
+            self.send_header("X-Uncompressed-Length", str(target.stat().st_size))
             self.send_header("Vary", "Accept-Encoding")
             self.send_header("Last-Modified", self.date_time_string(target.stat().st_mtime))
             self.end_headers()
