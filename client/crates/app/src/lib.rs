@@ -4229,32 +4229,75 @@ impl App {
         let Some((css_w, css_h, dpr)) = self.dom_canvas_size() else {
             return;
         };
-        let width = (css_w * dpr).round().max(1.0) as u32;
-        let height = (css_h * dpr).round().max(1.0) as u32;
-        let stale = self
+        let max_dim = self
+            .gfx
+            .borrow()
+            .as_ref()
+            .map(|gfx| gfx.max_dim())
+            .unwrap_or(u32::MAX);
+        let fits = |w: f64, h: f64| {
+            w.round() as u32 <= max_dim && h.round() as u32 <= max_dim
+        };
+        // Rendering above the GPU's texture limit is impossible, and letting
+        // the browser scale a smaller canvas up into the CSS box turns each
+        // 1 px line into a banded stripe. Pick the best mapping available:
+        //   1. render at the real DPR (crisp, fills the window);
+        //   2. render at 1 device px per CSS px (fills the window, the browser
+        //      upscales once, uniformly);
+        //   3. letterbox the canvas so the mapping stays 1:1.
+        let requested = (css_w * dpr, css_h * dpr);
+        let (logical, scale, boxed) = if fits(requested.0, requested.1) {
+            ((css_w, css_h), dpr, false)
+        } else if fits(css_w, css_h) {
+            ((css_w, css_h), 1.0, false)
+        } else {
+            let shrink = max_dim as f64 / (css_w.max(css_h) * dpr);
+            ((css_w * shrink, css_h * shrink), dpr, true)
+        };
+        let width = (logical.0 * scale).round().max(1.0) as u32;
+        let height = (logical.1 * scale).round().max(1.0) as u32;
+        let dpr_changed = self
             .gfx
             .borrow()
             .as_ref()
             .map(|gfx| (gfx.dpr() as f64 - dpr).abs() > 1e-3)
             .unwrap_or(false);
-        if !stale && self.last_size.get() == Some((width, height)) {
+        if !dpr_changed && self.last_size.get() == Some((width, height)) {
             return;
         }
         self.last_size.set(Some((width, height)));
-        // The renderer clamps the surface to the device's maximum texture size
-        // (GPUs behind ANGLE/SwiftShader/VMs report 2048). Keep the canvas
-        // backing store equal to what was actually configured: a backing store
-        // larger than the surface makes the browser letterbox the presented
-        // image, which shifts the whole UI off-origin (and only above a window
-        // size that depends on the limit and the DPR).
-        let mut surface = (width, height);
+        self.resize_canvas_box(boxed.then_some((logical.0, logical.1)));
         if let Some(gfx) = self.gfx.borrow_mut().as_mut() {
-            gfx.set_scale_factor(dpr, width, height);
-            surface = gfx.size();
+            gfx.apply_geometry(dpr as f32, width, height, logical.0 as f32, logical.1 as f32);
         }
-        self.sync_canvas_backing(surface.0, surface.1);
+        self.sync_canvas_backing(width, height);
         if let Some(window) = &self.window {
             window.request_redraw();
+        }
+    }
+
+    /// Letterbox the canvas in the page (used when even 1 device px per CSS px
+    /// exceeds the GPU texture limit). `None` restores the full-viewport box.
+    #[cfg(target_arch = "wasm32")]
+    fn resize_canvas_box(&self, boxed: Option<(f64, f64)>) {
+        use winit::platform::web::WindowExtWebSys;
+        let Some(canvas) = self.window.as_ref().and_then(|window| window.canvas()) else {
+            return;
+        };
+        let style = canvas.style();
+        match boxed {
+            Some((w, h)) => {
+                let _ = style.set_property("width", &format!("{w:.1}px"));
+                let _ = style.set_property("height", &format!("{h:.1}px"));
+                let _ = style.set_property("right", "auto");
+                let _ = style.set_property("bottom", "auto");
+            }
+            _ => {
+                if canvas.style().get_property_value("width").unwrap_or_default() != "100%" {
+                    let _ = style.set_property("width", "100%");
+                    let _ = style.set_property("height", "100%");
+                }
+            }
         }
     }
 

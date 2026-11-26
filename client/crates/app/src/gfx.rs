@@ -312,6 +312,34 @@ impl Gfx {
         self.ui_scale = ui_scale_for(requested.0, requested.1, self.dpr, &self.config);
     }
 
+    /// Configure the surface for `width x height` device pixels while the app
+    /// lays out `logical_w x logical_h` CSS pixels. `ui_scale` follows from
+    /// both, so a caller that has to render below the device pixel ratio (the
+    /// GPU texture limit can be smaller than the window) still gets an exact
+    /// logical <-> surface mapping.
+    pub fn apply_geometry(
+        &mut self,
+        dpr: f32,
+        width: u32,
+        height: u32,
+        logical_w: f32,
+        logical_h: f32,
+    ) {
+        self.dpr = if dpr > 0.0 { dpr } else { 1.0 };
+        let (width, height) = fit_dimensions(width, height, self.max_dim);
+        if width > 0
+            && height > 0
+            && (width != self.config.width || height != self.config.height)
+        {
+            self.config.width = width;
+            self.config.height = height;
+            self.surface.configure(&self.device, &self.config);
+        }
+        self.ui_scale = (self.config.width as f32 / logical_w.max(1.0))
+            .min(self.config.height as f32 / logical_h.max(1.0))
+            .max(0.1);
+    }
+
     pub fn set_scale_factor(&mut self, scale_factor: f64, width: u32, height: u32) {
         self.dpr = scale_factor as f32;
         self.resize(width, height);
