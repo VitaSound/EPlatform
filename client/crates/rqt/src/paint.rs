@@ -627,6 +627,14 @@ fn paint_list_widget(widget: &QWidget, painter: &mut QPainter, item_qss: &QStyle
     if let Some(bar) = layout.horizontal {
         paint_scroll_bar(painter, bar, &list.hbar, palette, widget.enabled);
     }
+    // Qt paints the widget frame above the scroll bars (probe on tables/179:
+    // the 184 border stays visible over the arrow fill at x11 and x328);
+    // the bars now reach the widget edge like Qt's, so redraw the frame.
+    painter.stroke_rect(
+        widget.geometry,
+        1.0,
+        palette.color(QPaletteRole::Mid),
+    );
 }
 
 fn fusion_button_color(palette: &crate::gui::QPalette) -> QColor {
@@ -634,6 +642,24 @@ fn fusion_button_color(palette: &crate::gui::QPalette) -> QColor {
     button
         .lighter(100 + ((180_i32 - button.q_gray() as i32) / 6).max(1))
         .with_saturation_factor(75)
+}
+
+/// Qt paints a vertical scroll bar's gradients across the bar (probe on
+/// tables/181: 253 → 242 left to right), while our core gradient command is
+/// top-to-bottom — so paint the columns one by one for vertical bars.
+fn fill_columns_gradient(painter: &mut QPainter, rect: QRectF, start: QColor, end: QColor) {
+    let width = rect.width.round().max(1.0) as i32;
+    for column in 0..width {
+        let t = if width > 1 {
+            column as f32 / (width - 1) as f32
+        } else {
+            0.0
+        };
+        painter.fill_rect(
+            QRectF::new(rect.x + column as f32, rect.y, 1.0, rect.height),
+            start.lerp(end, t),
+        );
+    }
 }
 
 pub fn paint_scroll_bar(
@@ -658,8 +684,16 @@ pub fn paint_scroll_bar(
     let groove = bar.groove_rect(rect);
     if groove.width > 0.0 && groove.height > 0.0 {
         // Qt's groove slivers (the strip visible outside slider and pages)
-        // carry a light vertical gradient, 253 → 242 (probed on tables/35).
-        painter.fill_linear_gradient_rect(groove, 0.0, base.lighter(106), base.lighter(101));
+        // carry a light gradient, 253 → 242 along the cross axis (probed on
+        // tables/35 horizontally and tables/181 vertically).
+        match bar.orientation {
+            QOrientation::Horizontal => {
+                painter.fill_linear_gradient_rect(groove, 0.0, base.lighter(106), base.lighter(101));
+            }
+            QOrientation::Vertical => {
+                fill_columns_gradient(painter, groove, base.lighter(106), base.lighter(101));
+            }
+        }
     }
 
     let mut arrow = |control: QScrollBarSubControl, up: bool| {
@@ -678,7 +712,14 @@ pub fn paint_scroll_bar(
         } else {
             base
         };
-        painter.fill_linear_gradient_rect(area, 0.0, fill.lighter(106), fill.lighter(101));
+        match bar.orientation {
+            QOrientation::Horizontal => {
+                painter.fill_linear_gradient_rect(area, 0.0, fill.lighter(106), fill.lighter(101));
+            }
+            QOrientation::Vertical => {
+                fill_columns_gradient(painter, area, fill.lighter(106), fill.lighter(101));
+            }
+        }
         paint_scroll_arrow(painter, area, bar.orientation, up, arrow_color);
         painter.fill_rect(
             QRectF::new(area.x, area.y, area.width, 1.0),
@@ -758,10 +799,17 @@ pub fn paint_scroll_bar(
     let pressed = bar.pressed == Some(QScrollBarSubControl::Slider);
     let hovered = bar.hovered == Some(QScrollBarSubControl::Slider);
     if enabled && !pressed && !hovered {
-        // Qt's handle is the light gradient rectangle (253 → 242) — the
-        // "светлый прямоугольник" of the feedback — spanning the full
-        // groove height.
-        painter.fill_linear_gradient_rect(slider, 0.0, base.lighter(106), base.lighter(101));
+        // Qt's handle is the light gradient rectangle (253 → 242 along the
+        // cross axis) — the "светлый прямоугольник" of the feedback —
+        // spanning the full groove line.
+        match bar.orientation {
+            QOrientation::Horizontal => {
+                painter.fill_linear_gradient_rect(slider, 0.0, base.lighter(106), base.lighter(101));
+            }
+            QOrientation::Vertical => {
+                fill_columns_gradient(painter, slider, base.lighter(106), base.lighter(101));
+            }
+        }
     } else {
         let fill = if !enabled {
             base
@@ -1040,6 +1088,14 @@ fn paint_tree_widget(
     if let Some(bar) = layout.horizontal {
         paint_scroll_bar(painter, bar, &tree.hbar, palette, widget.enabled);
     }
+    // Qt paints the widget frame above the scroll bars (probe on tables/179:
+    // the 184 border stays visible over the arrow fill at x11 and x328);
+    // the bars now reach the widget edge like Qt's, so redraw the frame.
+    painter.stroke_rect(
+        widget.geometry,
+        1.0,
+        palette.color(QPaletteRole::Mid),
+    );
 }
 
 fn visible_rows(scroll: f32, height: f32, count: usize) -> std::ops::Range<usize> {
@@ -1417,10 +1473,18 @@ fn paint_table(
         (right - left).max(0.0),
         header_h,
     )));
-    painter.fill_rect(
-        QRectF::new(left, body_top - 1.0, (right - left).max(0.0), 1.0),
-        header_grid,
-    );
+    // Qt draws the header's bottom line under the sections only: the empty
+    // header area right of the last column stays clean (tables/34 probe:
+    // the 171 line ends at the last section — 12..425 — and the rest is
+    // window colour). The line also overwrites the separators' bottom pixel
+    // so it stays continuous like Qt's (no 203 gaps at x125/225).
+    let mut headers_end = left;
+    for column in 0..table.model.column_count() {
+        if table.model.is_column_hidden(column) {
+            continue;
+        }
+        headers_end = column_left(column) + table.model.column_width(column);
+    }
     // Qt separates neighbouring header sections with one light line and
     // draws nothing at the gutter edge or after the last section: only the
     // internal boundaries (gallery/tables/172 has no header lines at all).
@@ -1432,6 +1496,10 @@ fn paint_table(
         let x = column_left(column) - 1.0;
         painter.fill_rect(QRectF::new(x, top, 1.0, header_h), header_separator);
     }
+    painter.fill_rect(
+        QRectF::new(left, body_top - 1.0, (headers_end - left).max(0.0), 1.0),
+        header_grid,
+    );
 
     let header_color = header_qss
         .color
@@ -1576,6 +1644,14 @@ fn paint_table(
     if let Some(bar) = layout.horizontal {
         paint_scroll_bar(painter, bar, &table.hbar, palette, widget.enabled);
     }
+    // Qt paints the widget frame above the scroll bars (probe on tables/179:
+    // the 184 border stays visible over the arrow fill at x11 and x328);
+    // the bars now reach the widget edge like Qt's, so redraw the frame.
+    painter.stroke_rect(
+        widget.geometry,
+        1.0,
+        palette.color(QPaletteRole::Mid),
+    );
 }
 
 fn paint_line_edit_selection(widget: &QWidget, painter: &mut QPainter, qss: &QStyleDeclarations) {

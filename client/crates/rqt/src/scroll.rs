@@ -349,18 +349,38 @@ pub fn scroll_area_layout(
         (rect.height - if horizontal { extent } else { 0.0 }).max(0.0),
     );
     let vertical = vertical.then(|| {
+        // Qt lays the bar out over the full widget height (probe on
+        // tables/181: bar rows 41..377 = the table's rect, while the inner
+        // viewport starts at 42): the long axis of a bar reaches one pixel
+        // beyond the inner rectangle on both ends.
+        let y = rect.y - 1.0;
+        let bottom = if horizontal {
+            rect.bottom() - extent
+        } else {
+            rect.bottom() + 1.0
+        };
         QRectF::new(
             rect.right() - extent,
-            rect.y,
+            y,
             extent,
-            (rect.height - if horizontal { extent } else { 0.0 }).max(0.0),
+            (bottom - y).max(0.0),
         )
     });
     let horizontal = horizontal.then(|| {
+        // Mirror of the vertical rule: the horizontal bar spans the full
+        // widget width (tables/179 probe: bar columns 11..328 inclusive,
+        // arrows framed at x25 — one pixel beyond the inner rect on each
+        // side).
+        let x = rect.x - 1.0;
+        let right = if vertical.is_some() {
+            rect.right() - extent
+        } else {
+            rect.right() + 1.0
+        };
         QRectF::new(
-            rect.x,
+            x,
             rect.bottom() - extent,
-            (rect.width - if vertical.is_some() { extent } else { 0.0 }).max(0.0),
+            (right - x).max(0.0),
             extent,
         )
     });
@@ -412,8 +432,10 @@ mod tests {
             QSCROLLBAR_EXTENT,
         );
         assert_eq!(layout.viewport, QRectF::new(5.0, 7.0, 186.0, 86.0));
-        assert_eq!(layout.vertical, Some(QRectF::new(191.0, 7.0, 14.0, 86.0)));
-        assert_eq!(layout.horizontal, Some(QRectF::new(5.0, 93.0, 186.0, 14.0)));
+        // Bars reach one pixel beyond the inner rect on both ends of their
+        // long axis, like Qt's (probe tables/179 and tables/181).
+        assert_eq!(layout.vertical, Some(QRectF::new(191.0, 6.0, 14.0, 87.0)));
+        assert_eq!(layout.horizontal, Some(QRectF::new(4.0, 93.0, 187.0, 14.0)));
         assert_eq!(layout.corner, Some(QRectF::new(191.0, 93.0, 14.0, 14.0)));
     }
 
