@@ -840,6 +840,8 @@ impl App {
                         // `Form:cascade()`: move this window to the next
                         // cascade slot without touching its size.
                         self.area_mut(layer).cascade_window(index);
+                        // Frame moved → body must follow.
+                        self.sync_form_geometry(form_id);
                         Self::log(format!("apply form.cascade form_id={form_id}"));
                         return;
                     }
@@ -1025,15 +1027,13 @@ impl App {
                     }
                     "cascadeWindows" => {
                         if value.as_bool() != Some(false) {
-                            self.mdi.cascade_subwindows();
-                            self.floating.cascade_subwindows();
+                            self.cascade_all_windows();
                             Self::log("cascade windows".to_string());
                         }
                     }
                     "tileWindows" => {
                         if value.as_bool() != Some(false) {
-                            self.mdi.tile_subwindows();
-                            self.floating.tile_subwindows();
+                            self.tile_all_windows();
                             Self::log("tile windows".to_string());
                         }
                     }
@@ -1816,6 +1816,12 @@ impl App {
         Some(activated)
     }
 
+    /// Bind form root geometry to the subwindow `content_rect`.
+    ///
+    /// Invariant: the MDI/floating **frame** (chrome) and the form **tree**
+    /// are separate. Any code that moves/resizes a frame must call this
+    /// afterwards (or use the `*_window` helpers below) — otherwise chrome
+    /// and body diverge (the cascade/tile bug).
     fn sync_form_geometry(&mut self, form_id: &str) {
         let Some((layer, index)) = self.find_window(form_id) else {
             return;
@@ -1831,6 +1837,61 @@ impl App {
             form.tree.set_geometry(form.root, content);
         }
         self.sync_web_text_input();
+    }
+
+    /// Re-bind every open form after a bulk frame rearrange.
+    fn sync_all_window_geometries(&mut self) {
+        let ids: Vec<String> = [WindowLayer::Mdi, WindowLayer::Floating]
+            .into_iter()
+            .flat_map(|layer| {
+                self.area(layer)
+                    .subwindows()
+                    .iter()
+                    .map(|subwindow| subwindow.payload.clone())
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        for id in ids {
+            self.sync_form_geometry(&id);
+        }
+    }
+
+    /// Translate a subwindow frame and keep its form body attached.
+    fn translate_window(&mut self, layer: WindowLayer, index: usize, dx: f32, dy: f32) {
+        let Some(form_id) = self
+            .area(layer)
+            .subwindow(index)
+            .map(|subwindow| subwindow.payload.clone())
+        else {
+            return;
+        };
+        self.area_mut(layer).translate(index, dx, dy);
+        self.sync_form_geometry(&form_id);
+    }
+
+    /// Set a subwindow frame and keep its form body attached.
+    fn set_window_frame(&mut self, layer: WindowLayer, index: usize, frame: rqt::gui::QRectF) {
+        let Some(form_id) = self
+            .area(layer)
+            .subwindow(index)
+            .map(|subwindow| subwindow.payload.clone())
+        else {
+            return;
+        };
+        self.area_mut(layer).set_frame(index, frame);
+        self.sync_form_geometry(&form_id);
+    }
+
+    fn cascade_all_windows(&mut self) {
+        self.mdi.cascade_subwindows();
+        self.floating.cascade_subwindows();
+        self.sync_all_window_geometries();
+    }
+
+    fn tile_all_windows(&mut self) {
+        self.mdi.tile_subwindows();
+        self.floating.tile_subwindows();
+        self.sync_all_window_geometries();
     }
 
     /// Keep the browser cursor in sync with the MDI resize border under the
@@ -2105,39 +2166,15 @@ impl App {
         drag.last = self.cursor;
         match mode {
             MdiDragMode::Move => {
-                let Some(form_id) = self
-                    .area(layer)
-                    .subwindow(index)
-                    .map(|subwindow| subwindow.payload.clone())
-                else {
-                    return;
-                };
-                let before = self
-                    .area(layer)
-                    .subwindow(index)
-                    .map(|subwindow| (subwindow.frame.x, subwindow.frame.y));
-                self.area_mut(layer).translate(index, dx, dy);
-                let after = self
-                    .area(layer)
-                    .subwindow(index)
-                    .map(|subwindow| (subwindow.frame.x, subwindow.frame.y));
-                if before != after {
-                    if let Some(form) = self.forms.get_mut(&form_id) {
-                        form.tree.translate(form.root, dx, dy);
-                    }
-                    self.sync_web_text_input();
-                }
+                self.translate_window(layer, index, dx, dy);
             }
             MdiDragMode::Resize(hit) => {
-                let Some((form_id, min, max)) =
-                    self.area(layer).subwindow(index).map(|subwindow| {
-                        (
-                            subwindow.payload.clone(),
-                            subwindow.min_content_size(),
-                            subwindow.max_content_size(),
-                        )
-                    })
-                else {
+                let Some((min, max)) = self.area(layer).subwindow(index).map(|subwindow| {
+                    (
+                        subwindow.min_content_size(),
+                        subwindow.max_content_size(),
+                    )
+                }) else {
                     return;
                 };
                 let frame = resized_frame(
@@ -2148,8 +2185,7 @@ impl App {
                     min,
                     max,
                 );
-                self.area_mut(layer).set_frame(index, frame);
-                self.sync_form_geometry(&form_id);
+                self.set_window_frame(layer, index, frame);
             }
         }
     }
@@ -3788,13 +3824,17 @@ fn append_paint_commands(
     batches: &mut Vec<gfx::PaintBatch>,
     scale: f32,
 ) {
-    let scale = if scale > 0.0 { scale } else { 1.0 };
+    let _scale = if scale > 0.0 { scale } else { 1.0 };
     use rqt::gui::{QPaintCommand, QRectF};
 
     let mut clip: Option<QRectF> = None;
     let mut stack: Vec<Option<QRectF>> = Vec::new();
     let mut rects: Vec<gfx::ColoredRect> = Vec::new();
+    let mut tris: Vec<gfx::ColoredTriangle> = Vec::new();
+    let mut shapes: Vec<gfx::ShapePrim> = Vec::new();
+    let mut textures: Vec<gfx::TexturedRect> = Vec::new();
     let mut texts: Vec<gfx::ColoredText> = Vec::new();
+    let color4 = |c: rqt::gui::QColor| [c.red, c.green, c.blue, c.alpha];
     let push_rect = |rects: &mut Vec<gfx::ColoredRect>,
                      clip: Option<QRectF>,
                      rect: QRectF,
@@ -3809,10 +3849,42 @@ fn append_paint_commands(
             });
         }
     };
+    let push_shape = |shapes: &mut Vec<gfx::ShapePrim>,
+                      clip: Option<QRectF>,
+                      shape: gfx::ShapePrim| {
+        let rect = QRectF::new(shape.x, shape.y, shape.w, shape.h);
+        if let Some(rect) = intersect_rect(rect, clip) {
+            // Clipping shrinks the quad; keep radius/stroke (may over-round
+            // at clip edges — acceptable vs flooding MAX_RECTS).
+            shapes.push(gfx::ShapePrim {
+                x: rect.x,
+                y: rect.y,
+                w: rect.width,
+                h: rect.height,
+                ..shape
+            });
+        }
+    };
+    let point_in_clip = |p: rqt::gui::QPointF, clip: Option<QRectF>| -> bool {
+        match clip {
+            None => true,
+            Some(c) => p.x >= c.x && p.y >= c.y && p.x <= c.right() && p.y <= c.bottom(),
+        }
+    };
+    let flush_geometry = |batches: &mut Vec<gfx::PaintBatch>,
+                          rects: &mut Vec<gfx::ColoredRect>,
+                          tris: &mut Vec<gfx::ColoredTriangle>,
+                          shapes: &mut Vec<gfx::ShapePrim>,
+                          textures: &mut Vec<gfx::TexturedRect>| {
+        flush_rect_batch(batches, rects);
+        flush_tri_batch(batches, tris);
+        flush_shape_batch(batches, shapes);
+        flush_texture_batch(batches, textures);
+    };
     for command in commands {
         // Keep the command stream ordered: a rect drawn after text belongs
         // in a later batch, not in a global rect pool.
-        let draws_rect = matches!(
+        let draws_geom = matches!(
             command,
             QPaintCommand::FillRect { .. }
                 | QPaintCommand::StrokeRect { .. }
@@ -3825,22 +3897,47 @@ fn append_paint_commands(
                 | QPaintCommand::FillTriangle { .. }
                 | QPaintCommand::DrawPixmap { .. }
         );
-        if draws_rect {
+        if draws_geom {
             flush_text_batch(batches, &mut texts);
         } else if matches!(command, QPaintCommand::DrawText { .. }) {
-            flush_rect_batch(batches, &mut rects);
+            flush_geometry(batches, &mut rects, &mut tris, &mut shapes, &mut textures);
         }
         match command {
             QPaintCommand::Save => stack.push(clip),
             QPaintCommand::Restore => clip = stack.pop().unwrap_or(None),
             QPaintCommand::SetClip { rect } => clip = *rect,
             QPaintCommand::Translate { .. } => {}
-            QPaintCommand::FillRect { rect, color } => push_rect(&mut rects, clip, *rect, *color),
+            QPaintCommand::FillRect { rect, color } => {
+                flush_tri_batch(batches, &mut tris);
+                flush_shape_batch(batches, &mut shapes);
+                flush_texture_batch(batches, &mut textures);
+                push_rect(&mut rects, clip, *rect, *color);
+            }
             QPaintCommand::FillRoundedRect {
                 rect,
                 radius,
                 color,
-            } => push_rounded_rect(&mut rects, clip, *rect, *radius, *color),
+            } => {
+                flush_rect_batch(batches, &mut rects);
+                flush_tri_batch(batches, &mut tris);
+                flush_texture_batch(batches, &mut textures);
+                if *radius <= 0.0 {
+                    push_rect(&mut rects, clip, *rect, *color);
+                } else {
+                    push_shape(
+                        &mut shapes,
+                        clip,
+                        gfx::ShapePrim::solid(
+                            rect.x,
+                            rect.y,
+                            rect.width,
+                            rect.height,
+                            *radius,
+                            color4(*color),
+                        ),
+                    );
+                }
+            }
             QPaintCommand::FillLinearGradientRect {
                 rect,
                 radius,
@@ -3848,97 +3945,71 @@ fn append_paint_commands(
                 end,
                 horizontal,
             } => {
-                for band in rqt::render::expand_linear_gradient(
-                    *rect, *radius, *start, *end, *horizontal, scale,
-                ) {
-                    push_rect(&mut rects, clip, band.rect, band.color);
-                }
+                flush_rect_batch(batches, &mut rects);
+                flush_tri_batch(batches, &mut tris);
+                flush_texture_batch(batches, &mut textures);
+                push_shape(
+                    &mut shapes,
+                    clip,
+                    gfx::ShapePrim::gradient(
+                        rect.x,
+                        rect.y,
+                        rect.width,
+                        rect.height,
+                        *radius,
+                        color4(*start),
+                        color4(*end),
+                        *horizontal,
+                    ),
+                );
             }
             QPaintCommand::StrokeEllipse { rect, width, color } => {
-                let left = rect.left().floor() as i32;
-                let top = rect.top().floor() as i32;
-                let w = rect.width.ceil().max(1.0);
-                let h = rect.height.ceil().max(1.0);
-                let cx = rect.x + rect.width / 2.0;
-                let cy = rect.y + rect.height / 2.0;
-                let radius = rect.width.min(rect.height) / 2.0;
-                let inner = (radius - *width).max(0.0);
-                for y in 0..h as i32 {
-                    for x in 0..w as i32 {
-                        let dx = left as f32 + x as f32 + 0.5 - cx;
-                        let dy = top as f32 + y as f32 + 0.5 - cy;
-                        let d = (dx * dx + dy * dy).sqrt();
-                        if d <= radius && d >= inner {
-                            push_rect(
-                                &mut rects,
-                                clip,
-                                QRectF::new(
-                                    left as f32 + x as f32,
-                                    top as f32 + y as f32,
-                                    1.0,
-                                    1.0,
-                                ),
-                                *color,
-                            );
-                        }
-                    }
-                }
+                flush_rect_batch(batches, &mut rects);
+                flush_tri_batch(batches, &mut tris);
+                flush_texture_batch(batches, &mut textures);
+                push_shape(
+                    &mut shapes,
+                    clip,
+                    gfx::ShapePrim::ellipse(
+                        rect.x,
+                        rect.y,
+                        rect.width,
+                        rect.height,
+                        (*width).max(1.0),
+                        color4(*color),
+                    ),
+                );
             }
             QPaintCommand::FillEllipse { rect, color } => {
-                let left = rect.left().floor() as i32;
-                let top = rect.top().floor() as i32;
-                let width = rect.width.ceil().max(1.0);
-                let height = rect.height.ceil().max(1.0);
-                let cx = rect.x + rect.width / 2.0;
-                let cy = rect.y + rect.height / 2.0;
-                let rx = rect.width / 2.0;
-                let ry = rect.height / 2.0;
-                for y in 0..height as i32 {
-                    for x in 0..width as i32 {
-                        let dx = (left as f32 + x as f32 + 0.5 - cx) / rx;
-                        let dy = (top as f32 + y as f32 + 0.5 - cy) / ry;
-                        if dx * dx + dy * dy <= 1.0 {
-                            push_rect(
-                                &mut rects,
-                                clip,
-                                QRectF::new(
-                                    left as f32 + x as f32,
-                                    top as f32 + y as f32,
-                                    1.0,
-                                    1.0,
-                                ),
-                                *color,
-                            );
-                        }
-                    }
-                }
+                flush_rect_batch(batches, &mut rects);
+                flush_tri_batch(batches, &mut tris);
+                flush_texture_batch(batches, &mut textures);
+                push_shape(
+                    &mut shapes,
+                    clip,
+                    gfx::ShapePrim::ellipse(
+                        rect.x,
+                        rect.y,
+                        rect.width,
+                        rect.height,
+                        0.0,
+                        color4(*color),
+                    ),
+                );
             }
             QPaintCommand::FillTriangle { a, b, c, color } => {
-                let min_x = a.x.min(b.x).min(c.x).floor() as i32;
-                let min_y = a.y.min(b.y).min(c.y).floor() as i32;
-                let max_x = a.x.max(b.x).max(c.x).ceil() as i32;
-                let max_y = a.y.max(b.y).max(c.y).ceil() as i32;
-                let edge = |p: rqt::gui::QPointF, q: rqt::gui::QPointF, x: f32, y: f32| {
-                    (q.x - p.x) * (y - p.y) - (q.y - p.y) * (x - p.x)
-                };
-                for y in min_y..max_y {
-                    for x in min_x..max_x {
-                        let px = x as f32 + 0.5;
-                        let py = y as f32 + 0.5;
-                        let e0 = edge(*a, *b, px, py);
-                        let e1 = edge(*b, *c, px, py);
-                        let e2 = edge(*c, *a, px, py);
-                        if (e0 >= 0.0 && e1 >= 0.0 && e2 >= 0.0)
-                            || (e0 <= 0.0 && e1 <= 0.0 && e2 <= 0.0)
-                        {
-                            push_rect(
-                                &mut rects,
-                                clip,
-                                QRectF::new(x as f32, y as f32, 1.0, 1.0),
-                                *color,
-                            );
-                        }
-                    }
+                flush_rect_batch(batches, &mut rects);
+                flush_shape_batch(batches, &mut shapes);
+                flush_texture_batch(batches, &mut textures);
+                // Skip only when fully outside the clip; partial clips still
+                // draw (arrows are tiny and rarely clipped mid-triangle).
+                if point_in_clip(*a, clip) || point_in_clip(*b, clip) || point_in_clip(*c, clip) {
+                    tris.push(gfx::ColoredTriangle {
+                        a: [a.x, a.y],
+                        b: [b.x, b.y],
+                        c: [c.x, c.y],
+                        color: color4(*color),
+                    });
                 }
             }
             QPaintCommand::DrawPixmap {
@@ -3946,42 +4017,24 @@ fn append_paint_commands(
                 pixmap,
                 opacity,
             } => {
-                let left = rect.left().round() as i32;
-                let top = rect.top().round() as i32;
-                let width = rect.width.round().max(1.0);
-                let height = rect.height.round().max(1.0);
-                let scale_x = pixmap.width as f32 / width;
-                let scale_y = pixmap.height as f32 / height;
-                for y in 0..height as i32 {
-                    for x in 0..width as i32 {
-                        let source_x = ((x as f32 + 0.5) * scale_x)
-                            .floor()
-                            .clamp(0.0, pixmap.width.saturating_sub(1) as f32)
-                            as u32;
-                        let source_y = ((y as f32 + 0.5) * scale_y)
-                            .floor()
-                            .clamp(0.0, pixmap.height.saturating_sub(1) as f32)
-                            as u32;
-                        let [red, green, blue, alpha] = pixmap.pixel(source_x, source_y);
-                        if alpha > 0 {
-                            let color = rqt::gui::QColor::rgba8(red, green, blue, alpha)
-                                .with_alpha(alpha as f32 / 255.0 * *opacity);
-                            push_rect(
-                                &mut rects,
-                                clip,
-                                QRectF::new(
-                                    left as f32 + x as f32,
-                                    top as f32 + y as f32,
-                                    1.0,
-                                    1.0,
-                                ),
-                                color,
-                            );
-                        }
-                    }
+                flush_rect_batch(batches, &mut rects);
+                flush_tri_batch(batches, &mut tris);
+                flush_shape_batch(batches, &mut shapes);
+                if let Some(rect) = intersect_rect(*rect, clip) {
+                    textures.push(gfx::TexturedRect {
+                        x: rect.x,
+                        y: rect.y,
+                        w: rect.width.max(1.0),
+                        h: rect.height.max(1.0),
+                        opacity: (*opacity).clamp(0.0, 1.0),
+                        pixmap: pixmap.clone(),
+                    });
                 }
             }
             QPaintCommand::StrokeRect { rect, width, color } => {
+                flush_tri_batch(batches, &mut tris);
+                flush_shape_batch(batches, &mut shapes);
+                flush_texture_batch(batches, &mut textures);
                 push_stroke_rect(&mut rects, clip, *rect, *width, *color);
             }
             QPaintCommand::StrokeRoundedRect {
@@ -3990,9 +4043,25 @@ fn append_paint_commands(
                 width,
                 color,
             } => {
-                for pixel in rqt::render::expand_stroke_rounded_border(*rect, *radius, *width, *color)
-                {
-                    push_rect(&mut rects, clip, pixel.rect, pixel.color);
+                flush_rect_batch(batches, &mut rects);
+                flush_tri_batch(batches, &mut tris);
+                flush_texture_batch(batches, &mut textures);
+                if *radius <= 0.0 {
+                    push_stroke_rect(&mut rects, clip, *rect, *width, *color);
+                } else {
+                    push_shape(
+                        &mut shapes,
+                        clip,
+                        gfx::ShapePrim::stroke_rounded(
+                            rect.x,
+                            rect.y,
+                            rect.width,
+                            rect.height,
+                            *radius,
+                            *width,
+                            color4(*color),
+                        ),
+                    );
                 }
             }
             QPaintCommand::DrawLine {
@@ -4001,42 +4070,15 @@ fn append_paint_commands(
                 width,
                 color,
             } => {
-                let width = (*width).max(1.0);
-                let half = width / 2.0;
-                let left = from.x.min(to.x) - half;
-                let top = from.y.min(to.y) - half;
-                let right = from.x.max(to.x) + half;
-                let bottom = from.y.max(to.y) + half;
-                let dx = to.x - from.x;
-                let dy = to.y - from.y;
-                let length_squared = dx * dx + dy * dy;
-                let mut y = top.floor() as i32;
-                while y < bottom.ceil() as i32 {
-                    let mut x = left.floor() as i32;
-                    while x < right.ceil() as i32 {
-                        let px = x as f32 + 0.5;
-                        let py = y as f32 + 0.5;
-                        let t = if length_squared > 0.0 {
-                            (((px - from.x) * dx + (py - from.y) * dy) / length_squared)
-                                .clamp(0.0, 1.0)
-                        } else {
-                            0.0
-                        };
-                        let qx = from.x + dx * t;
-                        let qy = from.y + dy * t;
-                        let distance = ((px - qx) * (px - qx) + (py - qy) * (py - qy)).sqrt();
-                        if distance <= half {
-                            push_rect(
-                                &mut rects,
-                                clip,
-                                QRectF::new(x as f32, y as f32, 1.0, 1.0),
-                                *color,
-                            );
-                        }
-                        x += 1;
-                    }
-                    y += 1;
-                }
+                flush_rect_batch(batches, &mut rects);
+                flush_tri_batch(batches, &mut tris);
+                flush_texture_batch(batches, &mut textures);
+                // One SDF segment quad — chrome "X"/icons used to flood 1×1 rects.
+                push_shape(
+                    &mut shapes,
+                    clip,
+                    gfx::ShapePrim::line(from.x, from.y, to.x, to.y, *width, color4(*color)),
+                );
             }
             QPaintCommand::DrawText {
                 rect, text, color, ..
@@ -4063,7 +4105,7 @@ fn append_paint_commands(
             }
         }
     }
-    flush_rect_batch(batches, &mut rects);
+    flush_geometry(batches, &mut rects, &mut tris, &mut shapes, &mut textures);
     flush_text_batch(batches, &mut texts);
 }
 
@@ -4077,6 +4119,36 @@ fn flush_rect_batch(batches: &mut Vec<gfx::PaintBatch>, rects: &mut Vec<gfx::Col
     }
 }
 
+fn flush_tri_batch(batches: &mut Vec<gfx::PaintBatch>, tris: &mut Vec<gfx::ColoredTriangle>) {
+    if tris.is_empty() {
+        return;
+    }
+    match batches.last_mut() {
+        Some(gfx::PaintBatch::Triangles(previous)) => previous.append(tris),
+        _ => batches.push(gfx::PaintBatch::Triangles(std::mem::take(tris))),
+    }
+}
+
+fn flush_shape_batch(batches: &mut Vec<gfx::PaintBatch>, shapes: &mut Vec<gfx::ShapePrim>) {
+    if shapes.is_empty() {
+        return;
+    }
+    match batches.last_mut() {
+        Some(gfx::PaintBatch::Shapes(previous)) => previous.append(shapes),
+        _ => batches.push(gfx::PaintBatch::Shapes(std::mem::take(shapes))),
+    }
+}
+
+fn flush_texture_batch(batches: &mut Vec<gfx::PaintBatch>, textures: &mut Vec<gfx::TexturedRect>) {
+    if textures.is_empty() {
+        return;
+    }
+    match batches.last_mut() {
+        Some(gfx::PaintBatch::Textures(previous)) => previous.append(textures),
+        _ => batches.push(gfx::PaintBatch::Textures(std::mem::take(textures))),
+    }
+}
+
 fn flush_text_batch(batches: &mut Vec<gfx::PaintBatch>, texts: &mut Vec<gfx::ColoredText>) {
     if texts.is_empty() {
         return;
@@ -4084,69 +4156,6 @@ fn flush_text_batch(batches: &mut Vec<gfx::PaintBatch>, texts: &mut Vec<gfx::Col
     match batches.last_mut() {
         Some(gfx::PaintBatch::Text(previous)) => previous.append(texts),
         _ => batches.push(gfx::PaintBatch::Text(std::mem::take(texts))),
-    }
-}
-
-fn push_rounded_rect(
-    rects: &mut Vec<gfx::ColoredRect>,
-    clip: Option<rqt::gui::QRectF>,
-    rect: rqt::gui::QRectF,
-    radius: f32,
-    color: rqt::gui::QColor,
-) {
-    use rqt::gui::QRectF;
-    let left = rect.left().floor();
-    let top = rect.top().floor();
-    let right = rect.right().ceil();
-    let bottom = rect.bottom().ceil();
-    let width = right - left;
-    let height = bottom - top;
-    if width <= 0.0 || height <= 0.0 {
-        return;
-    }
-    let radius = radius.max(0.0).min(width / 2.0).min(height / 2.0);
-    if radius <= 0.0 {
-        if let Some(rect) = intersect_rect(QRectF::new(left, top, width, height), clip) {
-            rects.push(gfx::ColoredRect {
-                x: rect.x,
-                y: rect.y,
-                w: rect.width,
-                h: rect.height,
-                color: [color.red, color.green, color.blue, color.alpha],
-            });
-        }
-        return;
-    }
-    let mut push = |rect: QRectF| {
-        if let Some(rect) = intersect_rect(rect, clip) {
-            rects.push(gfx::ColoredRect {
-                x: rect.x,
-                y: rect.y,
-                w: rect.width,
-                h: rect.height,
-                color: [color.red, color.green, color.blue, color.alpha],
-            });
-        }
-    };
-    for y in top as i32..bottom as i32 {
-        let py = y as f32 + 0.5;
-        let dy = if py < top + radius {
-            top + radius - py
-        } else if py > bottom - radius {
-            py - (bottom - radius)
-        } else {
-            0.0
-        };
-        let inset = if dy > 0.0 {
-            radius - (radius * radius - dy * dy).max(0.0).sqrt()
-        } else {
-            0.0
-        };
-        let x0 = left + inset;
-        let x1 = right - inset;
-        if x1 > x0 {
-            push(QRectF::new(x0, y as f32, x1 - x0, 1.0));
-        }
     }
 }
 
@@ -5356,6 +5365,17 @@ mod tests {
         assert_eq!(tiled[0], QRectF::new(0.0, 0.0, 400.0, 300.0));
         assert_eq!(tiled[1], QRectF::new(400.0, 0.0, 400.0, 300.0));
         assert_eq!(tiled[2], QRectF::new(0.0, 300.0, 400.0, 300.0));
+        // Form trees must follow the new content rects (not stay cascaded).
+        for id in ["a", "b", "c"] {
+            let index = app.mdi.index_of(|payload| payload == id).unwrap();
+            let content = app.mdi.subwindow(index).unwrap().content_rect();
+            let form = app.forms.get(id).unwrap();
+            assert_eq!(
+                form.tree.widget(form.root).unwrap().geometry,
+                content,
+                "form {id} geometry must match tiled content_rect"
+            );
+        }
     }
 
     #[test]
@@ -5765,18 +5785,18 @@ mod tests {
         batches
             .iter()
             .flat_map(|batch| match batch {
-                gfx::PaintBatch::Rects(_) => Vec::new(),
                 gfx::PaintBatch::Text(texts) => {
                     texts.iter().map(|text| text.text.clone()).collect()
                 }
+                _ => Vec::new(),
             })
             .collect()
     }
 
     fn text_batch_index(batches: &[gfx::PaintBatch], needle: &str) -> Option<usize> {
         batches.iter().position(|batch| match batch {
-            gfx::PaintBatch::Rects(_) => false,
             gfx::PaintBatch::Text(texts) => texts.iter().any(|text| text.text == needle),
+            _ => false,
         })
     }
 
@@ -5796,6 +5816,81 @@ mod tests {
                         commands.push(QPaintCommand::FillRect {
                             rect: QRectF::new(rect.x, rect.y, rect.w, rect.h),
                             color: scalar(rect.color),
+                        });
+                    }
+                }
+                gfx::PaintBatch::Triangles(tris) => {
+                    for tri in tris {
+                        commands.push(QPaintCommand::FillTriangle {
+                            a: rqt::gui::QPointF::new(tri.a[0], tri.a[1]),
+                            b: rqt::gui::QPointF::new(tri.b[0], tri.b[1]),
+                            c: rqt::gui::QPointF::new(tri.c[0], tri.c[1]),
+                            color: scalar(tri.color),
+                        });
+                    }
+                }
+                gfx::PaintBatch::Shapes(shapes) => {
+                    for shape in shapes {
+                        let rect = QRectF::new(shape.x, shape.y, shape.w, shape.h);
+                        let c0 = scalar(shape.color0);
+                        let c1 = scalar(shape.color1);
+                        if shape.kind == 4 {
+                            let cx = shape.x + shape.w * 0.5;
+                            let cy = shape.y + shape.h * 0.5;
+                            commands.push(QPaintCommand::DrawLine {
+                                from: rqt::gui::QPointF::new(
+                                    cx + shape.color1[0],
+                                    cy + shape.color1[1],
+                                ),
+                                to: rqt::gui::QPointF::new(
+                                    cx + shape.color1[2],
+                                    cy + shape.color1[3],
+                                ),
+                                width: shape.stroke,
+                                color: c0,
+                            });
+                        } else if shape.kind == 3 {
+                            if shape.stroke > 0.0 {
+                                commands.push(QPaintCommand::StrokeEllipse {
+                                    rect,
+                                    width: shape.stroke,
+                                    color: c0,
+                                });
+                            } else {
+                                commands.push(QPaintCommand::FillEllipse { rect, color: c0 });
+                            }
+                        } else if shape.kind == 1 || shape.kind == 2 {
+                            commands.push(QPaintCommand::FillLinearGradientRect {
+                                rect,
+                                radius: shape.radius,
+                                start: c0,
+                                end: c1,
+                                horizontal: shape.kind == 1,
+                            });
+                        } else if shape.stroke > 0.0 {
+                            commands.push(QPaintCommand::StrokeRoundedRect {
+                                rect,
+                                radius: shape.radius,
+                                width: shape.stroke,
+                                color: c0,
+                            });
+                        } else if shape.radius > 0.0 {
+                            commands.push(QPaintCommand::FillRoundedRect {
+                                rect,
+                                radius: shape.radius,
+                                color: c0,
+                            });
+                        } else {
+                            commands.push(QPaintCommand::FillRect { rect, color: c0 });
+                        }
+                    }
+                }
+                gfx::PaintBatch::Textures(textures) => {
+                    for tex in textures {
+                        commands.push(QPaintCommand::DrawPixmap {
+                            rect: QRectF::new(tex.x, tex.y, tex.w, tex.h),
+                            pixmap: tex.pixmap.clone(),
+                            opacity: tex.opacity,
                         });
                     }
                 }
@@ -6104,7 +6199,13 @@ mod tests {
                         && (rect.color[2] - 1.0).abs() < 0.01
                         && rect.color[3] > 0.99
                 }),
-                gfx::PaintBatch::Text(_) => false,
+                gfx::PaintBatch::Shapes(shapes) => shapes.iter().any(|shape| {
+                    (shape.color0[0] - 1.0).abs() < 0.01
+                        && (shape.color0[1] - 1.0).abs() < 0.01
+                        && (shape.color0[2] - 1.0).abs() < 0.01
+                        && shape.color0[3] > 0.99
+                }),
+                _ => false,
             });
         assert!(
             popup_bg,

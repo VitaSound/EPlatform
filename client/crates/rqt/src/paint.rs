@@ -1089,25 +1089,51 @@ fn visible_rows(scroll: f32, height: f32, count: usize) -> std::ops::Range<usize
     first.min(count)..(first + visible).min(count)
 }
 
+/// Shared indicator box for check/radio — integer-aligned so outer stroke and
+/// inner glyph share the same pixel center (avoids the SDF/rounding drift that
+/// shoved the radio dot toward the top-left).
+fn indicator_rect(widget: &QWidget) -> QRectF {
+    let size = widget
+        .font
+        .pixel_size
+        .min(widget.geometry.height - 4.0)
+        .max(9.0)
+        .round();
+    let x = widget.geometry.x.round();
+    let y = (widget.geometry.y + (widget.geometry.height - size) / 2.0).round();
+    QRectF::new(x, y, size, size)
+}
+
+/// Fusion draws indicator ink as `text.darker(120)` with alpha (180 radio /
+/// 210 check) blended in sRGB by QPainter. Our GPU path blends in linear
+/// space, so the same alpha washes out to ~rgb(148) instead of Qt's ~rgb(75).
+/// Bake the sRGB composite onto the Base fill the glyph sits on.
+fn fusion_indicator_ink(widget: &QWidget, alpha_u8: u8) -> QColor {
+    let ink = widget.palette.color(QPaletteRole::Text).darker(120);
+    let bg = widget.palette.color(QPaletteRole::Base);
+    let a = alpha_u8 as f32 / 255.0;
+    QColor::rgba(
+        ink.red * a + bg.red * (1.0 - a),
+        ink.green * a + bg.green * (1.0 - a),
+        ink.blue * a + bg.blue * (1.0 - a),
+        1.0,
+    )
+}
+
 fn paint_control_indicator(widget: &QWidget, painter: &mut QPainter) {
     let checked = property_bool(widget, "checked");
     if widget.class_name == "QRadioButton" {
-        let size = widget
-            .font
-            .pixel_size
-            .min(widget.geometry.height - 4.0)
-            .max(9.0);
-        let x = widget.geometry.x.round();
-        let y = (widget.geometry.y + (widget.geometry.height - size) / 2.0).round();
+        let outer = indicator_rect(widget);
         let outline = if !widget.enabled {
             widget.palette.color(QPaletteRole::Mid)
         } else if widget.has_focus {
             widget.palette.color(QPaletteRole::Highlight).darker(110)
         } else {
+            // Qt Fusion: option->palette.window().color().darker(150)
             widget.palette.color(QPaletteRole::Window).darker(150)
         };
         painter.fill_ellipse(
-            QRectF::new(x, y, size, size),
+            outer,
             // Disabled radio circles are gray inside (gallery/states/153).
             if widget.enabled {
                 widget.palette.color(QPaletteRole::Base)
@@ -1115,25 +1141,30 @@ fn paint_control_indicator(widget: &QWidget, painter: &mut QPainter) {
                 widget.palette.color(QPaletteRole::Window)
             },
         );
-        painter.stroke_ellipse(QRectF::new(x, y, size, size), 1.0, outline);
+        painter.stroke_ellipse(outer, 1.0, outline);
         if checked {
-            let parity = ((size as i32 + 1) % 2) as f32;
-            let outline_radius = (size + parity) / 2.0 - 1.0;
-            let radius = outline_radius / 1.8;
-            let center_x = x + size / 2.0;
-            let center_y = y + size / 2.0;
+            // Mirror QFusionStyle::PE_IndicatorRadioButton:
+            //   outlineRadius = (w + (w+1)%2)/2 - 1
+            //   checkmarkRadius = outlineRadius / 2.32
+            // Then snap to an integer rect that shares the outer pixel center
+            // (independent float→round of center±r shoved the GPU SDF dot
+            // toward the top-left).
+            let size = outer.width;
+            let outline_radius =
+                (size + ((size as i32 + 1) % 2) as f32) * 0.5 - 1.0;
+            let mut inner = (outline_radius / 2.32 * 2.0).round().max(4.0);
+            if (inner as i32) % 2 != (size as i32) % 2 {
+                inner += 1.0;
+            }
+            let inset = ((size - inner) * 0.5).round();
+            let color = if widget.enabled {
+                fusion_indicator_ink(widget, 180)
+            } else {
+                widget.palette.color(QPaletteRole::Mid)
+            };
             painter.fill_ellipse(
-                QRectF::new(
-                    center_x - radius,
-                    center_y - radius,
-                    radius * 2.0,
-                    radius * 2.0,
-                ),
-                widget
-                    .palette
-                    .color(QPaletteRole::Text)
-                    .darker(120)
-                    .with_alpha(180.0 / 255.0),
+                QRectF::new(outer.x + inset, outer.y + inset, inner, inner),
+                color,
             );
         }
         return;
@@ -1141,28 +1172,22 @@ fn paint_control_indicator(widget: &QWidget, painter: &mut QPainter) {
     if !checked || widget.class_name != "QCheckBox" {
         return;
     }
-    let size = widget
-        .font
-        .pixel_size
-        .min(widget.geometry.height - 4.0)
-        .max(9.0);
-    let x = widget.geometry.x;
-    let y = widget.geometry.y + (widget.geometry.height - size) / 2.0;
-    let width = (size - 1.0).max(1.0);
+    // QFusionStyle::PE_IndicatorCheckBox checkmark geometry.
+    let box_rect = indicator_rect(widget);
+    let width = (box_rect.width - 1.0).max(1.0);
     let padding = 1.0 + width * 0.13;
-    let pen_width = (width * 0.13).max(1.5).min(width * 0.20);
+    let pen_width = 1.5_f32.max(width * 0.13).min(width * 0.20);
     let color = if widget.enabled {
-        widget
-            .palette
-            .color(QPaletteRole::Text)
-            .darker(120)
-            .with_alpha(210.0 / 255.0)
+        fusion_indicator_ink(widget, 210)
     } else {
         widget.palette.color(QPaletteRole::Mid)
     };
-    let first = QPointF::new(x + padding + width * 0.11 - 0.8, y + width * 0.47 + 0.5);
-    let second = QPointF::new(x + width * 0.5 - 0.8, y + width - padding + 0.5);
-    let third = QPointF::new(x + width - padding - 0.8, y + padding + 0.5);
+    // Fusion: painter->translate(dpiScaled(-0.8), dpiScaled(0.5))
+    let x = box_rect.x - 0.8;
+    let y = box_rect.y + 0.5;
+    let first = QPointF::new(x + padding + width * 0.11, y + width * 0.47);
+    let second = QPointF::new(x + width * 0.5, y + width - padding);
+    let third = QPointF::new(x + width - padding, y + padding);
     painter.draw_line(first, second, pen_width, color);
     painter.draw_line(second, third, pen_width, color);
 }

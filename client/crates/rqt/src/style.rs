@@ -330,14 +330,18 @@ impl QStyle for QFusionStyle {
                 },
             ],
             QControlElement::CheckBox | QControlElement::RadioButton => {
+                // Checkbox square only in practice (QRadioButton skips style
+                // background and paints a circle in paint_control_indicator).
+                // Integer-align so the check mark shares the stroke box.
                 let size = option
                     .font
                     .pixel_size
                     .min(option.rect.height - 4.0)
-                    .max(9.0);
+                    .max(9.0)
+                    .round();
                 let indicator = QRectF::new(
-                    option.rect.x,
-                    option.rect.y + (option.rect.height - size) / 2.0,
+                    option.rect.x.round(),
+                    (option.rect.y + (option.rect.height - size) / 2.0).round(),
                     size,
                     size,
                 );

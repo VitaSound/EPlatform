@@ -42,6 +42,48 @@ pub fn lower_commands(commands: &[QPaintCommand], _scale: f32) -> Vec<RenderPrim
                 end: *end,
                 horizontal: *horizontal,
             }),
+            QPaintCommand::StrokeRoundedRect {
+                rect,
+                radius,
+                width,
+                color,
+            } => out.push(RenderPrimitive::RoundedStroke {
+                rect: *rect,
+                radius: *radius,
+                width: *width,
+                color: *color,
+            }),
+            QPaintCommand::FillEllipse { rect, color } => out.push(RenderPrimitive::Ellipse {
+                rect: *rect,
+                stroke: 0.0,
+                color: *color,
+            }),
+            QPaintCommand::StrokeEllipse {
+                rect,
+                width,
+                color,
+            } => out.push(RenderPrimitive::Ellipse {
+                rect: *rect,
+                stroke: *width,
+                color: *color,
+            }),
+            QPaintCommand::FillTriangle { a, b, c, color } => {
+                out.push(RenderPrimitive::Triangle {
+                    a: *a,
+                    b: *b,
+                    c: *c,
+                    color: *color,
+                })
+            }
+            QPaintCommand::DrawPixmap {
+                rect,
+                pixmap,
+                opacity,
+            } => out.push(RenderPrimitive::Pixmap {
+                rect: *rect,
+                pixmap: pixmap.clone(),
+                opacity: *opacity,
+            }),
             _ => {}
         }
     }

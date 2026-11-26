@@ -1,6 +1,6 @@
 # 04 — Texture blit and circle SDF
 
-Status: ready
+Status: done
 Priority: P1
 Depends-on: [05-render-primitive-lower.md]
 Blocks: [20-qstyle-indicators-radio.md]
@@ -16,16 +16,16 @@ Estimate: L
 
 ## Context (read first)
 
-- `DrawPixmap` explosion in `append_paint_commands`
-- `FillEllipse` / `StrokeEllipse` logical 1×1 loops
+- `PaintBatch::Textures` + texture pipeline in `app/src/gfx.rs`
+- `ShapePrim::ellipse` (kind=3) for fill/stroke
 - `icons::pixmap` 16/24 icons in shell
 
 ## Scope
 
 ### In
 
-- GPU textured rect (atlas optional follow-up)
-- Circle fill + ring stroke primitives
+- GPU textured rect (hash-cached uploads; atlas optional follow-up)
+- Circle/ellipse fill + ring stroke primitives
 - Wire DrawPixmap / ellipse commands
 
 ### Out
@@ -33,26 +33,17 @@ Estimate: L
 - Full icon theme engine
 - Arbitrary path ellipses / arcs (40)
 
-## Implementation steps
+## Implementation notes (landed)
 
-1. Add texture upload path for small QPixmaps or shared atlas.
-2. Add circle SDF (or tessellation) draw.
-3. Remove 1×1 pixmap/ellipse lowering on prod path.
-4. Verify radio + menu/toolbar icons.
-
-## Files to touch
-
-| Path | Change |
-|------|--------|
-| `client/crates/app/src/gfx.rs` | Textures + circle |
-| `client/crates/app/src/lib.rs` | Lowering |
-| `client/crates/rqt/src/icons.rs` | Only if atlas needs format |
+- `DrawPixmap` → `TexturedRect` (RGBA8 upload, bind-group cache by pixmap hash)
+- `FillEllipse` / `StrokeEllipse` → SDF ellipse shapes
+- `RenderPrimitive::{Pixmap, Ellipse}` extended in `rqt::render`
 
 ## Tests / acceptance
 
+- [x] `cargo test -p app -p rqt`
 - [ ] Icon toolbar not thousands of rects
 - [ ] Radio crisp at DPR 1.5
-- [ ] `cargo test -p app -p rqt`
 
 ## Agent handoff prompt (copy-paste)
 

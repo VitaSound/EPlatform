@@ -1,7 +1,9 @@
 //! wgpu surface on the winit window: configure, clear, present.
 //!
-//! Stage 3 renderer: a batch of axis-aligned colored rectangles — one
-//! draw call per frame, vertices rebuilt from the laid-out widget tree.
+//! Display list: solid rects, SDF shapes (gradient / rounded / ellipse),
+//! textured quads, and glyphon text — replayed in painter order.
+
+use std::collections::HashMap;
 
 use winit::window::Window;
 
@@ -10,8 +12,12 @@ use glyphon::{
     Resolution, Shaping, SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport,
 };
 
-/// Maximum rectangles per frame (2048 → 12288 vertices).
-const MAX_RECTS: usize = 2048;
+/// Soft caps — buffers grow if a frame needs more (200 MDI windows ≈
+/// tens of thousands of solid fills; diagonal chrome icons used to blow
+/// past a fixed 8k via 1×1 pixel floods).
+const INITIAL_RECTS: usize = 16384;
+const INITIAL_SHAPES: usize = 8192;
+const INITIAL_TEXTURED: usize = 1024;
 
 const RECT_WGSL: &str = r#"
 struct Out {
@@ -33,6 +39,127 @@ fn fs(in: Out) -> @location(0) vec4f {
 }
 "#;
 
+/// SDF shapes: solid/rounded fill, linear gradient (+radius), ellipse, segment.
+/// `params = (radius, stroke_width, kind, _)` where kind is
+/// 0=solid, 1=gradientH, 2=gradientV, 3=ellipse, 4=line (endpoints in color1).
+const SHAPE_WGSL: &str = r#"
+struct Out {
+    @builtin(position) pos: vec4f,
+    @location(0) local: vec2f,
+    @location(1) half_size: vec2f,
+    @location(2) color0: vec4f,
+    @location(3) color1: vec4f,
+    @location(4) params: vec4f,
+};
+
+@vertex
+fn vs(
+    @location(0) p: vec2f,
+    @location(1) local: vec2f,
+    @location(2) half_size: vec2f,
+    @location(3) color0: vec4f,
+    @location(4) color1: vec4f,
+    @location(5) params: vec4f,
+) -> Out {
+    var out: Out;
+    out.pos = vec4f(p, 0.0, 1.0);
+    out.local = local;
+    out.half_size = half_size;
+    out.color0 = color0;
+    out.color1 = color1;
+    out.params = params;
+    return out;
+}
+
+fn sd_rounded_box(p: vec2f, b: vec2f, r: f32) -> f32 {
+    let rr = min(r, min(b.x, b.y));
+    let q = abs(p) - b + vec2f(rr, rr);
+    return length(max(q, vec2f(0.0))) + min(max(q.x, q.y), 0.0) - rr;
+}
+
+fn sd_ellipse(p: vec2f, r: vec2f) -> f32 {
+    let safe = max(r, vec2f(0.5, 0.5));
+    return (length(p / safe) - 1.0) * min(safe.x, safe.y);
+}
+
+fn sd_segment(p: vec2f, a: vec2f, b: vec2f) -> f32 {
+    let pa = p - a;
+    let ba = b - a;
+    let h = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-4), 0.0, 1.0);
+    return length(pa - ba * h);
+}
+
+@fragment
+fn fs(in: Out) -> @location(0) vec4f {
+    let radius = in.params.x;
+    let stroke = in.params.y;
+    let kind = in.params.z;
+
+    var d: f32;
+    var cover: f32;
+    if (kind > 3.5) {
+        // color1 = local endpoints (not a color). Capsule around the segment.
+        d = sd_segment(in.local, in.color1.xy, in.color1.zw) - max(stroke, 1.0) * 0.5;
+        cover = 1.0 - smoothstep(-0.75, 0.75, d);
+    } else {
+        if (kind > 2.5) {
+            d = sd_ellipse(in.local, in.half_size);
+        } else {
+            d = sd_rounded_box(in.local, in.half_size, radius);
+        }
+        if (stroke > 0.0) {
+            let outer = 1.0 - smoothstep(-0.75, 0.75, d);
+            let inner = 1.0 - smoothstep(-0.75, 0.75, d + stroke);
+            cover = clamp(outer - inner, 0.0, 1.0);
+        } else {
+            cover = 1.0 - smoothstep(-0.75, 0.75, d);
+        }
+    }
+    if (cover <= 0.001) {
+        discard;
+    }
+
+    var color = in.color0;
+    if (kind > 0.5 && kind < 1.5) {
+        let span = max(in.half_size.x * 2.0, 1.0);
+        let t = clamp((in.local.x + in.half_size.x) / span, 0.0, 1.0);
+        color = mix(in.color0, in.color1, t);
+    } else if (kind > 1.5 && kind < 2.5) {
+        let span = max(in.half_size.y * 2.0, 1.0);
+        let t = clamp((in.local.y + in.half_size.y) / span, 0.0, 1.0);
+        color = mix(in.color0, in.color1, t);
+    }
+
+    return vec4f(color.rgb, color.a * cover);
+}
+"#;
+
+const TEXTURE_WGSL: &str = r#"
+struct Out {
+    @builtin(position) pos: vec4f,
+    @location(0) uv: vec2f,
+    @location(1) opacity: f32,
+};
+
+@group(0) @binding(0) var samp: sampler;
+@group(0) @binding(1) var tex: texture_2d<f32>;
+
+@vertex
+fn vs(@location(0) p: vec2f, @location(1) uv: vec2f, @location(2) opacity: f32) -> Out {
+    var out: Out;
+    out.pos = vec4f(p, 0.0, 1.0);
+    out.uv = uv;
+    out.opacity = opacity;
+    return out;
+}
+
+@fragment
+fn fs(in: Out) -> @location(0) vec4f {
+    let c = textureSample(tex, samp, in.uv);
+    return vec4f(c.rgb, c.a * in.opacity);
+}
+"#;
+
 /// One rectangle in pixel coordinates + sRGB-ish color.
 #[derive(Debug, Clone, Copy)]
 pub struct ColoredRect {
@@ -40,6 +167,141 @@ pub struct ColoredRect {
     pub y: f32,
     pub w: f32,
     pub h: f32,
+    pub color: [f32; 4],
+}
+
+/// GPU SDF shape (one quad). Coordinates are logical / CSS px.
+#[derive(Debug, Clone, Copy)]
+pub struct ShapePrim {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+    /// Corner radius (ignored for ellipse).
+    pub radius: f32,
+    /// `0` = filled; otherwise stroke width in logical px.
+    pub stroke: f32,
+    /// 0 solid, 1 gradientH, 2 gradientV, 3 ellipse, 4 line segment.
+    pub kind: u8,
+    pub color0: [f32; 4],
+    /// Gradient end — or for `kind==4`, local endpoints `(ax,ay,bx,by)`.
+    pub color1: [f32; 4],
+}
+
+impl ShapePrim {
+    pub fn solid(x: f32, y: f32, w: f32, h: f32, radius: f32, color: [f32; 4]) -> Self {
+        Self {
+            x,
+            y,
+            w,
+            h,
+            radius,
+            stroke: 0.0,
+            kind: 0,
+            color0: color,
+            color1: color,
+        }
+    }
+
+    pub fn gradient(
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        radius: f32,
+        start: [f32; 4],
+        end: [f32; 4],
+        horizontal: bool,
+    ) -> Self {
+        Self {
+            x,
+            y,
+            w,
+            h,
+            radius,
+            stroke: 0.0,
+            kind: if horizontal { 1 } else { 2 },
+            color0: start,
+            color1: end,
+        }
+    }
+
+    pub fn stroke_rounded(
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        radius: f32,
+        width: f32,
+        color: [f32; 4],
+    ) -> Self {
+        Self {
+            x,
+            y,
+            w,
+            h,
+            radius,
+            stroke: width.max(1.0),
+            kind: 0,
+            color0: color,
+            color1: color,
+        }
+    }
+
+    pub fn ellipse(x: f32, y: f32, w: f32, h: f32, stroke: f32, color: [f32; 4]) -> Self {
+        Self {
+            x,
+            y,
+            w,
+            h,
+            radius: 0.0,
+            stroke,
+            kind: 3,
+            color0: color,
+            color1: color,
+        }
+    }
+
+    /// One stroked segment (chrome "X", maximize box edges that aren't AA).
+    pub fn line(from_x: f32, from_y: f32, to_x: f32, to_y: f32, width: f32, color: [f32; 4]) -> Self {
+        let half = width.max(1.0) * 0.5;
+        let min_x = from_x.min(to_x) - half;
+        let min_y = from_y.min(to_y) - half;
+        let max_x = from_x.max(to_x) + half;
+        let max_y = from_y.max(to_y) + half;
+        let cx = (min_x + max_x) * 0.5;
+        let cy = (min_y + max_y) * 0.5;
+        Self {
+            x: min_x,
+            y: min_y,
+            w: (max_x - min_x).max(1.0),
+            h: (max_y - min_y).max(1.0),
+            radius: 0.0,
+            stroke: width.max(1.0),
+            kind: 4,
+            color0: color,
+            color1: [from_x - cx, from_y - cy, to_x - cx, to_y - cy],
+        }
+    }
+}
+
+/// Textured blit (icons / pixmaps).
+#[derive(Debug, Clone)]
+pub struct TexturedRect {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+    pub opacity: f32,
+    pub pixmap: rqt::gui::QPixmap,
+}
+
+/// Filled triangle in logical px (scrollbar / combo / tree arrows).
+#[derive(Debug, Clone, Copy)]
+pub struct ColoredTriangle {
+    pub a: [f32; 2],
+    pub b: [f32; 2],
+    pub c: [f32; 2],
     pub color: [f32; 4],
 }
 
@@ -56,13 +318,14 @@ pub struct ColoredText {
     pub color: [f32; 4],
 }
 
-/// One homogeneous run of the ordered display list. Rects and text are
-/// kept in painter order; adjacent commands of the same kind are merged,
-/// but a `Rects -> Text -> Rects` sequence is never flattened into two
-/// global pools.
+/// One homogeneous run of the ordered display list.
 #[derive(Debug, Clone)]
 pub enum PaintBatch {
     Rects(Vec<ColoredRect>),
+    /// Solid-color triangles share the rect shader (3 verts each).
+    Triangles(Vec<ColoredTriangle>),
+    Shapes(Vec<ShapePrim>),
+    Textures(Vec<TexturedRect>),
     Text(Vec<ColoredText>),
 }
 
@@ -88,7 +351,27 @@ struct RectVert {
     color: [f32; 4],
 }
 
-const VERTEX_ATTRS: [wgpu::VertexAttribute; 2] = [
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct ShapeVert {
+    pos: [f32; 2],
+    local: [f32; 2],
+    half_size: [f32; 2],
+    color0: [f32; 4],
+    color1: [f32; 4],
+    params: [f32; 4],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct TexVert {
+    pos: [f32; 2],
+    uv: [f32; 2],
+    opacity: f32,
+    _pad: [f32; 3],
+}
+
+const RECT_ATTRS: [wgpu::VertexAttribute; 2] = [
     wgpu::VertexAttribute {
         format: wgpu::VertexFormat::Float32x2,
         offset: 0,
@@ -101,6 +384,63 @@ const VERTEX_ATTRS: [wgpu::VertexAttribute; 2] = [
     },
 ];
 
+const SHAPE_ATTRS: [wgpu::VertexAttribute; 6] = [
+    wgpu::VertexAttribute {
+        format: wgpu::VertexFormat::Float32x2,
+        offset: 0,
+        shader_location: 0,
+    },
+    wgpu::VertexAttribute {
+        format: wgpu::VertexFormat::Float32x2,
+        offset: 8,
+        shader_location: 1,
+    },
+    wgpu::VertexAttribute {
+        format: wgpu::VertexFormat::Float32x2,
+        offset: 16,
+        shader_location: 2,
+    },
+    wgpu::VertexAttribute {
+        format: wgpu::VertexFormat::Float32x4,
+        offset: 24,
+        shader_location: 3,
+    },
+    wgpu::VertexAttribute {
+        format: wgpu::VertexFormat::Float32x4,
+        offset: 40,
+        shader_location: 4,
+    },
+    wgpu::VertexAttribute {
+        format: wgpu::VertexFormat::Float32x4,
+        offset: 56,
+        shader_location: 5,
+    },
+];
+
+const TEX_ATTRS: [wgpu::VertexAttribute; 3] = [
+    wgpu::VertexAttribute {
+        format: wgpu::VertexFormat::Float32x2,
+        offset: 0,
+        shader_location: 0,
+    },
+    wgpu::VertexAttribute {
+        format: wgpu::VertexFormat::Float32x2,
+        offset: 8,
+        shader_location: 1,
+    },
+    wgpu::VertexAttribute {
+        format: wgpu::VertexFormat::Float32,
+        offset: 16,
+        shader_location: 2,
+    },
+];
+
+struct CachedTexture {
+    _texture: wgpu::Texture,
+    _view: wgpu::TextureView,
+    bind_group: wgpu::BindGroup,
+}
+
 pub struct Gfx {
     surface: wgpu::Surface<'static>,
     device: wgpu::Device,
@@ -110,8 +450,20 @@ pub struct Gfx {
     dpr: f32,
     ui_scale: f32,
     rect_pipeline: wgpu::RenderPipeline,
+    shape_pipeline: wgpu::RenderPipeline,
+    texture_pipeline: wgpu::RenderPipeline,
+    texture_bind_layout: wgpu::BindGroupLayout,
+    texture_sampler: wgpu::Sampler,
     rect_buffer: wgpu::Buffer,
+    shape_buffer: wgpu::Buffer,
+    tex_buffer: wgpu::Buffer,
+    rect_capacity: usize,
+    shape_capacity: usize,
+    tex_capacity: usize,
     scratch: Vec<RectVert>,
+    shape_scratch: Vec<ShapeVert>,
+    tex_scratch: Vec<TexVert>,
+    texture_cache: HashMap<u64, CachedTexture>,
     text: TextState,
 }
 
@@ -143,6 +495,32 @@ fn srgb_to_linear(c: f32) -> f32 {
         c / 12.92
     } else {
         ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+fn color_linear(c: [f32; 4]) -> [f32; 4] {
+    [
+        srgb_to_linear(c[0]),
+        srgb_to_linear(c[1]),
+        srgb_to_linear(c[2]),
+        c[3],
+    ]
+}
+
+fn pixmap_key(pixmap: &rqt::gui::QPixmap) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    pixmap.width.hash(&mut hasher);
+    pixmap.height.hash(&mut hasher);
+    pixmap.pixels.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn alpha_blend_target(format: wgpu::TextureFormat) -> wgpu::ColorTargetState {
+    wgpu::ColorTargetState {
+        format,
+        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+        write_mask: wgpu::ColorWrites::ALL,
     }
 }
 
@@ -212,7 +590,7 @@ impl Gfx {
         let ui_scale = ui_scale_for(size.width, size.height, dpr, &config);
         surface.configure(&device, &config);
 
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        let rect_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("rect shader"),
             source: wgpu::ShaderSource::Wgsl(RECT_WGSL.into()),
         });
@@ -220,20 +598,20 @@ impl Gfx {
             label: Some("rect pipeline"),
             layout: None,
             vertex: wgpu::VertexState {
-                module: &shader,
+                module: &rect_shader,
                 entry_point: Some("vs"),
                 compilation_options: Default::default(),
                 buffers: &[Some(wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<RectVert>() as u64,
                     step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &VERTEX_ATTRS,
+                    attributes: &RECT_ATTRS,
                 })],
             },
             primitive: wgpu::PrimitiveState::default(),
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
             fragment: Some(wgpu::FragmentState {
-                module: &shader,
+                module: &rect_shader,
                 entry_point: Some("fs"),
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
@@ -246,9 +624,114 @@ impl Gfx {
             cache: None,
         });
 
+        let shape_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("shape shader"),
+            source: wgpu::ShaderSource::Wgsl(SHAPE_WGSL.into()),
+        });
+        let shape_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("shape pipeline"),
+            layout: None,
+            vertex: wgpu::VertexState {
+                module: &shape_shader,
+                entry_point: Some("vs"),
+                compilation_options: Default::default(),
+                buffers: &[Some(wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<ShapeVert>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &SHAPE_ATTRS,
+                })],
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &shape_shader,
+                entry_point: Some("fs"),
+                compilation_options: Default::default(),
+                targets: &[Some(alpha_blend_target(config.format))],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+
+        let texture_bind_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("texture blit layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let texture_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("texture blit pipeline layout"),
+                bind_group_layouts: &[Some(&texture_bind_layout)],
+                immediate_size: 0,
+            });
+        let texture_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("texture shader"),
+            source: wgpu::ShaderSource::Wgsl(TEXTURE_WGSL.into()),
+        });
+        let texture_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("texture pipeline"),
+            layout: Some(&texture_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &texture_shader,
+                entry_point: Some("vs"),
+                compilation_options: Default::default(),
+                buffers: &[Some(wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<TexVert>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &TEX_ATTRS,
+                })],
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &texture_shader,
+                entry_point: Some("fs"),
+                compilation_options: Default::default(),
+                targets: &[Some(alpha_blend_target(config.format))],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+        let texture_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("texture blit sampler"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+
         let rect_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("rect vertices"),
-            size: (MAX_RECTS * 6 * std::mem::size_of::<RectVert>()) as u64,
+            size: (INITIAL_RECTS * 6 * std::mem::size_of::<RectVert>()) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let shape_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("shape vertices"),
+            size: (INITIAL_SHAPES * 6 * std::mem::size_of::<ShapeVert>()) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let tex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("texture vertices"),
+            size: (INITIAL_TEXTURED * 6 * std::mem::size_of::<TexVert>()) as u64,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -279,10 +762,88 @@ impl Gfx {
             dpr,
             ui_scale,
             rect_pipeline,
+            shape_pipeline,
+            texture_pipeline,
+            texture_bind_layout,
+            texture_sampler,
             rect_buffer,
-            scratch: Vec::with_capacity(MAX_RECTS * 6),
+            shape_buffer,
+            tex_buffer,
+            rect_capacity: INITIAL_RECTS,
+            shape_capacity: INITIAL_SHAPES,
+            tex_capacity: INITIAL_TEXTURED,
+            scratch: Vec::with_capacity(INITIAL_RECTS * 6),
+            shape_scratch: Vec::with_capacity(INITIAL_SHAPES * 6),
+            tex_scratch: Vec::with_capacity(INITIAL_TEXTURED * 6),
+            texture_cache: HashMap::new(),
             text,
         })
+    }
+
+    /// `verts` is the number of `RectVert` entries (rects use 6, triangles 3).
+    fn ensure_rect_capacity(&mut self, verts: usize) {
+        // Capacity is stored in "quad slots" (6 verts); round up.
+        let needed = (verts + 5) / 6;
+        if needed <= self.rect_capacity {
+            return;
+        }
+        let mut cap = self.rect_capacity.max(1);
+        while cap < needed {
+            cap *= 2;
+        }
+        crate::App::log(format!(
+            "gfx: grow rect buffer {needed} quads / {verts} verts (was {})",
+            self.rect_capacity
+        ));
+        self.rect_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("rect vertices"),
+            size: (cap * 6 * std::mem::size_of::<RectVert>()) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.rect_capacity = cap;
+    }
+
+    fn ensure_shape_capacity(&mut self, shapes: usize) {
+        if shapes <= self.shape_capacity {
+            return;
+        }
+        let mut cap = self.shape_capacity.max(1);
+        while cap < shapes {
+            cap *= 2;
+        }
+        crate::App::log(format!(
+            "gfx: grow shape buffer {shapes} (was {})",
+            self.shape_capacity
+        ));
+        self.shape_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("shape vertices"),
+            size: (cap * 6 * std::mem::size_of::<ShapeVert>()) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.shape_capacity = cap;
+    }
+
+    fn ensure_tex_capacity(&mut self, quads: usize) {
+        if quads <= self.tex_capacity {
+            return;
+        }
+        let mut cap = self.tex_capacity.max(1);
+        while cap < quads {
+            cap *= 2;
+        }
+        crate::App::log(format!(
+            "gfx: grow texture buffer {quads} (was {})",
+            self.tex_capacity
+        ));
+        self.tex_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("texture vertices"),
+            size: (cap * 6 * std::mem::size_of::<TexVert>()) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.tex_capacity = cap;
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
@@ -369,9 +930,78 @@ impl Gfx {
         &self.queue
     }
 
-    /// Clear the frame, then replay `batches` in painter order. Rect runs
-    /// share one vertex buffer; each text run is prepared into its own
-    /// glyphon renderer so text can appear between rectangles.
+    fn ensure_texture(&mut self, pixmap: &rqt::gui::QPixmap) -> u64 {
+        let key = pixmap_key(pixmap);
+        if self.texture_cache.contains_key(&key) {
+            return key;
+        }
+        let width = pixmap.width.max(1);
+        let height = pixmap.height.max(1);
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("blit pixmap"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let expected = (width * height * 4) as usize;
+        let mut pixels = pixmap.pixels.clone();
+        if pixels.len() < expected {
+            pixels.resize(expected, 0);
+        }
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &pixels[..expected],
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(width * 4),
+                rows_per_image: Some(height),
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        let view = texture.create_view(&Default::default());
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("blit bind group"),
+            layout: &self.texture_bind_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Sampler(&self.texture_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+            ],
+        });
+        self.texture_cache.insert(
+            key,
+            CachedTexture {
+                _texture: texture,
+                _view: view,
+                bind_group,
+            },
+        );
+        key
+    }
+
+    /// Clear the frame, then replay `batches` in painter order.
     pub fn render(&mut self, clear: wgpu::Color, batches: &[PaintBatch]) {
         use wgpu::CurrentSurfaceTexture;
 
@@ -392,70 +1022,119 @@ impl Gfx {
             a: clear.a,
         };
 
-        // Pixel rects → NDC triangles. Each rect batch keeps a vertex range
-        // into the single shared buffer; batches are replayed in order.
         let surface_w = self.config.width.max(1) as f32;
         let surface_h = self.config.height.max(1) as f32;
         let scale = self.ui_scale;
         self.scratch.clear();
-        let mut ranges = Vec::with_capacity(batches.len());
-        let mut text_slots = Vec::with_capacity(batches.len());
+        self.shape_scratch.clear();
+        self.tex_scratch.clear();
+
+        enum Built {
+            /// Vertex range into `rect_buffer` (rects = 6 verts, tris = 3).
+            SolidVerts(u32, u32),
+            Shapes(u32, u32),
+            Textures(Vec<(u64, u32, u32)>),
+            Text(Option<usize>),
+        }
+        let mut built: Vec<Built> = Vec::with_capacity(batches.len());
         let mut text_count = 0usize;
-        let mut truncated_logged = false;
+
         for batch in batches {
             match batch {
                 PaintBatch::Rects(rects) => {
                     let start = self.scratch.len() as u32;
-                    let room = MAX_RECTS.saturating_sub(start as usize / 6);
-                    if rects.len() > room && !truncated_logged {
-                        truncated_logged = true;
-                        crate::App::log(format!(
-                            "gfx: rect batch truncated ({} rects, room for {})",
-                            rects.len(),
-                            room
-                        ));
+                    for r in rects {
+                        push_rect_quad(
+                            &mut self.scratch,
+                            r.x,
+                            r.y,
+                            r.w,
+                            r.h,
+                            scale,
+                            surface_w,
+                            surface_h,
+                            color_linear(r.color),
+                        );
                     }
-                    for r in rects.iter().take(room) {
-                        let x = (r.x * scale).round();
-                        let y = (r.y * scale).round();
-                        let w = (r.w * scale).round().max(1.0);
-                        let h = (r.h * scale).round().max(1.0);
-                        let x0 = x / surface_w * 2.0 - 1.0;
-                        let x1 = (x + w) / surface_w * 2.0 - 1.0;
-                        let y0 = 1.0 - y / surface_h * 2.0;
-                        let y1 = 1.0 - (y + h) / surface_h * 2.0;
-                        let c = [
-                            srgb_to_linear(r.color[0]),
-                            srgb_to_linear(r.color[1]),
-                            srgb_to_linear(r.color[2]),
-                            r.color[3],
-                        ];
-                        let v = |p: [f32; 2]| RectVert { pos: p, color: c };
-                        // Two triangles per rect.
-                        self.scratch.push(v([x0, y0]));
-                        self.scratch.push(v([x1, y0]));
-                        self.scratch.push(v([x0, y1]));
-                        self.scratch.push(v([x1, y0]));
-                        self.scratch.push(v([x1, y1]));
-                        self.scratch.push(v([x0, y1]));
+                    built.push(Built::SolidVerts(start, self.scratch.len() as u32));
+                }
+                PaintBatch::Triangles(tris) => {
+                    let start = self.scratch.len() as u32;
+                    for t in tris {
+                        push_tri_verts(
+                            &mut self.scratch,
+                            t,
+                            scale,
+                            surface_w,
+                            surface_h,
+                        );
                     }
-                    ranges.push(Some((start, self.scratch.len() as u32)));
-                    text_slots.push(None);
+                    built.push(Built::SolidVerts(start, self.scratch.len() as u32));
+                }
+                PaintBatch::Shapes(shapes) => {
+                    let start = self.shape_scratch.len() as u32;
+                    for s in shapes {
+                        push_shape_quad(
+                            &mut self.shape_scratch,
+                            s,
+                            scale,
+                            surface_w,
+                            surface_h,
+                        );
+                    }
+                    built.push(Built::Shapes(start, self.shape_scratch.len() as u32));
+                }
+                PaintBatch::Textures(textures) => {
+                    let mut ranges = Vec::with_capacity(textures.len());
+                    for tex in textures {
+                        let key = self.ensure_texture(&tex.pixmap);
+                        let start = self.tex_scratch.len() as u32;
+                        push_tex_quad(
+                            &mut self.tex_scratch,
+                            tex.x,
+                            tex.y,
+                            tex.w,
+                            tex.h,
+                            tex.opacity,
+                            scale,
+                            surface_w,
+                            surface_h,
+                        );
+                        ranges.push((key, start, self.tex_scratch.len() as u32));
+                    }
+                    built.push(Built::Textures(ranges));
                 }
                 PaintBatch::Text(texts) => {
-                    ranges.push(None);
                     if texts.is_empty() {
-                        text_slots.push(None);
+                        built.push(Built::Text(None));
                     } else {
-                        text_slots.push(Some(text_count));
+                        built.push(Built::Text(Some(text_count)));
                         text_count += 1;
                     }
                 }
             }
         }
+
+        self.ensure_rect_capacity(self.scratch.len());
+        self.ensure_shape_capacity(self.shape_scratch.len() / 6);
+        self.ensure_tex_capacity(self.tex_scratch.len() / 6);
         if !self.scratch.is_empty() {
             self.queue
                 .write_buffer(&self.rect_buffer, 0, bytemuck::cast_slice(&self.scratch));
+        }
+        if !self.shape_scratch.is_empty() {
+            self.queue.write_buffer(
+                &self.shape_buffer,
+                0,
+                bytemuck::cast_slice(&self.shape_scratch),
+            );
+        }
+        if !self.tex_scratch.is_empty() {
+            self.queue.write_buffer(
+                &self.tex_buffer,
+                0,
+                bytemuck::cast_slice(&self.tex_scratch),
+            );
         }
 
         // Shape text runs and upload glyphs into the atlas, one renderer per
@@ -483,14 +1162,13 @@ impl Gfx {
         // set every frame and fill the atlas permanently.
         let font_size = quantize_font_px(FONT_SIZE * scale);
         let line_height = quantize_font_px(LINE_HEIGHT * scale).max(font_size);
-        // Own shaped buffers for the whole prepare/retry cycle.
         let mut shaped: Vec<(usize, Vec<Buffer>, Vec<&ColoredText>)> =
             Vec::with_capacity(text_count);
-        for (batch, slot) in batches.iter().zip(&text_slots) {
+        for (batch, slot) in batches.iter().zip(built.iter()) {
             let PaintBatch::Text(texts) = batch else {
                 continue;
             };
-            let Some(slot) = *slot else {
+            let Built::Text(Some(slot)) = slot else {
                 continue;
             };
             let mut buffers: Vec<Buffer> = Vec::with_capacity(texts.len());
@@ -510,7 +1188,7 @@ impl Gfx {
                 buffers.push(buffer);
             }
             let refs: Vec<&ColoredText> = texts.iter().collect();
-            shaped.push((slot, buffers, refs));
+            shaped.push((*slot, buffers, refs));
         }
 
         // AtlasFull must trim+retry: ignoring it leaves chrome without labels
@@ -587,26 +1265,40 @@ impl Gfx {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            for ((batch, range), slot) in batches.iter().zip(&ranges).zip(&text_slots) {
-                match batch {
-                    PaintBatch::Rects(_) => {
-                        if let Some((start, end)) = range {
-                            if end > start {
-                                pass.set_pipeline(&self.rect_pipeline);
-                                pass.set_vertex_buffer(0, self.rect_buffer.slice(..));
-                                pass.draw(*start..*end, 0..1);
+            for item in &built {
+                match item {
+                    Built::SolidVerts(start, end) if end > start => {
+                        pass.set_pipeline(&self.rect_pipeline);
+                        pass.set_vertex_buffer(0, self.rect_buffer.slice(..));
+                        pass.draw(*start..*end, 0..1);
+                    }
+                    Built::Shapes(start, end) if end > start => {
+                        pass.set_pipeline(&self.shape_pipeline);
+                        pass.set_vertex_buffer(0, self.shape_buffer.slice(..));
+                        pass.draw(*start..*end, 0..1);
+                    }
+                    Built::Textures(ranges) => {
+                        for (key, start, end) in ranges {
+                            if end <= start {
+                                continue;
                             }
+                            let Some(cached) = self.texture_cache.get(key) else {
+                                continue;
+                            };
+                            pass.set_pipeline(&self.texture_pipeline);
+                            pass.set_bind_group(0, &cached.bind_group, &[]);
+                            pass.set_vertex_buffer(0, self.tex_buffer.slice(..));
+                            pass.draw(*start..*end, 0..1);
                         }
                     }
-                    PaintBatch::Text(_) => {
-                        if let Some(slot) = slot {
-                            let _ = self.text.renderers[*slot].render(
-                                &self.text.atlas,
-                                &self.text.viewport,
-                                &mut pass,
-                            );
-                        }
+                    Built::Text(Some(slot)) => {
+                        let _ = self.text.renderers[*slot].render(
+                            &self.text.atlas,
+                            &self.text.viewport,
+                            &mut pass,
+                        );
                     }
+                    _ => {}
                 }
             }
         }
@@ -616,6 +1308,153 @@ impl Gfx {
         // Drop unused glyphs so the next resize/frame can allocate again.
         // Without this the atlas fills once and labels stay missing forever.
         self.text.atlas.trim();
+    }
+}
+
+fn push_rect_quad(
+    out: &mut Vec<RectVert>,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    scale: f32,
+    surface_w: f32,
+    surface_h: f32,
+    c: [f32; 4],
+) {
+    let x = (x * scale).round();
+    let y = (y * scale).round();
+    let w = (w * scale).round().max(1.0);
+    let h = (h * scale).round().max(1.0);
+    let x0 = x / surface_w * 2.0 - 1.0;
+    let x1 = (x + w) / surface_w * 2.0 - 1.0;
+    let y0 = 1.0 - y / surface_h * 2.0;
+    let y1 = 1.0 - (y + h) / surface_h * 2.0;
+    let v = |p: [f32; 2]| RectVert { pos: p, color: c };
+    out.push(v([x0, y0]));
+    out.push(v([x1, y0]));
+    out.push(v([x0, y1]));
+    out.push(v([x1, y0]));
+    out.push(v([x1, y1]));
+    out.push(v([x0, y1]));
+}
+
+fn push_tri_verts(
+    out: &mut Vec<RectVert>,
+    t: &ColoredTriangle,
+    scale: f32,
+    surface_w: f32,
+    surface_h: f32,
+) {
+    let c = color_linear(t.color);
+    let to_ndc = |p: [f32; 2]| {
+        let x = (p[0] * scale).round();
+        let y = (p[1] * scale).round();
+        [
+            x / surface_w * 2.0 - 1.0,
+            1.0 - y / surface_h * 2.0,
+        ]
+    };
+    out.push(RectVert {
+        pos: to_ndc(t.a),
+        color: c,
+    });
+    out.push(RectVert {
+        pos: to_ndc(t.b),
+        color: c,
+    });
+    out.push(RectVert {
+        pos: to_ndc(t.c),
+        color: c,
+    });
+}
+
+fn push_shape_quad(
+    out: &mut Vec<ShapeVert>,
+    s: &ShapePrim,
+    scale: f32,
+    surface_w: f32,
+    surface_h: f32,
+) {
+    let x = (s.x * scale).round();
+    let y = (s.y * scale).round();
+    let w = (s.w * scale).round().max(1.0);
+    let h = (s.h * scale).round().max(1.0);
+    let radius = (s.radius * scale).max(0.0);
+    let stroke = (s.stroke * scale).max(0.0);
+    let half = [w * 0.5, h * 0.5];
+    let x0 = x / surface_w * 2.0 - 1.0;
+    let x1 = (x + w) / surface_w * 2.0 - 1.0;
+    let y0 = 1.0 - y / surface_h * 2.0;
+    let y1 = 1.0 - (y + h) / surface_h * 2.0;
+    let c0 = color_linear(s.color0);
+    // kind 4 packs local endpoints into color1 — scale them, don't sRGB them.
+    let c1 = if s.kind == 4 {
+        [
+            s.color1[0] * scale,
+            s.color1[1] * scale,
+            s.color1[2] * scale,
+            s.color1[3] * scale,
+        ]
+    } else {
+        color_linear(s.color1)
+    };
+    let params = [radius, stroke, s.kind as f32, 0.0];
+    // local coords: origin at rect center, Y down (matches paint space).
+    let corners = [
+        ([-half[0], -half[1]], [x0, y0]),
+        ([half[0], -half[1]], [x1, y0]),
+        ([-half[0], half[1]], [x0, y1]),
+        ([half[0], -half[1]], [x1, y0]),
+        ([half[0], half[1]], [x1, y1]),
+        ([-half[0], half[1]], [x0, y1]),
+    ];
+    for (local, pos) in corners {
+        out.push(ShapeVert {
+            pos,
+            local,
+            half_size: half,
+            color0: c0,
+            color1: c1,
+            params,
+        });
+    }
+}
+
+fn push_tex_quad(
+    out: &mut Vec<TexVert>,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    opacity: f32,
+    scale: f32,
+    surface_w: f32,
+    surface_h: f32,
+) {
+    let x = (x * scale).round();
+    let y = (y * scale).round();
+    let w = (w * scale).round().max(1.0);
+    let h = (h * scale).round().max(1.0);
+    let x0 = x / surface_w * 2.0 - 1.0;
+    let x1 = (x + w) / surface_w * 2.0 - 1.0;
+    let y0 = 1.0 - y / surface_h * 2.0;
+    let y1 = 1.0 - (y + h) / surface_h * 2.0;
+    let corners = [
+        ([x0, y0], [0.0, 0.0]),
+        ([x1, y0], [1.0, 0.0]),
+        ([x0, y1], [0.0, 1.0]),
+        ([x1, y0], [1.0, 0.0]),
+        ([x1, y1], [1.0, 1.0]),
+        ([x0, y1], [0.0, 1.0]),
+    ];
+    for (pos, uv) in corners {
+        out.push(TexVert {
+            pos,
+            uv,
+            opacity: opacity.clamp(0.0, 1.0),
+            _pad: [0.0; 3],
+        });
     }
 }
 

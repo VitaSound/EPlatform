@@ -8,8 +8,8 @@ Estimate: L
 
 ## Goal
 
-`FillLinearGradientRect` honors `radius` and `horizontal` without logical-pixel banding (device-step bands + rounded clip via `rqt::render::expand_linear_gradient`).  
-**Follow-up (not done):** true one-quad WGSL `LinearGradient` in `PaintBatch` / `Gfx` for fewer rects.
+`FillLinearGradientRect` honors `radius` and `horizontal` without logical-pixel banding.
+One-quad WGSL `LinearGradient` in `PaintBatch::Shapes` / `Gfx` (no per-row strips).
 
 ## Qt correspondence
 
@@ -19,9 +19,8 @@ Estimate: L
 
 - B4 in wasm-canvas-geometry.md
 - `QPaintCommand::FillLinearGradientRect` in `rqt/src/gui.rs`
-- Strip loop in `app/src/lib.rs` `append_paint_commands` (~3833)
-- `gfx.rs` currently solid-color rect pipeline only
-- Style PushButton/Combo already set `radius: 2.0` but lowerer drops it
+- `gfx::ShapePrim` + SDF shape pipeline in `app/src/gfx.rs`
+- Style PushButton/Combo already set `radius: 2.0`
 
 ## Scope
 
@@ -31,7 +30,7 @@ Estimate: L
 - WGSL: interpolate `t` along axis; `mix(start,end,t)`; optional rounded-corner mask
 - Map `FillLinearGradientRect` → one primitive (no per-row strips)
 - Keep `raster.rs` CPU path for review (pixel-correct); do not require strips there
-- MAX_RECTS / batch limits: document impact (gradients no longer consume N rects)
+- MAX_RECTS / batch limits: gradients no longer consume N rects
 
 ### Out
 
@@ -39,26 +38,15 @@ Estimate: L
 - Texture blit (04)
 - Changing Fusion color formulas
 
-## Implementation steps
+## Implementation notes (landed)
 
-1. Prefer aligning with 05’s `RenderPrimitive` if present; else extend `PaintBatch`.
-2. Add gradient pipeline or extended vertex format in `gfx.rs`.
-3. Stop strip loop for FLG in `append_paint_commands`.
-4. Verify consumers: style buttons, shell toolbar, MDI chrome, scroll bar, table headers.
-5. Smoke: no banding on title/toolbar at DPR 1.5; radius clips corners on fill.
-
-## Files to touch
-
-| Path | Change |
-|------|--------|
-| `client/crates/app/src/gfx.rs` | Pipeline + render |
-| `client/crates/app/src/lib.rs` | Lowering |
-| `client/crates/rqt/src/gui.rs` | Only if command fields need tweak |
-| Possibly `rqt` render module from 05 | Shared IR |
+- `PaintBatch::Shapes` + SDF shader (`kind` 1/2 = H/V gradient, `radius` clips corners)
+- `append_paint_commands` emits one `ShapePrim::gradient` per FLG command
+- CPU `expand_linear_gradient` kept for raster / review / unit tests
 
 ## Tests / acceptance
 
-- [ ] `cargo test -p app -p rqt`
+- [x] `cargo test -p app -p rqt`
 - [ ] Visual: PushButton corners not square on fill; no stripe pairs in gradient
 - [ ] review median not worse beyond noise (headers still match raster)
 
