@@ -115,6 +115,16 @@ pub struct Gfx {
     text: TextState,
 }
 
+/// `?maxdim=2048` reproduces GPUs (ANGLE/SwiftShader/VMs) whose maximum
+/// texture size is smaller than the window, without needing that hardware.
+#[cfg(target_arch = "wasm32")]
+fn max_dim_override() -> Option<u32> {
+    let window = web_sys::window()?;
+    let value = js_sys::Reflect::get(&window, &"__epMaxDim".into()).ok()?;
+    let value = value.as_f64()?;
+    (value >= 1.0).then_some(value as u32)
+}
+
 fn fit_dimensions(width: u32, height: u32, max_dim: u32) -> (u32, u32) {
     let width = width.max(1);
     let height = height.max(1);
@@ -190,6 +200,9 @@ impl Gfx {
             .map_err(|e| format!("request_device: {e:?}"))?;
 
         let caps = surface.get_capabilities(&adapter);
+        #[cfg(target_arch = "wasm32")]
+        let max_dim = max_dim_override().unwrap_or(device.limits().max_texture_dimension_2d);
+        #[cfg(not(target_arch = "wasm32"))]
         let max_dim = device.limits().max_texture_dimension_2d;
         let (width, height) = fit_dimensions(size.width, size.height, max_dim);
         let config = wgpu::SurfaceConfiguration {
@@ -280,13 +293,23 @@ impl Gfx {
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
-        let (width, height) = fit_dimensions(width, height, self.max_dim);
-        if width > 0 && height > 0 && (width != self.config.width || height != self.config.height) {
-            self.config.width = width;
-            self.config.height = height;
+        // `ui_scale` is "surface pixels per logical pixel", so it has to be
+        // derived from the *requested* surface size: `fit_dimensions` may clamp
+        // it to the device texture limit, and the browser then scales the
+        // clamped surface back into the canvas' CSS box. Deriving it from the
+        // clamped size shrinks the logical area (e.g. 1365 logical px for a
+        // 1400 CSS px canvas), which drifts painting and hit-testing apart.
+        let requested = (width.max(1), height.max(1));
+        let (clamped_w, clamped_h) = fit_dimensions(requested.0, requested.1, self.max_dim);
+        if clamped_w > 0
+            && clamped_h > 0
+            && (clamped_w != self.config.width || clamped_h != self.config.height)
+        {
+            self.config.width = clamped_w;
+            self.config.height = clamped_h;
             self.surface.configure(&self.device, &self.config);
         }
-        self.ui_scale = ui_scale_for(width, height, self.dpr, &self.config);
+        self.ui_scale = ui_scale_for(requested.0, requested.1, self.dpr, &self.config);
     }
 
     pub fn set_scale_factor(&mut self, scale_factor: f64, width: u32, height: u32) {

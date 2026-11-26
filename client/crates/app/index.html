@@ -157,6 +157,10 @@
       // the canvas rect so an input offset can be measured on-site.
       // `?diag=1` (or `&diag=1`) also shows a HUD with the live numbers.
       window.__ptrLog = [];
+      // `maxdim=2048` emulates GPUs whose maximum texture size is below the
+      // window size (the surface then gets clamped).
+      var maxdim = /[?&]maxdim=(\d+)/.exec(location.search);
+      if (maxdim) window.__epMaxDim = Number(maxdim[1]);
       // The HTML names the exact wasm/js bundle it was built with; showing it
       // makes "is the browser running the new client?" answerable at a glance.
       window.__epBuild = (function () {

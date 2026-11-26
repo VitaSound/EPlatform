@@ -572,6 +572,7 @@ impl App {
         Some((rect.width(), rect.height(), dpr))
     }
 
+    #[allow(dead_code)]
     fn physical_size(&self, size: winit::dpi::PhysicalSize<u32>) -> (u32, u32) {
         #[cfg(target_arch = "wasm32")]
         if let Some((width, height, dpr)) = self.dom_canvas_size() {
@@ -584,6 +585,7 @@ impl App {
     }
 
     /// Device-pixel size after a DPR change; see `physical_size`.
+    #[allow(dead_code)]
     fn scaled_size(&self, scale_factor: f64) -> (u32, u32) {
         #[cfg(target_arch = "wasm32")]
         if let Some((width, height, dpr)) = self.dom_canvas_size() {
@@ -4181,15 +4183,15 @@ impl App {
         };
         use wasm_bindgen::JsCast;
         let win: js_sys::Object = window.unchecked_into();
-        let (surface_w, surface_h) = self
+        let (surface_w, surface_h, app_scale) = self
             .gfx
             .borrow()
             .as_ref()
-            .map(|gfx| gfx.size())
-            .unwrap_or((0, 0));
+            .map(|gfx| (gfx.size().0, gfx.size().1, gfx.ui_scale()))
+            .unwrap_or((0, 0, 1.0));
         let viewport = self.floating.viewport();
         let text = format!(
-            "winit=({:.1}, {:.1}) ui_scale={:.4} logical=({:.1}, {:.1}) app_surface={}x{} app_logical={:.0}x{:.0} viewport=({:.0},{:.0},{:.0}x{:.0})",
+            "winit=({:.1}, {:.1}) pointer_scale={:.4} logical=({:.1}, {:.1}) app_surface={}x{} app_scale={:.4} viewport=({:.0},{:.0},{:.0}x{:.0})",
             x,
             y,
             scale,
@@ -4197,8 +4199,7 @@ impl App {
             y / scale as f64,
             surface_w,
             surface_h,
-            surface_w as f32 / scale,
-            surface_h as f32 / scale,
+            app_scale,
             viewport.x,
             viewport.y,
             viewport.width,
@@ -4231,26 +4232,50 @@ impl App {
             .gfx
             .borrow()
             .as_ref()
-            .map(|gfx| gfx.size() != (width, height) || (gfx.dpr() as f64 - dpr).abs() > 1e-3)
+            .map(|gfx| (gfx.dpr() as f64 - dpr).abs() > 1e-3)
             .unwrap_or(false);
         if !stale && self.last_size.get() == Some((width, height)) {
             return;
         }
         self.last_size.set(Some((width, height)));
-        self.sync_canvas_backing(width, height);
+        // The renderer clamps the surface to the device's maximum texture size
+        // (GPUs behind ANGLE/SwiftShader/VMs report 2048). Keep the canvas
+        // backing store equal to what was actually configured: a backing store
+        // larger than the surface makes the browser letterbox the presented
+        // image, which shifts the whole UI off-origin (and only above a window
+        // size that depends on the limit and the DPR).
+        let mut surface = (width, height);
         if let Some(gfx) = self.gfx.borrow_mut().as_mut() {
             gfx.set_scale_factor(dpr, width, height);
+            surface = gfx.size();
         }
+        self.sync_canvas_backing(surface.0, surface.1);
         if let Some(window) = &self.window {
             window.request_redraw();
         }
+    }
+
+    /// Pixels per CSS pixel in the incoming pointer coordinates.
+    ///
+    /// winit multiplies the browser's CSS offsets by `devicePixelRatio`, which
+    /// is not the same as the surface scale as soon as the surface had to be
+    /// clamped to the device texture limit; dividing by the wrong one maps
+    /// every click `limit`-times away from its widget.
+    fn pointer_scale(&self) -> f32 {
+        #[cfg(target_arch = "wasm32")]
+        if let Some(dpr) = self.window.as_ref().map(|window| window.scale_factor()) {
+            if dpr > 0.0 {
+                return dpr as f32;
+            }
+        }
+        self.ui_scale()
     }
 
     /// Pointer position in canvas pixels, shared by mouse and touch input.
     fn pointer_moved(&mut self, x: f64, y: f64) {
         #[cfg(target_arch = "wasm32")]
         self.sync_canvas_geometry();
-        let scale = self.ui_scale();
+        let scale = self.pointer_scale();
         #[cfg(target_arch = "wasm32")]
         self.publish_pointer_debug(x, y, scale);
         let previous = self.dragging.as_ref().map(|drag| drag.last);
@@ -4626,11 +4651,21 @@ impl ApplicationHandler for App {
                 self.clear_hover();
             }
             WindowEvent::Resized(size) => {
-                let (width, height) = self.physical_size(size);
-                self.last_size.set(Some((width, height)));
-                self.sync_canvas_backing(width, height);
-                if let Some(gfx) = self.gfx.borrow_mut().as_mut() {
-                    gfx.resize(width, height);
+                // The DOM decides the geometry (see `sync_canvas_geometry`);
+                // winit's size is only a fallback for a detached canvas.
+                #[cfg(target_arch = "wasm32")]
+                {
+                    let _ = size;
+                    self.sync_canvas_geometry();
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    let (width, height) = self.physical_size(size);
+                    self.last_size.set(Some((width, height)));
+                    self.sync_canvas_backing(width, height);
+                    if let Some(gfx) = self.gfx.borrow_mut().as_mut() {
+                        gfx.resize(width, height);
+                    }
                 }
                 if let Some(window) = &self.window {
                     window.request_redraw();
@@ -4642,11 +4677,19 @@ impl ApplicationHandler for App {
                 self.ctrl = state.control_key();
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
-                let (width, height) = self.scaled_size(scale_factor);
-                self.last_size.set(Some((width, height)));
-                self.sync_canvas_backing(width, height);
-                if let Some(gfx) = self.gfx.borrow_mut().as_mut() {
-                    gfx.set_scale_factor(scale_factor, width, height);
+                #[cfg(target_arch = "wasm32")]
+                {
+                    let _ = scale_factor;
+                    self.sync_canvas_geometry();
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    let (width, height) = self.scaled_size(scale_factor);
+                    self.last_size.set(Some((width, height)));
+                    self.sync_canvas_backing(width, height);
+                    if let Some(gfx) = self.gfx.borrow_mut().as_mut() {
+                        gfx.set_scale_factor(scale_factor, width, height);
+                    }
                 }
             }
             WindowEvent::RedrawRequested => {
@@ -4684,8 +4727,8 @@ impl ApplicationHandler for App {
                 // never as `CursorMoved`/`MouseInput`. Only the first contact
                 // owns the mouse pointer; extra fingers are ignored until they
                 // are lifted (pinch/two-finger scroll is a separate task).
-                let x = touch.location.x as f32 / self.ui_scale();
-                let y = touch.location.y as f32 / self.ui_scale();
+                let x = touch.location.x as f32 / self.pointer_scale();
+                let y = touch.location.y as f32 / self.pointer_scale();
                 let now = now_ms();
                 // Some mobile browsers drop `Ended` when a drag finishes near
                 // the screen edge. The next tap then arrives as a `Moved` at
