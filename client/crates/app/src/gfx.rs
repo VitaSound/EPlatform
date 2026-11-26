@@ -298,6 +298,11 @@ impl Gfx {
         self.ui_scale
     }
 
+    /// Device pixel ratio this surface was configured for.
+    pub fn dpr(&self) -> f32 {
+        self.dpr
+    }
+
     pub fn size(&self) -> (u32, u32) {
         (self.config.width, self.config.height)
     }

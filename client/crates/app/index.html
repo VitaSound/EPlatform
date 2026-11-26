@@ -153,6 +153,83 @@
       );
     </script>
     <script>
+      // Temporary pointer telemetry: records raw event coordinates against
+      // the canvas rect so an input offset can be measured on-site.
+      // `?diag=1` (or `&diag=1`) also shows a HUD with the live numbers.
+      window.__ptrLog = [];
+      if (/[?&]diag=1/.test(location.search)) {
+        var hud = document.createElement("div");
+        hud.style.cssText =
+          "position:fixed;left:4px;bottom:4px;z-index:5000;pointer-events:none;" +
+          "font:12px/1.35 monospace;color:#e8eef7;background:rgba(14,18,24,.86);" +
+          "padding:6px 8px;border:1px solid #4a5d78;border-radius:4px;white-space:pre;" +
+          "max-width:min(94vw,900px);overflow:hidden";
+        hud.id = "ep-diag";
+        document.body.appendChild(hud);
+        var mark = document.createElement("div");
+        mark.style.cssText =
+          "position:fixed;z-index:4999;pointer-events:none;width:15px;height:15px;" +
+          "margin:-8px 0 0 -8px;border:1px solid #ff3b30;border-radius:2px;";
+        document.body.appendChild(mark);
+        var cross = document.createElement("div");
+        cross.style.cssText =
+          "position:fixed;z-index:4999;pointer-events:none;width:1px;height:1px;" +
+          "background:#00d1ff;box-shadow:0 0 0 3px rgba(0,209,255,.35);";
+        document.body.appendChild(cross);
+        window.__epDiag = function (type, e) {
+          var c = document.querySelector("canvas");
+          if (!c) return;
+          var r = c.getBoundingClientRect();
+          hud.textContent = [
+            type + " client=(" + Math.round(e.clientX) + ", " + Math.round(e.clientY) + ")",
+            "canvas rect=(" + r.left.toFixed(1) + ", " + r.top.toFixed(1) + ") " +
+              r.width.toFixed(1) + "x" + r.height.toFixed(1) +
+              "  backing=" + c.width + "x" + c.height,
+            "dpr=" + window.devicePixelRatio +
+              "  paint=" + (c.width / r.width).toFixed(3) +
+              "  inner=" + window.innerWidth + "x" + window.innerHeight,
+            "scroll=(" + window.scrollX + ", " + window.scrollY + ")" +
+              "  zoom=" + ((window.visualViewport && window.visualViewport.scale) || 1),
+            window.__epPtr || "winit=(no event yet)",
+            "— красный квадрат: где курсор, cyan: где получил браузер",
+          ].join("\n");
+          mark.style.left = e.clientX + "px";
+          mark.style.top = e.clientY + "px";
+          cross.style.left = e.clientX + "px";
+          cross.style.top = e.clientY + "px";
+        };
+      }
+      window.addEventListener(
+        "pointermove",
+        (e) => {
+          if (window.__epDiag) window.__epDiag("move", e);
+        },
+        true,
+      );
+      ["pointerdown", "pointerup"].forEach((type) =>
+        window.addEventListener(
+          type,
+          (e) => {
+            var c = document.querySelector("canvas");
+            if (!c) return;
+            var r = c.getBoundingClientRect();
+            window.__ptrLog.push({
+              t: type,
+              c: [e.clientX, e.clientY],
+              o: [e.offsetX, e.offsetY],
+              rect: [r.left, r.top, r.width, r.height],
+              back: [c.width, c.height],
+              dpr: window.devicePixelRatio,
+              zoom: (window.visualViewport && window.visualViewport.scale) || 1,
+            });
+            if (window.__ptrLog.length > 40) window.__ptrLog.shift();
+            if (window.__epDiag) window.__epDiag(type, e);
+          },
+          true,
+        ),
+      );
+    </script>
+    <script>
       // Mobile text input bridge.
       //
       // iOS/Android only raise the soft keyboard for a focused form field,

@@ -552,52 +552,52 @@ impl App {
 
     /// Surface size in device pixels.
     ///
-    /// winit's web backend reports `inner_size()` as the canvas' CSS size while
-    /// pointer events arrive in device pixels (`css * devicePixelRatio`). The
-    /// app's contract is "surface = device pixels, logical = surface /
-    /// ui_scale", so the DPR has to be applied here; otherwise the logical
-    /// area is squeezed and every tap lands DPR-times away from its widget.
+    /// The browser is the only reliable source of the canvas geometry: winit's
+    /// web backend has reported `inner_size()` both as CSS pixels and as device
+    /// pixels across versions/browsers (it forwards `ResizeObserver`'s box,
+    /// which differs between Firefox and Chromium and between observer modes).
+    /// Deriving the size from `getBoundingClientRect() * devicePixelRatio` keeps
+    /// the surface, `ui_scale` and the pointer mapping in the same units no
+    /// matter what winit decides to report.
+    #[cfg(target_arch = "wasm32")]
+    fn dom_canvas_size(&self) -> Option<(f64, f64, f64)> {
+        use winit::platform::web::WindowExtWebSys;
+        let window = self.window.as_ref()?;
+        let canvas = window.canvas()?;
+        let rect = canvas.get_bounding_client_rect();
+        let dpr = window.scale_factor();
+        if !(rect.width() > 0.0) || !(rect.height() > 0.0) || !(dpr > 0.0) {
+            return None;
+        }
+        Some((rect.width(), rect.height(), dpr))
+    }
+
     fn physical_size(&self, size: winit::dpi::PhysicalSize<u32>) -> (u32, u32) {
         #[cfg(target_arch = "wasm32")]
-        {
-            let dpr = self
-                .window
-                .as_ref()
-                .map(|window| window.scale_factor())
-                .unwrap_or(1.0);
-            if dpr > 0.0 && dpr != 1.0 {
-                return (
-                    ((size.width as f64) * dpr).round().max(1.0) as u32,
-                    ((size.height as f64) * dpr).round().max(1.0) as u32,
-                );
-            }
+        if let Some((width, height, dpr)) = self.dom_canvas_size() {
+            return (
+                (width * dpr).round().max(1.0) as u32,
+                (height * dpr).round().max(1.0) as u32,
+            );
         }
         (size.width.max(1), size.height.max(1))
     }
 
-    /// Device-pixel size after a DPR change: on wasm `inner_size()` is the CSS
-    /// size, so the new scale factor has to be applied to it; natively the size
-    /// is already physical.
+    /// Device-pixel size after a DPR change; see `physical_size`.
     fn scaled_size(&self, scale_factor: f64) -> (u32, u32) {
+        #[cfg(target_arch = "wasm32")]
+        if let Some((width, height, dpr)) = self.dom_canvas_size() {
+            let dpr = if dpr > 0.0 { dpr } else { scale_factor };
+            return (
+                (width * dpr).round().max(1.0) as u32,
+                (height * dpr).round().max(1.0) as u32,
+            );
+        }
         let size = self
             .window
             .as_ref()
             .map(|window| window.inner_size())
             .unwrap_or(winit::dpi::PhysicalSize::new(0, 0));
-        #[cfg(target_arch = "wasm32")]
-        {
-            let dpr = if scale_factor > 0.0 {
-                scale_factor
-            } else {
-                1.0
-            };
-            if dpr != 1.0 {
-                return (
-                    ((size.width as f64) * dpr).round().max(1.0) as u32,
-                    ((size.height as f64) * dpr).round().max(1.0) as u32,
-                );
-            }
-        }
         let _ = scale_factor;
         (size.width.max(1), size.height.max(1))
     }
@@ -4172,9 +4172,70 @@ fn intersect_rect(
 }
 
 impl App {
+    /// Publish the last pointer mapping to the page for on-site diagnostics.
+    /// `diag=1` in the URL makes `index.html` render it as a HUD.
+    #[cfg(target_arch = "wasm32")]
+    fn publish_pointer_debug(x: f64, y: f64, scale: f32) {
+        let Some(window) = web_sys::window() else {
+            return;
+        };
+        use wasm_bindgen::JsCast;
+        let win: js_sys::Object = window.unchecked_into();
+        let text = format!(
+            "winit=({:.1}, {:.1}) ui_scale={:.4} logical=({:.1}, {:.1})",
+            x,
+            y,
+            scale,
+            x / scale as f64,
+            y / scale as f64
+        );
+        let _ = js_sys::Reflect::set(&win, &"__epPtr".into(), &text.as_str().into());
+    }
+
+    /// Browser zoom, moving the window to another monitor or a browser that
+    /// respects DPR late can change the device pixel ratio without a resize
+    /// event arriving first; that would leave `ui_scale` stale and make every
+    /// click land `dpr`-times away from its widget.
+    #[cfg(target_arch = "wasm32")]
+    fn sync_scale_factor(&mut self) {
+        let Some(live) = self.window.as_ref().map(|window| window.scale_factor()) else {
+            return;
+        };
+        let stale = self
+            .gfx
+            .borrow()
+            .as_ref()
+            .map(|gfx| (gfx.dpr() as f64 - live).abs() > 1e-3)
+            .unwrap_or(false);
+        if !stale {
+            return;
+        }
+        let (width, height) = self
+            .dom_canvas_size()
+            .map(|(w, h, dpr)| {
+                (
+                    (w * dpr).round().max(1.0) as u32,
+                    (h * dpr).round().max(1.0) as u32,
+                )
+            })
+            .unwrap_or_else(|| self.last_size.get().unwrap_or((1, 1)));
+        self.last_size.set(Some((width, height)));
+        self.sync_canvas_backing(width, height);
+        if let Some(gfx) = self.gfx.borrow_mut().as_mut() {
+            gfx.set_scale_factor(live, width, height);
+        }
+        if let Some(window) = &self.window {
+            window.request_redraw();
+        }
+    }
+
     /// Pointer position in canvas pixels, shared by mouse and touch input.
     fn pointer_moved(&mut self, x: f64, y: f64) {
+        #[cfg(target_arch = "wasm32")]
+        self.sync_scale_factor();
         let scale = self.ui_scale();
+        #[cfg(target_arch = "wasm32")]
+        Self::publish_pointer_debug(x, y, scale);
         let previous = self.dragging.as_ref().map(|drag| drag.last);
         self.cursor = (x as f32 / scale, y as f32 / scale);
         if self.shell.visible {
@@ -4392,14 +4453,28 @@ impl App {
 
 #[cfg(target_arch = "wasm32")]
 fn self_physical(window: &Window, size: winit::dpi::PhysicalSize<u32>) -> (u32, u32) {
-    let dpr = window.scale_factor();
-    if dpr > 0.0 && dpr != 1.0 {
-        return (
-            ((size.width as f64) * dpr).round().max(1.0) as u32,
-            ((size.height as f64) * dpr).round().max(1.0) as u32,
-        );
+    // Same DOM-derived geometry as `App::physical_size`: winit's `inner_size`
+    // is not consistently in CSS or device pixels, the canvas rect is.
+    use winit::platform::web::WindowExtWebSys;
+    if let Some(canvas) = window.canvas() {
+        let rect = canvas.get_bounding_client_rect();
+        let dpr = window.scale_factor();
+        if rect.width() > 0.0 && rect.height() > 0.0 && dpr > 0.0 {
+            return (
+                (rect.width() * dpr).round().max(1.0) as u32,
+                (rect.height() * dpr).round().max(1.0) as u32,
+            );
+        }
     }
-    (size.width.max(1), size.height.max(1))
+    let dpr = if window.scale_factor() > 0.0 {
+        window.scale_factor()
+    } else {
+        1.0
+    };
+    (
+        ((size.width as f64) * dpr).round().max(1.0) as u32,
+        ((size.height as f64) * dpr).round().max(1.0) as u32,
+    )
 }
 
 impl ApplicationHandler for App {
