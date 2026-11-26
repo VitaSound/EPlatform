@@ -1,6 +1,11 @@
 use std::cell::RefCell;
 use std::sync::Arc;
 
+/// Single embedded copy of the bundled UI font — wasm has no system fonts
+/// and `include_bytes!` here and in `app::gfx` used to embed it twice
+/// (+1.5 MB of wasm data).
+pub static DEJA_VU_SANS: &[u8] = include_bytes!("../../../assets/DejaVuSans.ttf");
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct QPointF {
     pub x: f32,
@@ -501,9 +506,7 @@ impl Default for QFont {
 thread_local! {
     static FONT_SYSTEM: RefCell<cosmic_text::FontSystem> = RefCell::new(
         cosmic_text::FontSystem::new_with_fonts([
-            cosmic_text::fontdb::Source::Binary(Arc::new(
-                include_bytes!("../../../assets/DejaVuSans.ttf").as_slice(),
-            )),
+            cosmic_text::fontdb::Source::Binary(Arc::new(DEJA_VU_SANS)),
         ]),
     );
 }

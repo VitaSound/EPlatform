@@ -250,7 +250,7 @@ impl Gfx {
         // glyphon: bundled font (wasm has no system fonts), atlas, renderer.
         let cache = GlyphCache::new(&device);
         let font_system = FontSystem::new_with_fonts([glyphon::fontdb::Source::Binary(
-            std::sync::Arc::new(include_bytes!("../../../assets/DejaVuSans.ttf").as_slice()),
+            std::sync::Arc::new(rqt::gui::DEJA_VU_SANS),
         )]);
         let mut atlas = TextAtlas::new(&device, &queue, &cache, config.format);
         let viewport = Viewport::new(&device, &cache);
