@@ -7,7 +7,7 @@ use crate::item_view::{QVIEW_BRANCH_W, QVIEW_HEADER_H, QVIEW_ROW_H};
 use crate::qss::{QBorderSide, QStyleDeclarations, QStyleSheet, QTextAlign};
 use crate::scroll::{QOrientation, QScrollBar, QScrollBarSubControl};
 use crate::style::{QControlElement, QPrimitiveElement, QStyle, QStyleOption, QStyleState};
-use crate::widgets::{QWidget, QWidgetId, QWidgetTree, QCOMBO_POPUP_ROW_H};
+use crate::widgets::{wrap_text_lines, QWidget, QWidgetId, QWidgetTree, QCOMBO_POPUP_ROW_H};
 
 /// Paint a form and its open combo popups. Popups are a top-level layer in
 /// Qt, so they are replayed after the whole widget tree instead of being
@@ -1660,6 +1660,38 @@ fn paint_widget_text(widget: &QWidget, painter: &mut QPainter, qss: &QStyleDecla
     let line_height = metrics.height();
     painter.set_font(font);
     let content = qss_content_rect(widget, qss, (0.0, 0.0, 0.0, 0.0));
+    if widget.class_name == "QLabel" && property_bool(widget, "wordWrap") {
+        // Word-wrapped label: greedy lines at the content width, block
+        // vertically centred (Qt default alignment), clipped to the rect.
+        let lines = wrap_text_lines(&text, content.width, &metrics);
+        let block_height = lines.len() as f32 * line_height;
+        let top = content.y + ((content.height - block_height) / 2.0).max(0.0);
+        let max_lines = ((content.height / line_height).ceil() as usize).max(1);
+        let color = text_color(widget, qss);
+        for (index, line) in lines.iter().take(max_lines).enumerate() {
+            let mut x = content.x;
+            match qss.text_align {
+                Some(QTextAlign::Center) => {
+                    x += ((content.width - metrics.horizontal_advance(line)) / 2.0).max(0.0);
+                }
+                Some(QTextAlign::Right) => {
+                    x += (content.width - metrics.horizontal_advance(line)).max(0.0);
+                }
+                _ => {}
+            }
+            painter.draw_text(
+                QRectF::new(
+                    x,
+                    top + index as f32 * line_height,
+                    content.width,
+                    line_height,
+                ),
+                line.clone(),
+                color,
+            );
+        }
+        return;
+    }
     let mut rect = QRectF::new(
         content.x,
         content.y + ((content.height - line_height) / 2.0).max(0.0),

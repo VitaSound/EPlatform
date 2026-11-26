@@ -362,16 +362,31 @@ impl QWidget {
         }
     }
 
+    /// QLabel `wordWrap` property — the label wraps and sizes like Qt's
+    /// heightForWidth label (0.18/E3).
+    fn word_wrap(&self) -> bool {
+        matches!(self.property("wordWrap"), Some(QVariant::Bool(true)))
+    }
+
     fn size_hint_from_props(&self) -> QSizeF {
         let metrics = QFontMetrics::new(&self.font);
         let text = self.text();
         let text_width = metrics.horizontal_advance(&text);
         let font_height = metrics.height();
         match self.class_name.as_str() {
-            "QLabel" => QSizeF::new(
-                metrics.bounding_rect(&text).width.ceil(),
-                font_height.ceil(),
-            ),
+            "QLabel" => {
+                if self.word_wrap() {
+                    // Qt's minimum for a wrapped label is its longest word,
+                    // so long captions no longer widen the window.
+                    let longest = text
+                        .split_whitespace()
+                        .map(|word| metrics.horizontal_advance(word))
+                        .fold(0.0_f32, f32::max);
+                    QSizeF::new(longest.ceil(), font_height.ceil())
+                } else {
+                    QSizeF::new(metrics.bounding_rect(&text).width.ceil(), font_height.ceil())
+                }
+            }
             "QLineEdit" => QSizeF::new(
                 (17.0 * metrics.horizontal_advance("x")).ceil() + 5.0,
                 (font_height + 8.0).round(),
@@ -417,6 +432,41 @@ impl QWidget {
             _ => QSizeF::new(100.0, font_height + 8.0),
         }
     }
+}
+
+/// Greedy word wrap shared by QLabel layout (`wordWrap`) and painting:
+/// breaks `text` into lines no wider than `width` (0.18/E3).
+pub(crate) fn wrap_text_lines(text: &str, width: f32, metrics: &QFontMetrics) -> Vec<String> {
+    let width = width.max(1.0);
+    let mut lines: Vec<String> = Vec::new();
+    let mut current = String::new();
+    for word in text.split_whitespace() {
+        let candidate = if current.is_empty() {
+            word.to_string()
+        } else {
+            format!("{current} {word}")
+        };
+        // A single word longer than the line still starts its own line.
+        if current.is_empty() || metrics.horizontal_advance(&candidate) <= width {
+            current = candidate;
+        } else {
+            lines.push(std::mem::take(&mut current));
+            current = word.to_string();
+        }
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines
+}
+
+/// Height of `text` wrapped at `width` — the heightForWidth substitute for
+/// QVBoxLayout (Qt computes exactly this for word-wrapped labels).
+pub(crate) fn word_wrapped_height(text: &str, width: f32, metrics: &QFontMetrics) -> f32 {
+    wrap_text_lines(text, width, metrics).len() as f32 * metrics.height()
 }
 
 fn variant_text(value: &QVariant) -> Option<String> {
@@ -2460,6 +2510,16 @@ impl QWidgetTree {
                 let size = self.item_hint(item);
                 if horizontal {
                     size.width
+                } else if let QLayoutItem::Widget { id, .. } = item {
+                    // Qt sizes a word-wrapped QLabel through heightForWidth:
+                    // in a vertical box its height follows from the row
+                    // width (0.18/E3).
+                    let widget = &self.widgets[*id];
+                    if widget.class_name == "QLabel" && widget.word_wrap() {
+                        let metrics = QFontMetrics::new(&widget.font);
+                        return word_wrapped_height(&widget.text(), inner.width, &metrics);
+                    }
+                    size.height
                 } else {
                     size.height
                 }
@@ -5680,5 +5740,61 @@ mod tests {
             .widget(button)
             .and_then(|widget| widget.icon.as_ref())
             .is_none());
+    }
+
+    #[test]
+    fn word_wrap_label_wraps_height_and_keeps_narrow_minimum() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0"><class>Dialog</class><widget class="QDialog" name="Dialog">
+  <property name="geometry"><rect><x>0</x><y>0</y><width>360</width><height>240</height></rect></property>
+  <layout class="QVBoxLayout" name="verticalLayout">
+   <item>
+    <widget class="QLabel" name="label_1">
+     <property name="wordWrap"><bool>true</bool></property>
+     <property name="text"><string>Это очень длинная подпись, которая переносится по словам, чтобы проверить вертикальные метрики компоновки</string></property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QPushButton" name="ok">
+     <property name="text"><string>OK</string></property>
+    </widget>
+   </item>
+  </layout>
+</widget></ui>"#;
+        let (mut tree, root) = load_ui(xml).expect("ui loads");
+        let label = tree.find_widget("label_1").expect("label");
+        let widget = tree.widget(label).expect("label widget");
+        let text = widget.property("text").and_then(variant_text).unwrap_or_default();
+
+        // 1) The minimum follows the longest word, not the full caption:
+        //    the window must not widen to the unwrapped text.
+        let metrics = QFontMetrics::new(&widget.font);
+        let longest = text
+            .split_whitespace()
+            .map(|word| metrics.horizontal_advance(word))
+            .fold(0.0_f32, f32::max);
+        let min = tree.minimum_size_hint(root);
+        assert!(
+            min.width >= longest && min.width < metrics.horizontal_advance(&text),
+            "min {} should be [longest {}, full {}]",
+            min.width,
+            longest,
+            metrics.horizontal_advance(&text)
+        );
+
+        // 2) In the vertical box the label is allocated the wrapped height
+        //    (heightForWidth substitute), so several lines fit.
+        let geometry = tree.widget(label).expect("label widget").geometry;
+        let lines = wrap_text_lines(&text, 360.0 - 22.0, &metrics).len();
+        assert!(lines >= 2, "text must wrap into several lines: {lines}");
+        // The label may absorb the box's slack (Preferred grows), but it
+        // must be allocated at least the wrapped block, not a single line.
+        assert!(
+            geometry.height + 1.0 >= lines as f32 * metrics.height(),
+            "label height {} < wrapped {}",
+            geometry.height,
+            lines as f32 * metrics.height()
+        );
+
     }
 }

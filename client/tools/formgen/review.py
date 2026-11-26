@@ -1496,6 +1496,11 @@ def build_gallery_cases():
                 label("l3", "—")], 6, 0)])
     vg(category, "empty_label", "empty strings everywhere",
        [label("l1", ""), line("e1", ""), button("b1", ""), label("l2", "после пустых")])
+    vg(category, "very_long_wrapping", "wordWrap label with a long sentence",
+       [widget("QLabel", "l1",
+               prop_text("text", "Это очень длинная подпись, которая переносится по словам, чтобы проверить вертикальные метрики компоновки")
+               + prop_bool("wordWrap", True)),
+        button("b1", "OK")], width=360, height=240)
     vg(category, "numbers", "numeric content in widgets",
        [label("l1", "3.14159"), line("e1", "0123456789"),
         button("b1", "1000000")])
