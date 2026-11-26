@@ -1187,7 +1187,8 @@ fn paint_table(
     let top = viewport.y;
     let right = viewport.right();
     let bottom = viewport.bottom();
-    let header_h = QTABLE_HEADER_H;
+    let header_h = table.header_height();
+    let leaf_top = top + table.grouped_header.len() as f32 * QTABLE_HEADER_H;
     let row_header_w = table.row_header_width(&widget.font);
     let body_x = left + row_header_w;
     let body_top = top + header_h;
@@ -1212,6 +1213,36 @@ fn paint_table(
     if let Some(background) = header_qss.background {
         painter.fill_rect(row_header_rect, background);
     }
+    // Grouped (upper) header rows.
+    for (level_index, level) in table.grouped_header.iter().enumerate() {
+        let y = top + level_index as f32 * QTABLE_HEADER_H;
+        let mut column = 0usize;
+        for span in level {
+            let start = column;
+            let end = (column + span.colspan.max(1)).min(table.model.column_count());
+            column = end;
+            let mut x0 = None;
+            let mut width = 0.0;
+            for col in start..end {
+                if table.model.is_column_hidden(col) {
+                    continue;
+                }
+                if x0.is_none() {
+                    x0 = Some(column_left(col));
+                }
+                width += table.model.column_width(col);
+            }
+            let Some(x) = x0 else {
+                continue;
+            };
+            let section = QRectF::new(x, y, width, QTABLE_HEADER_H);
+            paint_header_section(widget, painter, section);
+            if let Some(background) = header_qss.background {
+                painter.fill_rect(section, background);
+            }
+        }
+    }
+    // Leaf header cells (single-row height at the bottom of the band).
     let mut header_x = body_x;
     for column in 0..table.model.column_count() {
         if table.model.is_column_hidden(column) {
@@ -1219,7 +1250,7 @@ fn paint_table(
         }
         let width = table.model.column_width(column);
         let x = column_left(column);
-        let section = QRectF::new(x, top, width, header_h);
+        let section = QRectF::new(x, leaf_top, width, QTABLE_HEADER_H);
         paint_header_section(widget, painter, section);
         if let Some(background) = header_qss.background {
             painter.fill_rect(section, background);
@@ -1486,6 +1517,43 @@ fn paint_table(
     let header_color = header_qss
         .color
         .unwrap_or_else(|| palette.color(QPaletteRole::ButtonText));
+    for (level_index, level) in table.grouped_header.iter().enumerate() {
+        let y = top + level_index as f32 * QTABLE_HEADER_H;
+        let mut column = 0usize;
+        for span in level {
+            let start = column;
+            let end = (column + span.colspan.max(1)).min(table.model.column_count());
+            column = end;
+            let mut x0 = None;
+            let mut width = 0.0;
+            for col in start..end {
+                if table.model.is_column_hidden(col) {
+                    continue;
+                }
+                if x0.is_none() {
+                    x0 = Some(column_left(col));
+                }
+                width += table.model.column_width(col);
+            }
+            let Some(x) = x0 else {
+                continue;
+            };
+            if span.text.is_empty() {
+                continue;
+            }
+            let label_width = metrics.horizontal_advance(&span.text);
+            painter.draw_text(
+                QRectF::new(
+                    x + ((width - label_width) / 2.0).max(2.0),
+                    y + ((QTABLE_HEADER_H - line_height) / 2.0).max(0.0),
+                    (width - 4.0).max(1.0),
+                    line_height,
+                ),
+                span.text.clone(),
+                header_color,
+            );
+        }
+    }
     for column in 0..table.model.column_count() {
         if table.model.is_column_hidden(column) {
             continue;
@@ -1502,7 +1570,7 @@ fn paint_table(
         painter.draw_text(
             QRectF::new(
                 x + ((width - label_width) / 2.0).max(2.0),
-                top + ((header_h - line_height) / 2.0).max(0.0),
+                leaf_top + ((QTABLE_HEADER_H - line_height) / 2.0).max(0.0),
                 (width - 4.0).max(1.0),
                 line_height,
             ),
@@ -1514,7 +1582,7 @@ fn paint_table(
                 painter.draw_text(
                     QRectF::new(
                         x + width - 12.0,
-                        top + ((header_h - line_height) / 2.0).max(0.0),
+                        leaf_top + ((QTABLE_HEADER_H - line_height) / 2.0).max(0.0),
                         10.0,
                         line_height,
                     ),
@@ -1718,11 +1786,7 @@ fn paint_line_edit_text(widget: &QWidget, painter: &mut QPainter, qss: &QStyleDe
         None => (0, 0),
     };
     if start >= end {
-        painter.draw_text(
-            QRectF::new(base_x, y, content.width, line_height),
-            text,
-            color,
-        );
+        draw_text_line(painter, base_x, y, content.right(), line_height, text, color);
         return;
     }
     let prefix: String = text.chars().take(start).collect();
@@ -1730,34 +1794,38 @@ fn paint_line_edit_text(widget: &QWidget, painter: &mut QPainter, qss: &QStyleDe
     let suffix: String = text.chars().skip(end).collect();
     let prefix_width = metrics.horizontal_advance(&prefix);
     let selected_width = metrics.horizontal_advance(&selected);
+    // Each run starts at its metric origin but may extend to `content.right()`
+    // — never use advance as the draw width (glyphon clips the last glyph).
     if !prefix.is_empty() {
-        painter.draw_text(
-            QRectF::new(base_x, y, prefix_width.max(1.0), line_height),
+        draw_text_line(
+            painter,
+            base_x,
+            y,
+            content.right(),
+            line_height,
             prefix,
             color,
         );
     }
     if !selected.is_empty() {
-        painter.draw_text(
-            QRectF::new(
-                base_x + prefix_width,
-                y,
-                selected_width.max(1.0),
-                line_height,
-            ),
+        draw_text_line(
+            painter,
+            base_x + prefix_width,
+            y,
+            content.right(),
+            line_height,
             selected,
             qss.selection_color
                 .unwrap_or_else(|| widget.palette.color(QPaletteRole::HighlightedText)),
         );
     }
     if !suffix.is_empty() {
-        painter.draw_text(
-            QRectF::new(
-                base_x + prefix_width + selected_width,
-                y,
-                (content.width - prefix_width - selected_width).max(1.0),
-                line_height,
-            ),
+        draw_text_line(
+            painter,
+            base_x + prefix_width + selected_width,
+            y,
+            content.right(),
+            line_height,
             suffix,
             color,
         );
@@ -1870,46 +1938,75 @@ fn paint_widget_text(widget: &QWidget, painter: &mut QPainter, qss: &QStyleDecla
                 }
                 _ => {}
             }
-            painter.draw_text(
-                QRectF::new(
-                    x,
-                    top + index as f32 * line_height,
-                    content.width,
-                    line_height,
-                ),
+            draw_text_line(
+                painter,
+                x,
+                top + index as f32 * line_height,
+                content.right(),
+                line_height,
                 line.clone(),
                 color,
             );
         }
         return;
     }
-    let mut rect = QRectF::new(
-        content.x,
-        content.y + ((content.height - line_height) / 2.0).max(0.0),
-        text_width,
-        line_height,
-    );
+    // Align using metrics, but always draw through `content.right()`.
+    // Metric-tight widths clip the last glyph under glyphon (OK→O, value→valu).
+    let y = content.y + ((content.height - line_height) / 2.0).max(0.0);
+    let mut text_x = content.x;
     match widget.class_name.as_str() {
         "QPushButton" | "QToolButton" => {
-            rect.x += ((content.width - text_width) / 2.0).max(0.0);
+            text_x += ((content.width - text_width) / 2.0).max(0.0);
         }
         "QLineEdit" => {}
         "QCheckBox" | "QRadioButton" => {
-            rect.x += widget.font.pixel_size + 6.0;
+            text_x += widget.font.pixel_size + 6.0;
         }
         "QLabel" => match qss.text_align {
-            Some(QTextAlign::Center) => rect.x += ((content.width - text_width) / 2.0).max(0.0),
-            Some(QTextAlign::Right) => rect.x += (content.width - text_width).max(0.0),
+            Some(QTextAlign::Center) => {
+                text_x += ((content.width - text_width) / 2.0).max(0.0);
+            }
+            Some(QTextAlign::Right) => {
+                text_x += (content.width - text_width).max(0.0);
+            }
             _ => {}
         },
         _ => {
             if qss.padding.is_none() {
-                rect.x += 4.0;
+                text_x += 4.0;
             }
         }
     }
-    let color = text_color(widget, qss);
-    painter.draw_text(rect, text, color);
+    draw_text_line(
+        painter,
+        text_x,
+        y,
+        content.right(),
+        line_height,
+        text,
+        text_color(widget, qss),
+    );
+}
+
+/// Single-line text from `x` through `right` (exclusive).
+///
+/// **Invariant:** never pass `horizontal_advance(text)` as the draw width —
+/// cosmic-text / glyphon advances can exceed `QFontMetrics` by a few px and
+/// the last character gets clipped (`"OK"` → `"O"`).
+fn draw_text_line(
+    painter: &mut QPainter,
+    x: f32,
+    y: f32,
+    right: f32,
+    line_height: f32,
+    text: impl Into<String>,
+    color: QColor,
+) {
+    painter.draw_text(
+        QRectF::new(x, y, (right - x).max(1.0), line_height),
+        text,
+        color,
+    );
 }
 
 fn paint_button_label(widget: &QWidget, painter: &mut QPainter, qss: &QStyleDeclarations) {
@@ -1971,13 +2068,12 @@ fn paint_button_label(widget: &QWidget, painter: &mut QPainter, qss: &QStyleDecl
         if !text.is_empty() {
             let text_x = start + icon_width + 2.0;
             let text_y = contents.y + ((contents.height - line_height) / 2.0).max(0.0) + shift;
-            painter.draw_text(
-                QRectF::new(
-                    text_x,
-                    text_y,
-                    (contents.right() - text_x).max(1.0),
-                    line_height,
-                ),
+            draw_text_line(
+                painter,
+                text_x,
+                text_y,
+                contents.right(),
+                line_height,
                 text,
                 color,
             );
@@ -1989,13 +2085,13 @@ fn paint_button_label(widget: &QWidget, painter: &mut QPainter, qss: &QStyleDecl
     }
     let text_width = metrics.horizontal_advance(&text);
     let text_y = contents.y + ((contents.height - line_height) / 2.0).max(0.0) + shift;
-    painter.draw_text(
-        QRectF::new(
-            contents.x + ((contents.width - text_width) / 2.0).max(0.0) + shift,
-            text_y,
-            text_width.max(1.0),
-            line_height,
-        ),
+    let text_x = contents.x + ((contents.width - text_width) / 2.0).max(0.0) + shift;
+    draw_text_line(
+        painter,
+        text_x,
+        text_y,
+        contents.right(),
+        line_height,
         text,
         color,
     );
@@ -2421,5 +2517,53 @@ mod tests {
         });
         let rect = command.expect("button text");
         assert!((rect.x - expected).abs() < 0.5);
+        let advance = metrics.horizontal_advance("PushButton");
+        // Draw width must exceed metric advance — tight advance clips glyphon.
+        assert!(
+            rect.width + 0.01 >= advance,
+            "button text rect width {} < advance {}",
+            rect.width,
+            advance
+        );
+        assert!(
+            rect.right() <= geometry.right() + 0.5,
+            "text run should stay inside the button"
+        );
+    }
+
+    #[test]
+    fn short_button_label_draw_width_exceeds_advance() {
+        // Reproduces "OK"→"O": metric-tight DrawText width under-clips glyphon.
+        let ui = r#"<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <widget class="QDialog" name="Dialog">
+  <property name="geometry"><rect><x>0</x><y>0</y><width>200</width><height>80</height></rect></property>
+  <widget class="QPushButton" name="ok">
+   <property name="geometry"><rect><x>20</x><y>20</y><width>80</width><height>28</height></rect></property>
+   <property name="text"><string>OK</string></property>
+  </widget>
+ </widget>
+</ui>"#;
+        let (tree, root) = load_ui(ui).expect("loads ui");
+        let style = QFusionStyle::default();
+        let mut painter = QPainter::new();
+        paint_widget_tree(&tree, root, &style, &mut painter);
+        let button = tree.find_widget("ok").unwrap();
+        let metrics = QFontMetrics::new(&tree.widget(button).unwrap().font);
+        let advance = metrics.horizontal_advance("OK");
+        let rect = painter
+            .commands()
+            .iter()
+            .find_map(|command| match command {
+                QPaintCommand::DrawText { rect, text, .. } if text == "OK" => Some(*rect),
+                _ => None,
+            })
+            .expect("OK label");
+        assert!(
+            rect.width > advance + 1.0,
+            "OK draw width {} must leave slack past advance {}",
+            rect.width,
+            advance
+        );
     }
 }

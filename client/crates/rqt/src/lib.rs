@@ -7,6 +7,7 @@ pub mod mdi;
 pub mod paint;
 pub mod qss;
 pub mod raster;
+pub mod render;
 pub mod scroll;
 pub mod style;
 pub mod widgets;

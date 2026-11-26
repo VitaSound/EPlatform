@@ -929,14 +929,12 @@ impl Shell {
                 left += metrics.horizontal_advance(message);
             }
             if let Some(info) = self.status_info.as_deref().or(technical) {
+                // Align from metrics, draw through the viewport edge — never use
+                // advance alone as width (glyphon can clip the last glyph).
                 let width = metrics.horizontal_advance(info) + 8.0;
+                let x = (viewport.right() - width - 8.0).max(left);
                 painter.draw_text(
-                    QRectF::new(
-                        (viewport.right() - width - 8.0).max(left),
-                        y + 3.0,
-                        width,
-                        STATUS_H,
-                    ),
+                    QRectF::new(x, y + 3.0, (viewport.right() - x).max(1.0), STATUS_H),
                     info.to_string(),
                     disabled,
                 );

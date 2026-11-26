@@ -131,8 +131,9 @@ Grid (0.12) закрыт первым; следующий шаг — 0.13 (`QFor
 окна в браузере. Источник истины — решения D1–D8 ниже.
 
 **B6. Таблицы. — ✅ решено (2026-11-26): grouped headers НУЖНЫ.**
-`tableLayout`/`groupedHeader` не упрощать до `tableHeaders`/`tableData`;
-реализация — отдельной задачей (кандидат в следующую волну виджетов).
+`tableLayout`/`groupedHeader` не упрощать до `tableHeaders`/`tableData`.
+Реализация: клиент принимает оба свойства (см. `QTableWidget::apply_table_layout`,
+`docs/agent-plans/10-tables-grouped-headers.md`, `docs/qt-parity-guide.md` §8).
 Исходный вопрос ниже.
 
 **B7. Слой данных. — ✅ решено (2026-11-26): планируется.**

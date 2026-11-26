@@ -3,6 +3,7 @@
 //! render, the event loop (mouse/keyboard → Lua → `setProperty`) and
 //! the virtualized `QTableWidget`.
 
+mod canvas_geometry;
 mod gfx;
 mod shell;
 mod socket;
@@ -465,6 +466,14 @@ struct App {
     /// `Window::inner_size()` at the initial 1x1 canvas size, so the pending
     /// size must be applied when the surface appears.
     last_size: Rc<Cell<Option<(u32, u32)>>>,
+    /// Last logical size applied by `sync_canvas_geometry`.
+    ///
+    /// Surface dims can stay pinned at `max_dim` while the CSS box keeps
+    /// growing (mode 3); without this key the early-out would skip layout.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    last_logical: Rc<Cell<Option<(u32, u32)>>>,
+    /// CSS→logical multiplier for pointers (1.0 in modes 1/2; shrink in mode 3).
+    layout_from_css: Rc<Cell<f64>>,
 }
 
 impl App {
@@ -518,6 +527,8 @@ impl App {
             web_input_rect: None,
             chrome: AppChrome::default(),
             last_size: Rc::new(Cell::new(None)),
+            last_logical: Rc::new(Cell::new(None)),
+            layout_from_css: Rc::new(Cell::new(1.0)),
         }
     }
 
@@ -3832,27 +3843,15 @@ fn append_paint_commands(
             } => push_rounded_rect(&mut rects, clip, *rect, *radius, *color),
             QPaintCommand::FillLinearGradientRect {
                 rect,
+                radius,
                 start,
                 end,
                 horizontal,
-                ..
             } => {
-                let (from, to) = if *horizontal {
-                    ((rect.left() * scale).round() as i32, (rect.right() * scale).round() as i32)
-                } else {
-                    ((rect.top() * scale).round() as i32, (rect.bottom() * scale).round() as i32)
-                };
-                let span = (to - from).max(1) as f32;
-                for device in from..to {
-                    let t = ((device as f32 + 0.5 - from as f32) / span).clamp(0.0, 1.0);
-                    let offset = device as f32 / scale;
-                    let thickness = 1.0 / scale;
-                    let band = if *horizontal {
-                        QRectF::new(offset, rect.y, thickness, rect.height)
-                    } else {
-                        QRectF::new(rect.x, offset, rect.width, thickness)
-                    };
-                    push_rect(&mut rects, clip, band, start.lerp(*end, t));
+                for band in rqt::render::expand_linear_gradient(
+                    *rect, *radius, *start, *end, *horizontal, scale,
+                ) {
+                    push_rect(&mut rects, clip, band.rect, band.color);
                 }
             }
             QPaintCommand::StrokeEllipse { rect, width, color } => {
@@ -3986,9 +3985,15 @@ fn append_paint_commands(
                 push_stroke_rect(&mut rects, clip, *rect, *width, *color);
             }
             QPaintCommand::StrokeRoundedRect {
-                rect, width, color, ..
+                rect,
+                radius,
+                width,
+                color,
             } => {
-                push_stroke_rect(&mut rects, clip, *rect, *width, *color);
+                for pixel in rqt::render::expand_stroke_rounded_border(*rect, *radius, *width, *color)
+                {
+                    push_rect(&mut rects, clip, pixel.rect, pixel.color);
+                }
             }
             QPaintCommand::DrawLine {
                 from,
@@ -4038,16 +4043,19 @@ fn append_paint_commands(
             } => {
                 let clip_rect = clip.unwrap_or(*rect);
                 if clip_rect.width > 0.0 && clip_rect.height > 0.0 {
+                    // Floor/ceil clip edges and a little wrap slack so glyph
+                    // advance (glyphon) vs QFontMetrics cannot chop the last
+                    // character ("OK"→"O", "value"→"valu").
                     texts.push(gfx::ColoredText {
                         x: rect.x,
                         y: rect.y,
                         clip: [
-                            clip_rect.x as i32,
-                            clip_rect.y as i32,
-                            clip_rect.right() as i32,
-                            clip_rect.bottom() as i32,
+                            clip_rect.x.floor() as i32,
+                            clip_rect.y.floor() as i32,
+                            clip_rect.right().ceil() as i32,
+                            clip_rect.bottom().ceil() as i32,
                         ],
-                        wrap_w: rect.width.max(1.0),
+                        wrap_w: rect.width.max(1.0) + 4.0,
                         text: text.clone(),
                         color: [color.red, color.green, color.blue, color.alpha],
                     });
@@ -4192,48 +4200,6 @@ fn intersect_rect(
 }
 
 impl App {
-    /// Publish the last pointer mapping to the page for on-site diagnostics.
-    /// `diag=1` in the URL makes `index.html` render it as a HUD.
-    #[cfg(target_arch = "wasm32")]
-    fn publish_pointer_debug(&self, x: f64, y: f64, scale: f32) {
-        let Some(window) = web_sys::window() else {
-            return;
-        };
-        use wasm_bindgen::JsCast;
-        let win: js_sys::Object = window.unchecked_into();
-        let (surface_w, surface_h, app_scale, max_dim) = self
-            .gfx
-            .borrow()
-            .as_ref()
-            .map(|gfx| (gfx.size().0, gfx.size().1, gfx.ui_scale(), gfx.max_dim()))
-            .unwrap_or((0, 0, 1.0, 0));
-        let viewport = self.floating.viewport();
-        let text = format!(
-            "winit=({:.1}, {:.1}) pointer_scale={:.4} logical=({:.1}, {:.1})\n\
-             surface={}x{} scale={:.4} gpu_max={}\n\
-             viewport=({:.0},{:.0},{:.0}x{:.0})",
-            x,
-            y,
-            scale,
-            x / scale as f64,
-            y / scale as f64,
-            surface_w,
-            surface_h,
-            app_scale,
-            max_dim,
-            viewport.x,
-            viewport.y,
-            viewport.width,
-            viewport.height
-        );
-        let _ = js_sys::Reflect::set(&win, &"__epPtr".into(), &text.as_str().into());
-        let view = format!(
-            "{:.1},{:.1},{:.1},{:.1}",
-            viewport.x, viewport.y, viewport.width, viewport.height
-        );
-        let _ = js_sys::Reflect::set(&win, &"__epView".into(), &view.as_str().into());
-    }
-
     /// Reconcile backing store, surface and `ui_scale` with the DOM.
     ///
     /// The browser is the only source of truth here: at load the canvas can
@@ -4253,37 +4219,34 @@ impl App {
             .as_ref()
             .map(|gfx| gfx.max_dim())
             .unwrap_or(u32::MAX);
-        let fits = |w: f64, h: f64| {
-            w.round() as u32 <= max_dim && h.round() as u32 <= max_dim
-        };
-        // Rendering above the GPU's texture limit is impossible, and letting
-        // the browser scale a smaller canvas up into the CSS box turns each
-        // 1 px line into a banded stripe. Pick the best mapping available:
-        //   1. render at the real DPR (crisp, fills the window);
-        //   2. render at 1 device px per CSS px (fills the window, the browser
-        //      upscales once, uniformly);
-        //   3. letterbox the canvas so the mapping stays 1:1.
-        let requested = (css_w * dpr, css_h * dpr);
-        let (logical, scale, boxed) = if fits(requested.0, requested.1) {
-            ((css_w, css_h), dpr, false)
-        } else if fits(css_w, css_h) {
-            ((css_w, css_h), 1.0, false)
-        } else {
-            let shrink = max_dim as f64 / (css_w.max(css_h) * dpr);
-            ((css_w * shrink, css_h * shrink), dpr, true)
-        };
-        let width = (logical.0 * scale).round().max(1.0) as u32;
-        let height = (logical.1 * scale).round().max(1.0) as u32;
+        // Modes 1/2/3: see `canvas_geometry::choose_render_mode` and
+        // docs/wasm-canvas-geometry.md §3.4.
+        let mode = canvas_geometry::choose_render_mode(css_w, css_h, dpr, max_dim);
+        let logical = (mode.logical_w, mode.logical_h);
+        let boxed = mode.letterbox;
+        let (width, height) = canvas_geometry::surface_size(mode);
+        let logical_key = (
+            logical.0.round().max(1.0) as u32,
+            logical.1.round().max(1.0) as u32,
+        );
         let dpr_changed = self
             .gfx
             .borrow()
             .as_ref()
             .map(|gfx| (gfx.dpr() as f64 - dpr).abs() > 1e-3)
             .unwrap_or(false);
-        if !dpr_changed && self.last_size.get() == Some((width, height)) {
+        if !dpr_changed
+            && self.last_size.get() == Some((width, height))
+            && self.last_logical.get() == Some(logical_key)
+        {
+            self.layout_from_css.set(mode.layout_from_css);
             return;
         }
         self.last_size.set(Some((width, height)));
+        self.last_logical.set(Some(logical_key));
+        self.layout_from_css.set(mode.layout_from_css);
+        // Mode 3 no longer letterboxes; always restore the full-viewport box
+        // in case an older build left fixed px sizes on the canvas.
         self.resize_canvas_box(boxed.then_some((logical.0, logical.1)));
         if let Some(gfx) = self.gfx.borrow_mut().as_mut() {
             gfx.apply_geometry(dpr as f32, width, height, logical.0 as f32, logical.1 as f32);
@@ -4340,10 +4303,13 @@ impl App {
         #[cfg(target_arch = "wasm32")]
         self.sync_canvas_geometry();
         let scale = self.pointer_scale();
-        #[cfg(target_arch = "wasm32")]
-        self.publish_pointer_debug(x, y, scale);
         let previous = self.dragging.as_ref().map(|drag| drag.last);
-        self.cursor = (x as f32 / scale, y as f32 / scale);
+        self.cursor = canvas_geometry::pointer_to_logical(
+            x,
+            y,
+            scale as f64,
+            self.layout_from_css.get(),
+        );
         if self.shell.visible {
             self.shell.hover(self.cursor, self.floating.viewport());
         }
@@ -4791,8 +4757,12 @@ impl ApplicationHandler for App {
                 // never as `CursorMoved`/`MouseInput`. Only the first contact
                 // owns the mouse pointer; extra fingers are ignored until they
                 // are lifted (pinch/two-finger scroll is a separate task).
-                let x = touch.location.x as f32 / self.pointer_scale();
-                let y = touch.location.y as f32 / self.pointer_scale();
+                let (x, y) = canvas_geometry::pointer_to_logical(
+                    touch.location.x,
+                    touch.location.y,
+                    self.pointer_scale() as f64,
+                    self.layout_from_css.get(),
+                );
                 let now = now_ms();
                 // Some mobile browsers drop `Ended` when a drag finishes near
                 // the screen edge. The next tap then arrives as a `Moved` at

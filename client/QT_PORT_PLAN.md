@@ -4,6 +4,11 @@
 с Qt Widgets для форм EPlatform. Это clean-room реализация поведения Qt, без
 копирования исходников Qt.
 
+**Graphics / Qt parity (текущая волна):** см. [`docs/qt-parity-guide.md`](../docs/qt-parity-guide.md)
+и handoff-планы [`docs/agent-plans/`](../docs/agent-plans/). Canvas DPI:
+[`docs/wasm-canvas-geometry.md`](../docs/wasm-canvas-geometry.md). Client notes:
+[`client/AGENTS.md`](AGENTS.md).
+
 ## Принципы
 
 - Публичные типы и понятия повторяют Qt: `QObject`, `QWidget`, `QLayout`, `QStyle`,

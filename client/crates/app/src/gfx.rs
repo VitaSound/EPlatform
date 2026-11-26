@@ -6,8 +6,8 @@
 use winit::window::Window;
 
 use glyphon::{
-    Attrs, Buffer, Cache as GlyphCache, Color, Family, FontSystem, Metrics, Resolution, Shaping,
-    SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport,
+    Attrs, Buffer, Cache as GlyphCache, Color, Family, FontSystem, Metrics, PrepareError,
+    Resolution, Shaping, SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport,
 };
 
 /// Maximum rectangles per frame (2048 → 12288 vertices).
@@ -115,16 +115,6 @@ pub struct Gfx {
     text: TextState,
 }
 
-/// `?maxdim=2048` reproduces GPUs (ANGLE/SwiftShader/VMs) whose maximum
-/// texture size is smaller than the window, without needing that hardware.
-#[cfg(target_arch = "wasm32")]
-fn max_dim_override() -> Option<u32> {
-    let window = web_sys::window()?;
-    let value = js_sys::Reflect::get(&window, &"__epMaxDim".into()).ok()?;
-    let value = value.as_f64()?;
-    (value >= 1.0).then_some(value as u32)
-}
-
 fn fit_dimensions(width: u32, height: u32, max_dim: u32) -> (u32, u32) {
     let width = width.max(1);
     let height = height.max(1);
@@ -179,9 +169,11 @@ impl Gfx {
             info.backend, info.device
         ));
 
-        // The WebGL2 backend reports lower limits than WebGPU does.
+        // WebGL2 needs downlevel defaults for most fields, but keep the
+        // adapter's real texture size (often 8192/16384). Plain
+        // downlevel_webgl2_defaults() clamps max_texture_dimension_2d to 2048.
         let required_limits = if info.backend == wgpu::Backend::Gl {
-            wgpu::Limits::downlevel_webgl2_defaults()
+            wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits())
         } else {
             wgpu::Limits::default()
         };
@@ -200,10 +192,11 @@ impl Gfx {
             .map_err(|e| format!("request_device: {e:?}"))?;
 
         let caps = surface.get_capabilities(&adapter);
-        #[cfg(target_arch = "wasm32")]
-        let max_dim = max_dim_override().unwrap_or(device.limits().max_texture_dimension_2d);
-        #[cfg(not(target_arch = "wasm32"))]
         let max_dim = device.limits().max_texture_dimension_2d;
+        crate::App::log(format!(
+            "gfx limits: max_texture_dimension_2d={max_dim} (adapter={})",
+            adapter.limits().max_texture_dimension_2d
+        ));
         let (width, height) = fit_dimensions(size.width, size.height, max_dim);
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -408,14 +401,21 @@ impl Gfx {
         let mut ranges = Vec::with_capacity(batches.len());
         let mut text_slots = Vec::with_capacity(batches.len());
         let mut text_count = 0usize;
+        let mut truncated_logged = false;
         for batch in batches {
             match batch {
                 PaintBatch::Rects(rects) => {
                     let start = self.scratch.len() as u32;
-                    for r in rects
-                        .iter()
-                        .take(MAX_RECTS.saturating_sub(start as usize / 6))
-                    {
+                    let room = MAX_RECTS.saturating_sub(start as usize / 6);
+                    if rects.len() > room && !truncated_logged {
+                        truncated_logged = true;
+                        crate::App::log(format!(
+                            "gfx: rect batch truncated ({} rects, room for {})",
+                            rects.len(),
+                            room
+                        ));
+                    }
+                    for r in rects.iter().take(room) {
                         let x = (r.x * scale).round();
                         let y = (r.y * scale).round();
                         let w = (r.w * scale).round().max(1.0);
@@ -479,13 +479,18 @@ impl Gfx {
                 state.renderers.push(renderer);
             }
         }
-        let font_size = FONT_SIZE * scale;
-        let line_height = LINE_HEIGHT * scale;
+        // Quantize metrics so resize float drift does not mint a new glyph
+        // set every frame and fill the atlas permanently.
+        let font_size = quantize_font_px(FONT_SIZE * scale);
+        let line_height = quantize_font_px(LINE_HEIGHT * scale).max(font_size);
+        // Own shaped buffers for the whole prepare/retry cycle.
+        let mut shaped: Vec<(usize, Vec<Buffer>, Vec<&ColoredText>)> =
+            Vec::with_capacity(text_count);
         for (batch, slot) in batches.iter().zip(&text_slots) {
             let PaintBatch::Text(texts) = batch else {
                 continue;
             };
-            let Some(slot) = slot else {
+            let Some(slot) = *slot else {
                 continue;
             };
             let mut buffers: Vec<Buffer> = Vec::with_capacity(texts.len());
@@ -504,39 +509,58 @@ impl Gfx {
                 buffer.shape_until_scroll(&mut self.text.font_system, false);
                 buffers.push(buffer);
             }
-            let areas: Vec<TextArea> = texts
-                .iter()
-                .zip(&buffers)
-                .map(|(t, buffer)| TextArea {
-                    buffer,
-                    left: t.x * scale,
-                    top: t.y * scale,
-                    scale: 1.0,
-                    bounds: TextBounds {
-                        left: (t.clip[0] as f32 * scale) as i32,
-                        top: (t.clip[1] as f32 * scale) as i32,
-                        right: (t.clip[2] as f32 * scale) as i32,
-                        bottom: (t.clip[3] as f32 * scale) as i32,
-                    },
-                    default_color: Color::rgba(
-                        (t.color[0] * 255.0) as u8,
-                        (t.color[1] * 255.0) as u8,
-                        (t.color[2] * 255.0) as u8,
-                        (t.color[3] * 255.0) as u8,
-                    ),
-                    custom_glyphs: &[],
-                })
-                .collect();
-            // Atlas-full errors are transient: the run is retried next frame.
-            let _ = self.text.renderers[*slot].prepare(
-                &self.device,
-                &self.queue,
-                &mut self.text.font_system,
-                &mut self.text.atlas,
-                &self.text.viewport,
-                areas,
-                &mut self.text.swash_cache,
-            );
+            let refs: Vec<&ColoredText> = texts.iter().collect();
+            shaped.push((slot, buffers, refs));
+        }
+
+        // AtlasFull must trim+retry: ignoring it leaves chrome without labels
+        // until a full reload (seen as flicker during window resize).
+        for _attempt in 0..4 {
+            let mut atlas_full = false;
+            for (slot, buffers, texts) in &shaped {
+                let areas: Vec<TextArea> = texts
+                    .iter()
+                    .zip(buffers.iter())
+                    .map(|(t, buffer)| TextArea {
+                        buffer,
+                        left: t.x * scale,
+                        top: t.y * scale,
+                        scale: 1.0,
+                        bounds: TextBounds {
+                            left: (t.clip[0] as f32 * scale) as i32,
+                            top: (t.clip[1] as f32 * scale) as i32,
+                            right: (t.clip[2] as f32 * scale) as i32,
+                            bottom: (t.clip[3] as f32 * scale) as i32,
+                        },
+                        default_color: Color::rgba(
+                            (t.color[0] * 255.0) as u8,
+                            (t.color[1] * 255.0) as u8,
+                            (t.color[2] * 255.0) as u8,
+                            (t.color[3] * 255.0) as u8,
+                        ),
+                        custom_glyphs: &[],
+                    })
+                    .collect();
+                match self.text.renderers[*slot].prepare(
+                    &self.device,
+                    &self.queue,
+                    &mut self.text.font_system,
+                    &mut self.text.atlas,
+                    &self.text.viewport,
+                    areas,
+                    &mut self.text.swash_cache,
+                ) {
+                    Ok(()) => {}
+                    Err(PrepareError::AtlasFull) => {
+                        self.text.atlas.trim();
+                        atlas_full = true;
+                        break;
+                    }
+                }
+            }
+            if !atlas_full {
+                break;
+            }
         }
 
         let view = frame.texture.create_view(&Default::default());
@@ -589,5 +613,12 @@ impl Gfx {
 
         self.queue.submit([encoder.finish()]);
         self.queue.present(frame);
+        // Drop unused glyphs so the next resize/frame can allocate again.
+        // Without this the atlas fills once and labels stay missing forever.
+        self.text.atlas.trim();
     }
+}
+
+fn quantize_font_px(px: f32) -> f32 {
+    ((px * 4.0).round() / 4.0).max(1.0)
 }

@@ -479,8 +479,10 @@ chrome; `set_menu`/`setToolBar`/statusbar и top-level формы работаю
 - `currentRow`
 - `currentRowCell:<column>`
 
-Клиент **не поддерживает** `tableLayout`/`groupedHeader` в текущем виде.
-Поэтому:
+Клиент поддерживает `tableLayout` / `groupedHeader` (см. `QTableWidget::apply_table_layout`
+и `docs/agent-plans/10-tables-grouped-headers.md`). Для простых таблиц по-прежнему:
+
+Поэтому для плоских заголовков:
 
 ```lua
 form:setTableHeaders("tbl", {

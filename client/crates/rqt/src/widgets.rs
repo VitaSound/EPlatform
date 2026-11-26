@@ -4465,6 +4465,10 @@ fn set_table_property(table: &mut QTableWidget, name: &str, value: &QVariant) ->
             table.model.apply_headers(value);
             true
         }
+        "tableLayout" | "groupedHeader" => {
+            table.apply_table_layout(value);
+            true
+        }
         "tableData" => {
             table.model.apply_data(value);
             table

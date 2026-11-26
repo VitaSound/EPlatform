@@ -424,6 +424,13 @@ impl QItemSelectionModel {
     }
 }
 
+/// One cell in a multi-row (grouped) header: label spanning `colspan` leaf columns.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QHeaderSpan {
+    pub text: String,
+    pub colspan: usize,
+}
+
 #[derive(Clone, Debug)]
 pub struct QTableWidget {
     pub model: QTableModel,
@@ -437,6 +444,8 @@ pub struct QTableWidget {
     pub hbar: QScrollBar,
     pub editor: Option<QTableWidgetEditor>,
     pub sort_indicator: Option<(usize, QSortOrder)>,
+    /// Extra header rows above the leaf labels (`model.headers`). Empty = flat header.
+    pub grouped_header: Vec<Vec<QHeaderSpan>>,
 }
 
 impl Default for QTableWidget {
@@ -453,6 +462,7 @@ impl Default for QTableWidget {
             hbar: QScrollBar::new(QOrientation::Horizontal),
             editor: None,
             sort_indicator: None,
+            grouped_header: Vec::new(),
         }
     }
 }
@@ -464,6 +474,67 @@ impl QTableWidget {
         let metrics = QFontMetrics::new(&header_font);
         let label = self.model.row_count().max(1).to_string();
         (metrics.horizontal_advance(&label) + 4.0).ceil().max(14.0)
+    }
+
+    /// Total horizontal header band height (grouped rows + leaf labels).
+    pub fn header_height(&self) -> f32 {
+        let levels = self.grouped_header.len() + 1;
+        QTABLE_HEADER_H * levels as f32
+    }
+
+    /// Apply `tableLayout` / `groupedHeader` payload.
+    ///
+    /// Expected shape (Map):
+    /// ```text
+    /// {
+    ///   levels: [               // optional upper rows
+    ///     [ { text, colspan }, ... ],
+    ///     ...
+    ///   ],
+    ///   horizontalHeaderLabels: [...],  // leaf labels (optional)
+    ///   columnCount / columnWidths / hiddenColumns: as tableHeaders
+    /// }
+    /// ```
+    /// Or `levels` alone as a List. `groupedHeader` is an alias for the same Map
+    /// (or a bare `levels` List).
+    pub fn apply_table_layout(&mut self, config: &QVariant) {
+        self.model.apply_headers(config);
+        let levels_value = match config {
+            QVariant::List(_) => Some(config),
+            _ => map_get(config, "levels").or_else(|| map_get(config, "groupedHeader")),
+        };
+        self.grouped_header.clear();
+        let Some(levels_value) = levels_value else {
+            return;
+        };
+        let Some(levels) = variant_list(levels_value) else {
+            return;
+        };
+        for level in levels {
+            let Some(cells) = variant_list(level) else {
+                continue;
+            };
+            let mut row = Vec::new();
+            for cell in cells {
+                let (text, colspan) = match cell {
+                    QVariant::Map(_) => {
+                        let text = map_get(cell, "text")
+                            .and_then(variant_text)
+                            .unwrap_or_default();
+                        let colspan = map_get(cell, "colspan")
+                            .and_then(QVariant::as_i64)
+                            .unwrap_or(1)
+                            .max(1) as usize;
+                        (text, colspan)
+                    }
+                    _ => (variant_text(cell).unwrap_or_default(), 1usize),
+                };
+                row.push(QHeaderSpan { text, colspan });
+            }
+            if !row.is_empty() {
+                self.grouped_header.push(row);
+            }
+        }
     }
 
     pub fn current(&self) -> Option<(usize, usize)> {
@@ -485,6 +556,7 @@ impl QTableWidget {
     pub fn clear(&mut self) {
         self.model.clear();
         self.selection.clear();
+        self.grouped_header.clear();
     }
 
     pub fn set_current_cell(&mut self, row: usize, column: usize) {
@@ -656,10 +728,11 @@ impl QTableWidget {
     }
 
     pub fn row_at(&self, y: f32) -> Option<usize> {
-        if y < QTABLE_HEADER_H {
+        let header_h = self.header_height();
+        if y < header_h {
             return None;
         }
-        let row = ((y - QTABLE_HEADER_H + self.scroll) / QTABLE_ROW_H).floor() as usize;
+        let row = ((y - header_h + self.scroll) / QTABLE_ROW_H).floor() as usize;
         (row < self.model.row_count()).then_some(row)
     }
 
@@ -673,7 +746,7 @@ impl QTableWidget {
     pub fn content_size(&self, font: &QFont) -> QSizeF {
         QSizeF::new(
             self.row_header_width(font) + self.visible_columns_width(),
-            QTABLE_HEADER_H + self.model.row_count() as f32 * QTABLE_ROW_H,
+            self.header_height() + self.model.row_count() as f32 * QTABLE_ROW_H,
         )
     }
 
@@ -696,17 +769,18 @@ impl QTableWidget {
     pub fn body_rect(&self, rect: QRectF, font: &QFont) -> QRectF {
         let viewport = self.scroll_area(rect, font).viewport;
         let row_header_width = self.row_header_width(font);
+        let header_h = self.header_height();
         QRectF::new(
             viewport.x + row_header_width,
-            viewport.y + QTABLE_HEADER_H,
+            viewport.y + header_h,
             (viewport.width - row_header_width).max(0.0),
-            (viewport.height - QTABLE_HEADER_H).max(0.0),
+            (viewport.height - header_h).max(0.0),
         )
     }
 
     pub fn sync_scrollbars(&mut self, rect: QRectF, font: &QFont) {
         let viewport = self.scroll_area(rect, font).viewport;
-        let body_height = (viewport.height - QTABLE_HEADER_H).max(0.0);
+        let body_height = (viewport.height - self.header_height()).max(0.0);
         let visible_rows = ((body_height / QTABLE_ROW_H).floor() as usize)
             .max(1)
             .min(self.model.row_count().max(1));
@@ -815,7 +889,7 @@ impl QTableWidget {
     }
 
     pub fn visible_row_range(&self, view_height: f32) -> std::ops::Range<usize> {
-        let body_height = (view_height - QTABLE_HEADER_H).max(0.0);
+        let body_height = (view_height - self.header_height()).max(0.0);
         if body_height <= 0.0 || self.model.row_count() == 0 {
             return 0..0;
         }
@@ -826,12 +900,12 @@ impl QTableWidget {
     }
 
     pub fn row_y(&self, row: usize) -> f32 {
-        QTABLE_HEADER_H + row as f32 * QTABLE_ROW_H - self.scroll
+        self.header_height() + row as f32 * QTABLE_ROW_H - self.scroll
     }
 
     pub fn scroll_max(&self, view_height: f32) -> f32 {
         let content = self.model.row_count() as f32 * QTABLE_ROW_H;
-        (content - (view_height - QTABLE_HEADER_H).max(0.0)).max(0.0)
+        (content - (view_height - self.header_height()).max(0.0)).max(0.0)
     }
 
     pub fn clamp_scroll(&mut self, view_height: f32) {
@@ -850,7 +924,7 @@ impl QTableWidget {
         };
         let top = row as f32 * QTABLE_ROW_H;
         let bottom = top + QTABLE_ROW_H;
-        let body = (view_height - QTABLE_HEADER_H).max(0.0);
+        let body = (view_height - self.header_height()).max(0.0);
         if top < self.scroll {
             self.scroll = top;
         } else if bottom > self.scroll + body {
@@ -1073,5 +1147,43 @@ mod tests {
         assert!(table.scroll > 0.0);
         table.clamp_scroll(view_height);
         assert!(table.scroll <= table.scroll_max(view_height));
+    }
+
+    #[test]
+    fn table_layout_grouped_header_adds_header_rows() {
+        let mut table = QTableWidget::default();
+        table.apply_table_layout(&QVariant::Map(vec![
+            (
+                "columnCount".into(),
+                QVariant::Int(3),
+            ),
+            (
+                "horizontalHeaderLabels".into(),
+                QVariant::List(vec![
+                    QVariant::String("A".into()),
+                    QVariant::String("B".into()),
+                    QVariant::String("C".into()),
+                ]),
+            ),
+            (
+                "levels".into(),
+                QVariant::List(vec![QVariant::List(vec![
+                    QVariant::Map(vec![
+                        ("text".into(), QVariant::String("Group".into())),
+                        ("colspan".into(), QVariant::Int(2)),
+                    ]),
+                    QVariant::Map(vec![
+                        ("text".into(), QVariant::String("Solo".into())),
+                        ("colspan".into(), QVariant::Int(1)),
+                    ]),
+                ])]),
+            ),
+        ]));
+        assert_eq!(table.model.column_count(), 3);
+        assert_eq!(table.model.header(0), Some("A"));
+        assert_eq!(table.grouped_header.len(), 1);
+        assert_eq!(table.grouped_header[0].len(), 2);
+        assert_eq!(table.grouped_header[0][0].colspan, 2);
+        assert!((table.header_height() - QTABLE_HEADER_H * 2.0).abs() < 0.1);
     }
 }
