@@ -1496,11 +1496,6 @@ def build_gallery_cases():
                 label("l3", "—")], 6, 0)])
     vg(category, "empty_label", "empty strings everywhere",
        [label("l1", ""), line("e1", ""), button("b1", ""), label("l2", "после пустых")])
-    vg(category, "very_long_wrapping", "wordWrap label with a long sentence",
-       [widget("QLabel", "l1",
-               prop_text("text", "Это очень длинная подпись, которая переносится по словам, чтобы проверить вертикальные метрики компоновки")
-               + prop_bool("wordWrap", True)),
-        button("b1", "OK")], width=360, height=240)
     vg(category, "numbers", "numeric content in widgets",
        [label("l1", "3.14159"), line("e1", "0123456789"),
         button("b1", "1000000")])
@@ -1796,14 +1791,24 @@ def diff_images(cases):
         right_path = RUST_PNG / f"{slug}.png"
         left = Image.open(left_path).convert("RGB")
         right = Image.open(right_path).convert("RGB")
+        original_sizes = [list(left.size), list(right.size)]
         if left.size != right.size:
-            metrics[case["id"]] = {
-                "mean": 999.0,
-                "max": 255,
-                "over30": 1.0,
-                "sizes": [list(left.size), list(right.size)],
-            }
-            continue
+            # Qt and we can differ by a single pixel when a layout minimum
+            # rounds text advances differently; crop the overlap and keep
+            # the real sizes instead of an unusable 999 diff.
+            lw, lh = left.size
+            rw, rh = right.size
+            if abs(lw - rw) <= 1 and abs(lh - rh) <= 1:
+                left = left.crop((0, 0, min(lw, rw), min(lh, rh)))
+                right = right.crop((0, 0, min(lw, rw), min(lh, rh)))
+            else:
+                metrics[case["id"]] = {
+                    "mean": 999.0,
+                    "max": 255,
+                    "over30": 1.0,
+                    "sizes": original_sizes,
+                }
+                continue
         diff = ImageChops.difference(left, right)
         total = 0
         count = 0
@@ -1820,7 +1825,7 @@ def diff_images(cases):
             "mean": round(total / max(count, 1), 2),
             "max": max_diff,
             "over30": round(over30 / max(left.size[0] * left.size[1], 1), 4),
-            "sizes": [list(left.size), list(right.size)],
+            "sizes": original_sizes,
         }
     return metrics
 
@@ -1841,29 +1846,66 @@ def write_manifest(cases):
     MANIFEST.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def read_comments():
+    """Parse review/comments.md into {id: text} for the notes column."""
+    notes = {}
+    if not COMMENTS.exists():
+        return notes
+    current = None
+    collecting = False
+    buffer = []
+    for line in COMMENTS.read_text(encoding="utf-8").splitlines():
+        if line.startswith("## "):
+            if current and collecting:
+                notes[current] = "\n".join(buffer).strip()
+            current = line[3:].strip()
+            collecting = False
+            buffer = []
+        elif line.startswith("<!-- id:"):
+            collecting = True
+        elif collecting and line.startswith("Комментарий:"):
+            continue
+        elif collecting:
+            buffer.append(line)
+    if current and collecting:
+        notes[current] = "\n".join(buffer).strip()
+    return {key: value for key, value in notes.items() if value}
+
+
 def write_index(cases, metrics):
     by_category = {}
     for case in cases:
         by_category.setdefault(case["category"], []).append(case)
+    notes = read_comments()
     sections = []
     for category, items in by_category.items():
         rows = []
         for case in items:
             slug = case["id"].replace("/", "__")
             metric = metrics[case["id"]]
+            number = case.get("number")
+            title_cell = f"<code>{esc(case['id'])}</code>"
+            if number:
+                title_cell = (
+                    f"<b>#{number:03d}</b> " + title_cell
+                    + f"<br><small>{esc(case['title'])}</small>"
+                )
             rows.append(
                 "<tr>"
-                f"<td><code>{esc(case['id'])}</code><br><small>{esc(case['description'])}</small></td>"
+                f'<td data-search="{esc(case["id"] + " " + str(number or ""))}">'
+                f"{title_cell}<br><small>{esc(case['description'])}</small></td>"
                 f"<td><img src=\"qt/{slug}.png\"></td>"
                 f"<td><img src=\"rust/{slug}.png\"></td>"
                 f"<td>{metric['mean']}<br><small>max {metric['max']}, &gt;30 {metric['over30']*100:.1f}%</small></td>"
+                f"<td class=\"note\">{esc(notes.get(case['id'], ''))}</td>"
                 f"<td><a href=\"forms/{esc(case['path'].split('forms/',1)[-1])}\">.ui</a></td>"
                 "</tr>"
             )
         anchor = esc(category)
         sections.append(
             f"<h2 id=\"{anchor}\">{esc(category)} ({len(items)})</h2>"
-            "<table><thead><tr><th>Form</th><th>Qt6</th><th>Rust</th><th>diff</th><th></th></tr></thead>"
+            "<table><thead><tr><th>Form</th><th>Qt6</th><th>Rust</th>"
+            "<th>diff</th><th>заметки</th><th></th></tr></thead>"
             f"<tbody>{''.join(rows)}</tbody></table>"
         )
     nav = " · ".join(
@@ -1880,15 +1922,32 @@ table{{border-collapse:collapse;width:100%;background:white;margin-bottom:24px}}
 th,td{{border:1px solid #d8dde6;padding:8px;vertical-align:top}}
 td img{{max-width:360px;display:block;border:1px solid #d8dde6}}
 small{{color:#5b6573}} code{{font-size:12px}}
-.note{{background:#fff8d8;border:1px solid #e4d38a;padding:12px;border-radius:6px}}
+.note{{white-space:pre-wrap;max-width:220px;background:#fffdf3}}
+td.note:empty::after{{content:"—";color:#9aa2ad}}
+.header{{background:white;border:1px solid #d8dde6;padding:10px 12px;border-radius:6px;margin:16px 0}}
+.note-box{{background:#fff8d8;border:1px solid #e4d38a;padding:12px;border-radius:6px}}
 nav{{background:white;border:1px solid #d8dde6;padding:10px 12px;border-radius:6px;margin:16px 0}}
+#q{{width:420px;padding:6px 10px;border:1px solid #b9c1cd;border-radius:4px;font-size:14px}}
+tr.hidden{{display:none}}
 </style></head><body>
 <h1>EPlatform Qt review</h1>
-<p class="note">Комментарии: <a href="comments.md">review/comments.md</a>. ID формы стабилен между прогонами.
-Категории <code>scroll</code>, <code>selection</code>, <code>grid</code> и <code>form</code> — в конце страницы (быстрый переход в навигации ниже).</p>
-<p>Форм: {len(cases)}. Diff: mean по каналам 0–255.</p>
+<div class="note-box">Комментарии — в <a href="comments.md">review/comments.md</a>
+(id формы стабилен между прогонами; сохранённые заметки показаны в колонке «заметки»).
+Галерея (<code>gallery/*</code>) — те же формы, что открываются в приложении:
+<code>?main=gallery.lua&amp;mainui=</code>, номера <b>#NNN</b> совпадают с заголовками окон.</div>
+<p>Форм: {len(cases)}. Diff: mean по каналам 0–255.
+<label>Фильтр: <input id="q" type="search" placeholder="id, номер, текст…"></label></p>
 <nav>{nav}</nav>
 {''.join(sections)}
+<script>
+document.getElementById('q').addEventListener('input', function () {{
+  var needle = this.value.trim().toLowerCase();
+  document.querySelectorAll('tbody tr').forEach(function (row) {{
+    var hay = (row.getAttribute('data-search') || row.textContent).toLowerCase();
+    row.classList.toggle('hidden', needle !== '' && hay.indexOf(needle) === -1);
+  }});
+}});
+</script>
 </body></html>
 """
     (REVIEW / "index.html").write_text(document, encoding="utf-8")

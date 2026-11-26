@@ -402,7 +402,18 @@ impl QWidget {
             "QTableWidget" => QSizeF::new(256.0, 192.0),
             "QListWidget" | "QTreeWidget" => QSizeF::new(256.0, 192.0),
             "QSplitter" => QSizeF::new(256.0, 192.0),
-            "QGroupBox" => QSizeF::new(text_width + 16.0, font_height + 16.0),
+            "QGroupBox" => {
+                // QGroupBox stores its caption in `title`, not `text`.
+                let title = self
+                    .property("title")
+                    .and_then(variant_text)
+                    .unwrap_or_default();
+                let title_width = metrics.horizontal_advance(&title);
+                // Qt expands the group minimum by title + 2*framewidth;
+                // probed empirically: Qt window 508 = title 456 + 30 +
+                // 22 (root margins) for gallery/text/group_long_title.
+                QSizeF::new(title_width + 30.0, font_height + 16.0)
+            }
             _ => QSizeF::new(100.0, font_height + 8.0),
         }
     }
@@ -2266,7 +2277,18 @@ impl QWidgetTree {
         };
         let layout = node.layout.take();
         let hint = if let Some(layout) = &layout {
-            self.measure_layout(layout)
+            let layout_hint = self.measure_layout(layout);
+            if self.widgets[widget].class_name == "QGroupBox" {
+                // The title contributes to the group's hint in Qt: a caption
+                // wider than the children grows the whole window.
+                let title = self.widgets[widget].size_hint_from_props();
+                QSizeF::new(
+                    layout_hint.width.max(title.width),
+                    layout_hint.height.max(title.height),
+                )
+            } else {
+                layout_hint
+            }
         } else {
             self.widgets[widget].size_hint_from_props()
         };
@@ -3544,7 +3566,9 @@ impl QWidgetTree {
         match node.class_name.as_str() {
             "QLineEdit" => (32, fallback.1.max(24)),
             "QTableWidget" | "QListWidget" | "QTreeWidget" => (70, 70),
-            "QGroupBox" => (73, fallback.1.max(35)),
+            // The title is part of the minimum: a long group caption makes
+            // Qt grow the whole window (gallery/text/group_long_title).
+            "QGroupBox" => (fallback.0.max(73), fallback.1.max(35)),
             _ => fallback,
         }
     }
