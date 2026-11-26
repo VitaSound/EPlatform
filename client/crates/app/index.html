@@ -183,10 +183,22 @@
           "position:fixed;z-index:4999;pointer-events:none;width:1px;height:1px;" +
           "background:#00d1ff;box-shadow:0 0 0 3px rgba(0,209,255,.35);";
         document.body.appendChild(cross);
+        // Cyan frame on the canvas box: tells a canvas painted dark apart from
+        // a canvas that really sits lower than the page origin.
+        var frame = document.createElement("div");
+        frame.style.cssText =
+          "position:fixed;z-index:4998;pointer-events:none;box-sizing:border-box;" +
+          "border:1px solid #00d1ff;";
+        document.body.appendChild(frame);
         window.__epDiag = function (type, e) {
           var c = document.querySelector("canvas");
           if (!c) return;
           var r = c.getBoundingClientRect();
+          var cs = getComputedStyle(c);
+          frame.style.left = r.left + "px";
+          frame.style.top = r.top + "px";
+          frame.style.width = r.width + "px";
+          frame.style.height = r.height + "px";
           hud.textContent = [
             type + " client=(" + Math.round(e.clientX) + ", " + Math.round(e.clientY) + ")",
             "canvas rect=(" + r.left.toFixed(1) + ", " + r.top.toFixed(1) + ") " +
@@ -197,6 +209,12 @@
               "  inner=" + window.innerWidth + "x" + window.innerHeight,
             "scroll=(" + window.scrollX + ", " + window.scrollY + ")" +
               "  zoom=" + ((window.visualViewport && window.visualViewport.scale) || 1),
+            "style pos=" + cs.position + " top=" + cs.top + " left=" + cs.left +
+              " size=" + cs.width + "x" + cs.height,
+            "at(10,10)=" + (function () {
+              var el = document.elementFromPoint(10, 10);
+              return el ? el.tagName + (el.id ? "#" + el.id : "") : "none";
+            })(),
             window.__epPtr || "winit=(no event yet)",
             "build=" + window.__epBuild,
             "— красный квадрат: где курсор, cyan: где получил браузер",

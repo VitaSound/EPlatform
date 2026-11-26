@@ -4175,19 +4175,29 @@ impl App {
     /// Publish the last pointer mapping to the page for on-site diagnostics.
     /// `diag=1` in the URL makes `index.html` render it as a HUD.
     #[cfg(target_arch = "wasm32")]
-    fn publish_pointer_debug(x: f64, y: f64, scale: f32) {
+    fn publish_pointer_debug(&self, x: f64, y: f64, scale: f32) {
         let Some(window) = web_sys::window() else {
             return;
         };
         use wasm_bindgen::JsCast;
         let win: js_sys::Object = window.unchecked_into();
+        let (surface_w, surface_h) = self
+            .gfx
+            .borrow()
+            .as_ref()
+            .map(|gfx| gfx.size())
+            .unwrap_or((0, 0));
         let text = format!(
-            "winit=({:.1}, {:.1}) ui_scale={:.4} logical=({:.1}, {:.1})",
+            "winit=({:.1}, {:.1}) ui_scale={:.4} logical=({:.1}, {:.1}) app_surface={}x{} app_logical={:.0}x{:.0}",
             x,
             y,
             scale,
             x / scale as f64,
-            y / scale as f64
+            y / scale as f64,
+            surface_w,
+            surface_h,
+            surface_w as f32 / scale,
+            surface_h as f32 / scale
         );
         let _ = js_sys::Reflect::set(&win, &"__epPtr".into(), &text.as_str().into());
     }
@@ -4235,7 +4245,7 @@ impl App {
         self.sync_scale_factor();
         let scale = self.ui_scale();
         #[cfg(target_arch = "wasm32")]
-        Self::publish_pointer_debug(x, y, scale);
+        self.publish_pointer_debug(x, y, scale);
         let previous = self.dragging.as_ref().map(|drag| drag.last);
         self.cursor = (x as f32 / scale, y as f32 / scale);
         if self.shell.visible {
