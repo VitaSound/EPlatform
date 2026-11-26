@@ -4205,6 +4205,11 @@ impl App {
             viewport.height
         );
         let _ = js_sys::Reflect::set(&win, &"__epPtr".into(), &text.as_str().into());
+        let view = format!(
+            "{:.1},{:.1},{:.1},{:.1}",
+            viewport.x, viewport.y, viewport.width, viewport.height
+        );
+        let _ = js_sys::Reflect::set(&win, &"__epView".into(), &view.as_str().into());
     }
 
     /// Reconcile backing store, surface and `ui_scale` with the DOM.

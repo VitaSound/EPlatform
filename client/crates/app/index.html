@@ -195,6 +195,14 @@
           "position:fixed;z-index:4998;pointer-events:none;box-sizing:border-box;" +
           "border:1px solid #00d1ff;";
         document.body.appendChild(frame);
+        // Magenta: the origin of the app's own viewport. If the menu is painted
+        // below it, the renderer is off-origin; if the menu starts at it, the
+        // gap above is not the canvas.
+        var origin = document.createElement("div");
+        origin.style.cssText =
+          "position:fixed;z-index:4999;pointer-events:none;width:11px;height:11px;" +
+          "border:2px solid #ff00ff;";
+        document.body.appendChild(origin);
         window.__epDiag = function (type, e) {
           var c = document.querySelector("canvas");
           if (!c) return;
@@ -224,6 +232,11 @@
             "build=" + window.__epBuild,
             "— красный квадрат: где курсор, cyan: где получил браузер",
           ].join("\n");
+          var view = String(window.__epView || "").split(",").map(Number);
+          if (view.length === 4 && view.every(isFinite)) {
+            origin.style.left = view[0] - 1 + "px";
+            origin.style.top = view[1] - 1 + "px";
+          }
           mark.style.left = e.clientX + "px";
           mark.style.top = e.clientY + "px";
           cross.style.left = e.clientX + "px";
