@@ -178,7 +178,7 @@
         hud.style.cssText =
           "position:fixed;left:4px;bottom:4px;z-index:5000;pointer-events:none;" +
           "font:12px/1.35 monospace;color:#e8eef7;background:rgba(14,18,24,.86);" +
-          "padding:6px 8px;border:1px solid #4a5d78;border-radius:4px;white-space:pre;" +
+          "padding:6px 8px;border:1px solid #4a5d78;border-radius:4px;white-space:pre-wrap;" +
           "max-width:min(94vw,900px);overflow:hidden";
         hud.id = "ep-diag";
         document.body.appendChild(hud);
@@ -207,9 +207,20 @@
           "position:fixed;z-index:4999;pointer-events:none;width:11px;height:11px;" +
           "border:2px solid #ff00ff;";
         document.body.appendChild(origin);
+        var lastEvent = null;
+        var lastType = "";
         window.__epDiag = function (type, e) {
+          lastType = type;
+          lastEvent = { clientX: e.clientX, clientY: e.clientY };
+          // Render on the next frame: the app publishes __epPtr/__epView while
+          // handling the same event, after this capture-phase listener ran.
+          requestAnimationFrame(renderHud);
+        };
+        function renderHud() {
+          var e = lastEvent;
+          var type = lastType;
           var c = document.querySelector("canvas");
-          if (!c) return;
+          if (!e || !c) return;
           var r = c.getBoundingClientRect();
           var cs = getComputedStyle(c);
           frame.style.left = r.left + "px";
@@ -245,7 +256,7 @@
           mark.style.top = e.clientY + "px";
           cross.style.left = e.clientX + "px";
           cross.style.top = e.clientY + "px";
-        };
+        }
       }
       window.addEventListener(
         "pointermove",

@@ -4191,7 +4191,9 @@ impl App {
             .unwrap_or((0, 0, 1.0, 0));
         let viewport = self.floating.viewport();
         let text = format!(
-            "winit=({:.1}, {:.1}) pointer_scale={:.4} logical=({:.1}, {:.1}) app_surface={}x{} app_scale={:.4} gpu_max={} viewport=({:.0},{:.0},{:.0}x{:.0})",
+            "winit=({:.1}, {:.1}) pointer_scale={:.4} logical=({:.1}, {:.1})\n\
+             surface={}x{} scale={:.4} gpu_max={}\n\
+             viewport=({:.0},{:.0},{:.0}x{:.0})",
             x,
             y,
             scale,
