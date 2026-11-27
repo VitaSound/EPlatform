@@ -987,7 +987,9 @@ impl QStyle for QFusionStyle {
                     },
                     QPaintCommand::StrokeRoundedRect {
                         rect: frame,
-                        radius: 2.0,
+                        // Qt uses r=2 after translate(0.5,0.5); without that
+                        // shift a hair more radius matches the corner cut.
+                        radius: 2.5,
                         width: self.pixel_metric(QPixelMetric::DefaultFrameWidth),
                         color: outline,
                     },
@@ -1002,7 +1004,7 @@ impl QStyle for QFusionStyle {
                     );
                     commands.push(QPaintCommand::StrokeRoundedRect {
                         rect: soft,
-                        radius: 1.7,
+                        radius: 2.0,
                         width: 1.0,
                         color: outline.with_alpha(40.0 / 255.0),
                     });
