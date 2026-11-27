@@ -1,0 +1,33 @@
+# Hand-maintained notes merged into generated wiki pages.
+# Keys must match generated identifiers (widget class, method name, etc.).
+
+widgets:
+  QGridLayout: "spans/policies есть; row/col stretch из кода Qt — не поддерживаются (решение продукта)."
+  QPlainTextEdit: "plain text only; rich QTextEdit/HTML — нет."
+  QLabel: "word-wrap — зона внимания / известные хвосты."
+  QDockWidget: "упоминается при разборе MainWindow; полноценный dock-рантайм не обещан."
+  QTextEdit: "не реализован; используйте QPlainTextEdit."
+
+form_preamble: |
+  Объект формы: `server/priv/lua_modules/form.lua`.
+  Методы — сахар над host API. Таблица ниже **сгенерирована** из исходников.
+
+app_preamble: |
+  Объект приложения: `server/priv/lua_modules/application.lua`.
+  Это не отдельный процесс, а операции над `application_id` / main-сессией.
+  Часть window-менеджмента в браузере — no-op (задел под desktop-host).
+
+widgets_preamble: |
+  Каталог собран из упоминаний в `rqt` + частоты классов в `server/priv/qt_forms/**/*.ui`.
+  Это подмножество Qt Widgets под продуктовые формы, не полный Qt.
+
+paint_preamble: |
+  Списки из `client/crates/rqt/src/gui.rs` (`QPaintCommand`) и
+  `client/crates/rqt/src/render/primitive.rs` (`RenderPrimitive`).
+  Авторы форм **не** вызывают эти API из Lua — только справочник слоёв отрисовки.
+
+not_a_goal:
+  - QTextEdit (rich/HTML)
+  - QCalendarWidget / QDateEdit / QTimeEdit / QDial
+  - QWizard / QGraphicsView / QWebEngine*
+  - Qt Quick / QML

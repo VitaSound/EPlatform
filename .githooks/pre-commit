@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# Regenerate docs/user reference pages when their sources are staged.
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+
+# Only care about staged changes that feed the generator.
+PATTERN='^(client/crates/rqt/src/widgets\.rs|client/crates/rqt/src/gui\.rs|client/crates/rqt/src/render/primitive\.rs|client/crates/app/src/shell\.rs|server/priv/lua_modules/form\.lua|server/priv/lua_modules/application\.lua|server/lib/e_platform/lua/api\.ex|server/priv/qt_forms/|docs/user/gen_notes\.yaml|scripts/gen_user_docs\.py)'
+
+if ! git diff --cached --name-only --diff-filter=ACMR | grep -E -q "$PATTERN"; then
+  exit 0
+fi
+
+if ! command -v python3 >/dev/null; then
+  echo "pre-commit: python3 not found; skip doc regen" >&2
+  exit 0
+fi
+
+if ! python3 -c 'import yaml' 2>/dev/null; then
+  echo "pre-commit: PyYAML missing (pip install pyyaml); skip doc regen" >&2
+  exit 0
+fi
+
+echo "pre-commit: regenerating docs/user reference pages"
+python3 "$ROOT/scripts/gen_user_docs.py" --out "$ROOT/docs/user"
+
+GENERATED=(
+  docs/user/Supported-Widgets.md
+  docs/user/Lua-Form-API.md
+  docs/user/Lua-App-API.md
+  docs/user/Host-Lua-API.md
+  docs/user/Paint-Commands.md
+  docs/user/_Sidebar.md
+  docs/user/README.md
+)
+
+# Rendering-Pipeline may get a one-time link patch from the generator.
+if git status --porcelain -- docs/user/Rendering-Pipeline.md | grep -q .; then
+  GENERATED+=(docs/user/Rendering-Pipeline.md)
+fi
+
+git add -- "${GENERATED[@]}"
+exit 0
