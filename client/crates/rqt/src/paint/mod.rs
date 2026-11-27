@@ -12,7 +12,7 @@ mod slider;
 mod spin;
 mod table;
 mod tabs;
-// mod toolbox; // needs widgets.toolbox — parent wires QToolBox
+mod toolbox;
 
 pub use scroll::paint_scroll_bar;
 
@@ -24,6 +24,7 @@ use slider::paint_slider;
 use spin::paint_spin_box;
 use table::paint_table;
 use tabs::paint_tab_widget;
+use toolbox::paint_toolbox;
 
 
 pub fn paint_widget_tree(
@@ -114,7 +115,9 @@ fn paint_widget(
     if widget.class_name == "QTabWidget" {
         paint_tab_widget(widget, style, painter);
     }
-    // QToolBox paint deferred until widgets.toolbox lands (parent strips/wires).
+    if widget.class_name == "QToolBox" {
+        paint_toolbox(widget, style, painter);
+    }
     if matches!(
         widget.class_name.as_str(),
         "QSpinBox" | "QDoubleSpinBox"

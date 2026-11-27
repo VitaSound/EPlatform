@@ -2,6 +2,15 @@
 
 ## 2026-11-27
 
+### Fix: QToolBox Fusion header lines
+
+- **Paint.** Снова вызывается `paint_toolbox` (был закомментирован как
+  deferred) — горизонтальные линии/диагональ заголовков как Fusion
+  `CE_ToolBoxTabShape` (mid.darker(150) + light). Без этого rqt_render /
+  wasm gallery рисовали только текст страниц.
+- **Review.** Обновлены rust PNG `214_basic_two` / `215_fields_three` и
+  метрики в `review/index.html`.
+
 ### Fix: MDI cascade after tile
 
 - **Плитка → Каскад.** `tile_subwindows` сохраняет pre-tile `frame` в
