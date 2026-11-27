@@ -4,7 +4,7 @@ How to bring each graphics/UI layer closer to Qt Widgets + Fusion, without prete
 
 Related:
 
-- Handoff plans: [agent-plans/README.md](agent-plans/README.md)
+- Handoff plans: [agent-plans/README.md](agent-plans/README.md) (active); archive [`00`–`44`](archive/completed-plans/agent-plans/)
 - Canvas DPI: [wasm-canvas-geometry.md](wasm-canvas-geometry.md)
 - Widgets waves: [`../widgets-plan.md`](../widgets-plan.md)
 - Port history: [`../client/QT_PORT_PLAN.md`](../client/QT_PORT_PLAN.md)
@@ -99,7 +99,7 @@ Full widget/primitive tables: see agent plan pack and historical review in chat 
 
 ## 8. Tables (product priority)
 
-See [10-tables-grouped-headers.md](agent-plans/10-tables-grouped-headers.md) and [11-tables-paint-parity.md](agent-plans/11-tables-paint-parity.md).
+See [10-tables-grouped-headers.md](archive/completed-plans/agent-plans/10-tables-grouped-headers.md) and [11-tables-paint-parity.md](archive/completed-plans/agent-plans/11-tables-paint-parity.md).
 
 B6 in `questions.md`: `groupedHeader` / `tableLayout` **are required**. Implement parser→model→span geometry→paint→hit→gallery→review. Flat headers must keep working.
 
@@ -119,4 +119,4 @@ B6 in `questions.md`: `groupedHeader` / `tableLayout` **are required**. Implemen
 
 ## 10. Backlog index
 
-All component briefs live under [agent-plans/](agent-plans/). Assign one file per agent.
+New briefs go under [agent-plans/](agent-plans/). Closed pack `00`–`44`: [archive/completed-plans/agent-plans/](archive/completed-plans/agent-plans/).

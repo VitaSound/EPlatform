@@ -5,7 +5,7 @@
 копирования исходников Qt.
 
 **Graphics / Qt parity (текущая волна):** см. [`docs/qt-parity-guide.md`](../docs/qt-parity-guide.md)
-и handoff-планы [`docs/agent-plans/`](../docs/agent-plans/). Canvas DPI:
+и handoff-планы [`docs/agent-plans/`](../docs/agent-plans/) (архив `00`–`44`: [`docs/archive/completed-plans/agent-plans/`](../docs/archive/completed-plans/agent-plans/)). Canvas DPI:
 [`docs/wasm-canvas-geometry.md`](../docs/wasm-canvas-geometry.md). Client notes:
 [`client/AGENTS.md`](AGENTS.md).
 

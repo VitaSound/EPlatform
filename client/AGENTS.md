@@ -3,7 +3,7 @@
 ## Docs
 
 - [docs/qt-parity-guide.md](../docs/qt-parity-guide.md) — Qt parity waves + how-to
-- [docs/agent-plans/](../docs/agent-plans/) — one MD per component (hand off to agents)
+- [docs/agent-plans/](../docs/agent-plans/) — active handoffs; closed `00`–`44` in [archive](../docs/archive/completed-plans/agent-plans/)
 - [docs/wasm-canvas-geometry.md](../docs/wasm-canvas-geometry.md) — DPR / surface / pointer
 
 ## Canvas invariants (wasm)
@@ -57,7 +57,7 @@ Do **not** invent one mega `LAYOUT_METRICS` module. Mirror Qt’s split:
 4. `.ui` / Designer overrides win when present; Rust defaults only fill gaps.
 5. Comments like “matches Fusion probe (~28)” next to a raw `28.0` are a smell: route through style/const instead.
 
-Cleanup backlog: [docs/agent-plans/43-layout-metrics-dedup.md](../docs/agent-plans/43-layout-metrics-dedup.md) (re-audit required before implementing).
+Metrics hygiene notes (done): [43-layout-metrics-dedup.md](../docs/archive/completed-plans/agent-plans/43-layout-metrics-dedup.md).
 
 ## Checks
 

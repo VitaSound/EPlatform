@@ -2,6 +2,13 @@
 
 ## 2026-11-27
 
+### Docs: archive agent plans `00`–`44`
+
+- Закрытые handoff-планы перенесены в
+  `docs/archive/completed-plans/agent-plans/`; в `docs/agent-plans/`
+  остались README + `_TEMPLATE`. Ссылки обновлены (`AGENTS.md`,
+  `qt-parity-guide`, `questions.md`, …).
+
 ### QSS: table border + GroupBox title-on-frame
 
 - **`QTableWidget` border.** QSS `border` заменяет Fusion Mid-frame

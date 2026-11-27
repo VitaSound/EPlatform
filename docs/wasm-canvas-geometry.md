@@ -216,7 +216,7 @@ winit-web сам умножает `offsetX/offsetY` на `devicePixelRatio` — 
 `__ptrLog` / `__epBuild`, URL `?maxdim=`). Регрессии геометрии ловятся
 юнит-тестами `canvas_geometry` и ручной проверкой клика после resize.
 Воспроизведение лимита текстуры — только через test hooks / feature, не через
-URL на странице пользователя. См. [agent-plans/00-remove-diag.md](agent-plans/00-remove-diag.md)
+URL на странице пользователя. См. [00-remove-diag.md](archive/completed-plans/agent-plans/00-remove-diag.md)
 и [qt-parity-guide.md](qt-parity-guide.md).
 
 ---

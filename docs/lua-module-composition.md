@@ -480,7 +480,7 @@ chrome; `set_menu`/`setToolBar`/statusbar и top-level формы работаю
 - `currentRowCell:<column>`
 
 Клиент поддерживает `tableLayout` / `groupedHeader` (см. `QTableWidget::apply_table_layout`
-и `docs/agent-plans/10-tables-grouped-headers.md`). Для простых таблиц по-прежнему:
+и `docs/archive/completed-plans/agent-plans/10-tables-grouped-headers.md`). Для простых таблиц по-прежнему:
 
 Поэтому для плоских заголовков:
 

@@ -47,7 +47,7 @@ Grid (0.12) закрыт первым; следующий шаг — 0.13 (`QFor
 Раньше: формы только из `.ui`. Теперь: Dual path как в Qt —
 `QUiLoader` **или** пустая форма + `add_layout`/`add_widget` (типизированные
 команды, без `invoke_qt`). Параллельно — декларативный Lua `Ui.*` → XML.
-См. `docs/agent-plans/44-dynamic-forms-without-ui.md`.
+См. `docs/archive/completed-plans/agent-plans/44-dynamic-forms-without-ui.md`.
 
 **B3. `modal_result` — структурный подход.** Решение: host-функция
 `open_modal_lua` возвращает Lua-таблицу `{status, value}`, где `status` —
@@ -135,7 +135,7 @@ Grid (0.12) закрыт первым; следующий шаг — 0.13 (`QFor
 **B6. Таблицы. — ✅ решено (2026-11-26): grouped headers НУЖНЫ.**
 `tableLayout`/`groupedHeader` не упрощать до `tableHeaders`/`tableData`.
 Реализация: клиент принимает оба свойства (см. `QTableWidget::apply_table_layout`,
-`docs/agent-plans/10-tables-grouped-headers.md`, `docs/qt-parity-guide.md` §8).
+`docs/archive/completed-plans/agent-plans/10-tables-grouped-headers.md`, `docs/qt-parity-guide.md` §8).
 Исходный вопрос ниже.
 
 **B7. Слой данных. — ✅ решено (2026-11-26): планируется.**
