@@ -8,13 +8,17 @@
   `collect_paint` каждый кадр; redraw только на ввод/сокет/caret/status.
   Снят spin `about_to_wait` → `request_redraw`; caret/status —
   `ControlFlow::wait_duration`.
+- **Socket wake.** WS callbacks вызывают `request_redraw` — иначе после
+  снятия spin сообщения Phoenix сидели в очереди и UI оставался пустым.
 - **GPU scissor.** `SetClip` → `PaintBatch::Scissor` → `set_scissor_rect`
   в render pass (CPU-intersect остаётся).
 - **Letterbox.** `letterbox_offset` + centering `top`/`left` в
   `resize_canvas_box(Some)`. Mode 3 по-прежнему shrink-logical без CSS
   letterbox (как plan 01).
 - **Mode 2 text.** Опционально `?texthd=1` / `__epTextHd` — glyphon
-  metrics в DPR; по умолчанию выкл. (на mode 1 разницы почти нет).
+  metrics в browser DPR; по умолчанию выкл. CDP-проверка: флаг
+  применяется (`glyph_scale=2`), но глазом на menu/form пиксели те же —
+  deferral ок. Временно снова есть debug `?maxdim=N`.
 - **План.** `docs/agent-plans/42-perf-dirty-scissor-letterbox.md` → done.
 
 ### Волна: agent-plan 41 — QSS url() / border-image + assets
