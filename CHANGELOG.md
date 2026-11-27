@@ -2,6 +2,17 @@
 
 ## 2026-11-27
 
+### QSS: table border + GroupBox title-on-frame
+
+- **`QTableWidget` border.** QSS `border` заменяет Fusion Mid-frame
+  (`replaces_native_frame` / `scroll_frame_width`): без перерисовки
+  серого chrome поверх стиля; viewport inset = `border-width`, не
+  жёсткая 1px. Review `qss/53_table`: mean 0.34, >30 0.2%.
+- **`QGroupBox` title-on-frame.** `margin-top` + `border` — заголовок на
+  верхнем крае рамки (subcontrol-origin margin), без лишнего
+  font-height top pad и с wipe подписью поверх parent fill.
+  Review `qss/52_checks`: mean 1.81, >30 1.8%.
+
 ### Волна: agent-plan 44 — dynamic forms without `.ui`
 
 - **Variant B (declarative).** Lua `require("ui")` → `Ui.dialog` /

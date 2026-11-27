@@ -12,6 +12,7 @@ pub(crate) fn paint_table(
     widget: &QWidget,
     painter: &mut QPainter,
     style: &dyn QStyle,
+    qss: &QStyleDeclarations,
     item_qss: &QStyleDeclarations,
     header_qss: &QStyleDeclarations,
 ) {
@@ -23,7 +24,8 @@ pub(crate) fn paint_table(
     };
     let rect = widget.geometry;
     let palette = &widget.palette;
-    let layout = table.scroll_area(rect, &widget.font);
+    let frame = qss.scroll_frame_width(1.0);
+    let layout = table.scroll_area_with_frame(rect, &widget.font, frame);
     let viewport = layout.viewport;
     let left = viewport.x;
     let top = viewport.y;
@@ -542,10 +544,26 @@ pub(crate) fn paint_table(
     // Qt paints the widget frame above the scroll bars (probe on tables/179:
     // the 184 border stays visible over the arrow fill at x11 and x328);
     // the bars now reach the widget edge like Qt's, so redraw the frame.
-    painter.stroke_rect(
-        widget.geometry,
-        1.0,
-        palette.color(QPaletteRole::Mid),
-    );
+    // A QSS `border` replaces the Fusion Mid chrome (qss/53_table).
+    if qss.replaces_native_frame() {
+        if let Some(width) = qss.border_width {
+            if width > 0.0 {
+                let color = qss
+                    .border_color
+                    .unwrap_or_else(|| palette.color(QPaletteRole::WindowText));
+                if let Some(radius) = qss.border_radius {
+                    painter.stroke_rounded_rect(widget.geometry, radius, width, color);
+                } else {
+                    painter.stroke_rect(widget.geometry, width, color);
+                }
+            }
+        }
+    } else {
+        painter.stroke_rect(
+            widget.geometry,
+            1.0,
+            palette.color(QPaletteRole::Mid),
+        );
+    }
 }
 

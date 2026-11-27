@@ -7,7 +7,9 @@ use crate::qss::{
 use crate::style::{
     QControlElement, QPixelMetric, QPrimitiveElement, QStyle, QStyleOption, QStyleState,
 };
-use crate::widgets::{wrap_text_lines, QWidget, QWidgetId, QWidgetTree, QCOMBO_POPUP_ROW_H};
+use crate::widgets::{
+    resolve_widget_style, wrap_text_lines, QWidget, QWidgetId, QWidgetTree, QCOMBO_POPUP_ROW_H,
+};
 
 mod focus;
 mod plain_text;
@@ -138,10 +140,10 @@ fn paint_widget(
     if widget.class_name == "QPlainTextEdit" {
         paint_plain_text_edit(widget, style, &option, painter, &qss);
     }
-    paint_table(widget, painter, style, &item_qss, &header_qss);
+    paint_table(widget, painter, style, &qss, &item_qss, &header_qss);
     paint_item_views(widget, painter, style, &item_qss, &header_qss);
     paint_line_edit_selection(widget, painter, &qss);
-    paint_widget_text(widget, painter, style, &option, &qss);
+    paint_widget_text(tree, widget_id, widget, painter, style, &option, &qss);
     paint_line_edit_caret(widget, painter, &qss);
     paint_focus_indicators(widget, painter, style, &qss);
 
@@ -220,26 +222,20 @@ pub(crate) fn qss_content_rect(
 }
 
 pub(crate) fn resolved_style(tree: &QWidgetTree, widget_id: QWidgetId) -> QStyleDeclarations {
-    let mut sheets: Vec<&QStyleSheet> = Vec::new();
-    let mut current = Some(widget_id);
+    resolve_widget_style(tree, widget_id)
+}
+
+fn ancestor_qss_background(tree: &QWidgetTree, widget_id: QWidgetId) -> Option<QColor> {
+    // Title-in-margin sits over the parent face, not the group box fill.
+    let mut current = tree.widget(widget_id).and_then(|widget| widget.parent);
     while let Some(id) = current {
-        let Some(widget) = tree.widget(id) else {
-            break;
-        };
-        if let Some(sheet) = &widget.style_sheet {
-            sheets.push(sheet);
+        let qss = resolved_style(tree, id);
+        if let Some(bg) = qss.background {
+            return Some(bg);
         }
-        current = widget.parent;
+        current = tree.widget(id).and_then(|widget| widget.parent);
     }
-    sheets.reverse();
-    let Some(widget) = tree.widget(widget_id) else {
-        return QStyleDeclarations::default();
-    };
-    let mut declarations = QStyleDeclarations::default();
-    for sheet in sheets {
-        declarations.merge(&sheet.resolve(widget));
-    }
-    declarations
+    None
 }
 
 fn paint_widget_background(
@@ -267,15 +263,24 @@ fn paint_widget_background(
             }
         }
         "QGroupBox" => {
-            let metrics = QFontMetrics::new(&qss_font(widget, qss));
-            let top_margin = metrics.height().max(14.0) + 3.0;
-            frame_option.rect = QRectF::new(
-                frame.x,
-                frame.y + top_margin,
-                frame.width,
-                (frame.height - top_margin).max(0.0),
-            );
-            painter.draw_commands(&style.draw_primitive(QPrimitiveElement::Frame, &frame_option));
+            // QSS `margin-top` + `border`: frame is the QSS box; title sits on
+            // the top edge (drawn later). Skip Fusion inset + frame stroke —
+            // the QSS border pass owns the outline.
+            if qss.group_box_title_on_frame() {
+                // no-op: border/background below
+            } else {
+                let metrics = QFontMetrics::new(&qss_font(widget, qss));
+                let top_margin = metrics.height().max(14.0) + 3.0;
+                frame_option.rect = QRectF::new(
+                    frame.x,
+                    frame.y + top_margin,
+                    frame.width,
+                    (frame.height - top_margin).max(0.0),
+                );
+                painter.draw_commands(
+                    &style.draw_primitive(QPrimitiveElement::Frame, &frame_option),
+                );
+            }
         }
         "QLabel" => {}
         "QLineEdit" => {
@@ -294,7 +299,19 @@ fn paint_widget_background(
             painter.draw_commands(&style.draw_control(QControlElement::ComboBox, &frame_option));
         }
         "QTableWidget" | "QListWidget" | "QTreeWidget" => {
-            painter.draw_commands(&style.draw_control(QControlElement::TableView, &frame_option));
+            // QSS `border` replaces Fusion's Mid frame; keep the Base fill only.
+            if qss.replaces_native_frame() {
+                let fill = if option.state.contains(QStyleState::ENABLED) {
+                    widget.palette.color(QPaletteRole::Base)
+                } else {
+                    widget.palette.color(QPaletteRole::Window)
+                };
+                painter.fill_rect(frame, fill);
+            } else {
+                painter.draw_commands(
+                    &style.draw_control(QControlElement::TableView, &frame_option),
+                );
+            }
         }
         "QSplitter" => {
             painter.fill_rect(frame, widget.palette.color(QPaletteRole::Window));
@@ -1020,6 +1037,8 @@ fn paint_line_edit_text(widget: &QWidget, painter: &mut QPainter, qss: &QStyleDe
 }
 
 fn paint_widget_text(
+    tree: &QWidgetTree,
+    widget_id: QWidgetId,
     widget: &QWidget,
     painter: &mut QPainter,
     style: &dyn QStyle,
@@ -1048,13 +1067,35 @@ fn paint_widget_text(
                 let frame = qss_frame_rect(widget, qss);
                 let pad_left = qss.padding.map(|padding| padding.0).unwrap_or(0.0);
                 let pad_right = qss.padding.map(|padding| padding.2).unwrap_or(0.0);
-                painter.draw_text(
-                    QRectF::new(
-                        frame.x + pad_left,
-                        frame.y + 2.0,
-                        (frame.width - pad_left - pad_right).max(1.0),
+                let title_on_frame = qss.group_box_title_on_frame();
+                let border_w = qss.border_width.unwrap_or(1.0);
+                // Qt `::title` with subcontrol-origin margin: vertically center
+                // on the top border; wipe a text-width strip so the stroke does
+                // not cut through the caption.
+                let title_y = if title_on_frame {
+                    frame.y - line_height * 0.5 + border_w * 0.5
+                } else {
+                    frame.y + 2.0
+                };
+                let text_w = metrics.horizontal_advance(&title);
+                let title_x = frame.x + pad_left + if title_on_frame { 2.0 } else { 0.0 };
+                let max_w = (frame.width - pad_left - pad_right).max(1.0);
+                if title_on_frame {
+                    let wipe_pad = 3.0;
+                    let wipe = QRectF::new(
+                        (title_x - wipe_pad).max(frame.x),
+                        title_y,
+                        (text_w + wipe_pad * 2.0).min(max_w),
                         line_height,
-                    ),
+                    );
+                    // Caption sits in the margin over the parent fill (e.g.
+                    // `QDialog { background-color }`), not the group box face.
+                    let bg = ancestor_qss_background(tree, widget_id)
+                        .unwrap_or_else(|| widget.palette.color(QPaletteRole::Window));
+                    painter.fill_rect(wipe, bg);
+                }
+                painter.draw_text(
+                    QRectF::new(title_x, title_y, max_w, line_height),
                     title,
                     text_color(widget, qss),
                 );

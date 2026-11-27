@@ -751,11 +751,22 @@ impl QTableWidget {
     }
 
     pub fn scroll_area(&self, rect: QRectF, font: &QFont) -> QScrollAreaLayout {
+        self.scroll_area_with_frame(rect, font, 1.0)
+    }
+
+    /// `frame` is Fusion `PM_DefaultFrameWidth` (1) or a QSS `border` width.
+    pub fn scroll_area_with_frame(
+        &self,
+        rect: QRectF,
+        font: &QFont,
+        frame: f32,
+    ) -> QScrollAreaLayout {
+        let frame = frame.max(0.0);
         let inner = QRectF::new(
-            rect.x + 1.0,
-            rect.y + 1.0,
-            (rect.width - 2.0).max(0.0),
-            (rect.height - 2.0).max(0.0),
+            rect.x + frame,
+            rect.y + frame,
+            (rect.width - frame * 2.0).max(0.0),
+            (rect.height - frame * 2.0).max(0.0),
         );
         scroll_area_layout(
             inner,
@@ -767,7 +778,11 @@ impl QTableWidget {
     }
 
     pub fn body_rect(&self, rect: QRectF, font: &QFont) -> QRectF {
-        let viewport = self.scroll_area(rect, font).viewport;
+        self.body_rect_with_frame(rect, font, 1.0)
+    }
+
+    pub fn body_rect_with_frame(&self, rect: QRectF, font: &QFont, frame: f32) -> QRectF {
+        let viewport = self.scroll_area_with_frame(rect, font, frame).viewport;
         let row_header_width = self.row_header_width(font);
         let header_h = self.header_height();
         QRectF::new(
@@ -779,7 +794,11 @@ impl QTableWidget {
     }
 
     pub fn sync_scrollbars(&mut self, rect: QRectF, font: &QFont) {
-        let viewport = self.scroll_area(rect, font).viewport;
+        self.sync_scrollbars_with_frame(rect, font, 1.0);
+    }
+
+    pub fn sync_scrollbars_with_frame(&mut self, rect: QRectF, font: &QFont, frame: f32) {
+        let viewport = self.scroll_area_with_frame(rect, font, frame).viewport;
         let body_height = (viewport.height - self.header_height()).max(0.0);
         let visible_rows = ((body_height / QTABLE_ROW_H).floor() as usize)
             .max(1)

@@ -200,6 +200,47 @@ impl QStyleDeclarations {
             || self.border_left.is_some()
     }
 
+    /// Stylesheet `border` / `border-image` replaces Fusion's 1 px Mid frame
+    /// (Qt `QAbstractScrollArea` with a QSS border).
+    pub fn replaces_native_frame(&self) -> bool {
+        self.border_width.is_some_and(|w| w > 0.0)
+            || self.has_side_borders()
+            || self.border_image.is_some()
+    }
+
+    /// Chrome inset for scroll-area viewports: QSS border width when set,
+    /// otherwise the Fusion `PM_DefaultFrameWidth` fallback.
+    pub fn scroll_frame_width(&self, fallback: f32) -> f32 {
+        if let Some(width) = self.border_width {
+            if width > 0.0 {
+                return width;
+            }
+        }
+        if self.has_side_borders() {
+            let base = self.border_width.unwrap_or(0.0);
+            let side = |side: QBorderSide| {
+                self.side_border(side)
+                    .and_then(|decl| decl.width)
+                    .unwrap_or(base)
+                    .max(0.0)
+            };
+            return side(QBorderSide::Top)
+                .max(side(QBorderSide::Right))
+                .max(side(QBorderSide::Bottom))
+                .max(side(QBorderSide::Left))
+                .max(fallback);
+        }
+        fallback
+    }
+
+    /// Classic `QGroupBox { margin-top: …; border: … }` — title sits on the
+    /// top border (subcontrol origin margin) instead of above an inset frame.
+    pub fn group_box_title_on_frame(&self) -> bool {
+        self.margin
+            .is_some_and(|(_, top, _, _)| top > 0.0)
+            && self.border_width.is_some_and(|w| w > 0.0)
+    }
+
     pub fn side_border(&self, side: QBorderSide) -> Option<&QBorderSideDecl> {
         match side {
             QBorderSide::Top => self.border_top.as_ref(),

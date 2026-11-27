@@ -6,7 +6,7 @@ use crate::plain_text_edit::{
     cursor_at_document_pos, move_cursor_vertical, QLineWrapMode, QPlainTextEdit, QPLAIN_HINT_H,
     QPLAIN_HINT_W,
 };
-use crate::qss::QStyleSheet;
+use crate::qss::{QStyleDeclarations, QStyleSheet};
 use crate::scroll::{
     QOrientation, QScrollAreaLayout, QScrollBar, QScrollBarPolicy, QScrollBarSubControl,
 };
@@ -3004,11 +3004,15 @@ impl QWidgetTree {
     }
 
     pub fn sync_views(&mut self) {
-        for widget in &mut self.widgets {
+        let frames: Vec<f32> = (0..self.widgets.len())
+            .map(|id| resolve_widget_style(self, id).scroll_frame_width(1.0))
+            .collect();
+        for (id, widget) in self.widgets.iter_mut().enumerate() {
             let rect = widget.geometry;
             let font = widget.font.clone();
+            let frame = frames[id];
             if let Some(table) = widget.table.as_mut() {
-                table.sync_scrollbars(rect, &font);
+                table.sync_scrollbars_with_frame(rect, &font, frame);
             }
             if let Some(list) = widget.list.as_mut() {
                 let layout = list.scroll_area(rect);
@@ -3563,8 +3567,11 @@ impl QWidgetTree {
         }
         match class.as_str() {
             "QTableWidget" => {
+                let frame = resolve_widget_style(self, widget).scroll_frame_width(1.0);
                 if let Some(table) = self.widgets[widget].table.as_mut() {
-                    let viewport = table.scroll_area(geometry, &font).viewport;
+                    let viewport = table
+                        .scroll_area_with_frame(geometry, &font, frame)
+                        .viewport;
                     if viewport.contains(point) {
                         let local_x = point.x - viewport.x;
                         let local_y = point.y - viewport.y;
@@ -3770,11 +3777,12 @@ impl QWidgetTree {
     }
 
     fn scroll_layout(&self, widget: QWidgetId) -> Option<QScrollAreaLayout> {
+        let frame = resolve_widget_style(self, widget).scroll_frame_width(1.0);
         let node = self.widgets.get(widget)?;
         let rect = node.geometry;
         let font = &node.font;
         if let Some(table) = node.table.as_deref() {
-            return Some(table.scroll_area(rect, font));
+            return Some(table.scroll_area_with_frame(rect, font, frame));
         }
         if let Some(list) = node.list.as_deref() {
             return Some(list.scroll_area(rect));
@@ -6354,6 +6362,30 @@ fn remove_widget_from_layout(layout: &mut QLayout, id: QWidgetId) -> bool {
     false
 }
 
+/// Merge ancestor `styleSheet` rules for `widget_id` (child overrides parent).
+pub fn resolve_widget_style(tree: &QWidgetTree, widget_id: QWidgetId) -> QStyleDeclarations {
+    let mut sheets: Vec<&QStyleSheet> = Vec::new();
+    let mut current = Some(widget_id);
+    while let Some(id) = current {
+        let Some(widget) = tree.widget(id) else {
+            break;
+        };
+        if let Some(sheet) = &widget.style_sheet {
+            sheets.push(sheet);
+        }
+        current = widget.parent;
+    }
+    sheets.reverse();
+    let Some(widget) = tree.widget(widget_id) else {
+        return QStyleDeclarations::default();
+    };
+    let mut declarations = QStyleDeclarations::default();
+    for sheet in sheets {
+        declarations.merge(&sheet.resolve(widget));
+    }
+    declarations
+}
+
 pub fn load_ui(xml: &str) -> Result<(QWidgetTree, QWidgetId), String> {
     let xml = xml.trim();
     if xml.is_empty() {
@@ -6453,9 +6485,21 @@ fn load_widget(
             layout.margins = QMargins::uniform(QLAYOUT_NESTED_MARGIN);
         }
         if spec.class == "QGroupBox" {
-            let metrics = QFontMetrics::new(&tree.widgets[id].font);
+            // Fusion: title sits above the frame, so contents need a full
+            // line of top pad. QSS `margin-top` + `border` parks the title on
+            // the frame edge (see `QStyleDeclarations::group_box_title_on_frame`);
+            // only keep a small gap then — otherwise the box grows ~fontHeight
+            // taller than Qt (`qss/52_checks`).
+            let title_on_frame = resolve_widget_style(tree, id).group_box_title_on_frame();
             layout.margins.left += 3.0;
-            layout.margins.top += metrics.height() + QLAYOUT_DEFAULT_SPACING;
+            layout.margins.top += if title_on_frame {
+                // .ui topMargin (usually 9) + frame chrome; title lives in
+                // QSS margin-top so do not also reserve a full font line.
+                QLAYOUT_DEFAULT_SPACING + 1.0
+            } else {
+                let metrics = QFontMetrics::new(&tree.widgets[id].font);
+                metrics.height() + QLAYOUT_DEFAULT_SPACING
+            };
             layout.margins.right += 3.0;
             layout.margins.bottom += 3.0;
         }
