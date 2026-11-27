@@ -9,8 +9,8 @@ use super::{qss_content_rect, qss_font, qss_frame_rect, widget_text};
 /// rectangle for check/radio and a dotted inner rectangle for buttons, while
 /// Fusion fills the check/radio text area and keeps only the button frame.
 /// EPlatform uses the dotted variant for check/radio/button so the focus is
-/// obvious on its flat palette; line edits and combos keep the Fusion blue
-/// frame.
+/// obvious on its flat palette; line edits keep the Fusion blue frame
+/// (combos/sliders do not — Fusion leaves their outline unchanged).
 pub(crate) fn paint_focus_indicators(
     widget: &QWidget,
     painter: &mut QPainter,

@@ -2,6 +2,22 @@
 
 ## 2026-11-27
 
+### Shared SDF rounded stroke (CPU = GPU)
+
+- **`rqt::render::sdf`.** Общий `sd_rounded_box` + smoothstep cover; CPU
+  `raster` и WGSL `ShapePrim` синхронизированы. Центрированный 1px pen
+  (как Qt cosmetic); запрет 4×4 SSAA / «подкрутить radius» в `AGENTS.md`.
+- **Fusion path.** `translate(0.5)+adjusted(0,0,-1,-1)` → `fusion_stroke_path`
+  для LineEdit / PushButton / ComboBox / Slider (чёткие 1px края, без L/R
+  асимметрии от `f32::round` на `*.5` в `push_shape_quad`).
+- **LineEdit / Button / Combo.** Radius 2 (кнопка visual 2.5); soft ring
+  LineEdit; Combo/Slider outline без Highlight при focus (как Qt Fusion).
+- **Slider groove.** QRectF inset `(1,1,-1,-1)` вместо QRect-идиомы
+  `(1,1,-2,-2)` — синяя полоска 5px как Qt (`#085` → ~0.4%).
+- **Spin caret.** Embedded LineEdit caret + focus routing для SpinBox.
+- **Review.** Полный re-render rust PNGs + `index.html` (focus/line_edit,
+  buttons, combo, slider).
+
 ### QGroupBox: Fusion frame pixmap (nested darkening)
 
 - **`PE_FrameGroupBox`.** Вместо palette `Mid` — `fusion_groupbox.png`

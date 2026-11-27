@@ -85,13 +85,26 @@ pub(crate) fn paint_spin_box(
         QColor::rgba8(160, 160, 160, 255)
     };
     // Qt Fusion line-edit content is inset ~5px from the outer geometry.
+    let text_x = frame.x + 5.0;
     let text_rect = QRectF::new(
-        frame.x + 5.0,
+        text_x,
         frame.y + ((frame.height - text_h) / 2.0).max(0.0),
         (frame.width - QSPIN_BUTTON_W - 9.0).max(1.0),
         text_h,
     );
     painter.draw_text(text_rect, &text, text_color);
+    // Embedded QLineEdit caret (gallery/focus/168–169). Same vertical band as
+    // `paint_line_edit_caret` (geometry +4 / −8); x follows spin text inset.
+    if widget.has_focus && widget.enabled && widget.cursor_visible {
+        let cursor = widget.cursor_position.min(text.chars().count());
+        let prefix: String = text.chars().take(cursor).collect();
+        let caret_x = (text_x + metrics.horizontal_advance(&prefix)).min(text_rect.right());
+        let caret_y = frame.y + 4.0;
+        let caret_h = (frame.height - 8.0).max(0.0);
+        if caret_h > 0.0 {
+            painter.fill_rect(QRectF::new(caret_x, caret_y, 1.0, caret_h), text_color);
+        }
+    }
     // Focus outline comes from LineEdit above (Highlight when FOCUSED).
     // Do not stroke_rect again — that stacked a second 1px ring (double thickness).
 }

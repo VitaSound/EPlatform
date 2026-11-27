@@ -622,6 +622,18 @@ fn rect_adjusted(rect: QRectF, left: f32, top: f32, right: f32, bottom: f32) -> 
     )
 }
 
+/// Fusion `translate(0.5,0.5)` + `drawRoundedRect(adjusted(0,0,-1,-1), …)`.
+/// Centered SDF stroke needs this path on the outer pixel-center ring —
+/// integer boxes look like a soft 2px line.
+fn fusion_stroke_path(rect: QRectF) -> QRectF {
+    QRectF::new(
+        rect.x + 0.5,
+        rect.y + 0.5,
+        (rect.width - 1.0).max(1.0),
+        (rect.height - 1.0).max(1.0),
+    )
+}
+
 /// Fusion `CC_Slider`: groove + blue active span + rounded handle.
 fn draw_slider(option: &QStyleOption, slider: &QSlider) -> Vec<QPaintCommand> {
     let rect = option.rect;
@@ -643,18 +655,22 @@ fn draw_slider(option: &QStyleOption, slider: &QSlider) -> Vec<QPaintCommand> {
         // Fusion grooveColor: Button HSV with value * 0.9.
         let groove_color =
             button.with_value(((button.value() as f32) * 0.9).round().clamp(0.0, 255.0) as u8);
-        let inner = rect_adjusted(groove, 1.0, 1.0, -2.0, -2.0);
+        // Qt `QRect::adjusted(1,1,-2,-2)` insets 1px on inclusive coords; our
+        // half-open `QRectF` needs `(1,1,-1,-1)` for the same 1px inset
+        // (keeps groove paint 5px tall inside the 7px groove — Qt golden).
+        let inner = rect_adjusted(groove, 1.0, 1.0, -1.0, -1.0);
         if inner.width > 0.0 && inner.height > 0.0 {
+            let path = fusion_stroke_path(inner);
             // Inactive groove: darker(110) → lighter(110), rounded.
             out.push(QPaintCommand::FillLinearGradientRect {
-                rect: inner,
+                rect: path,
                 radius: 1.0,
                 start: groove_color.darker(110),
                 end: groove_color.lighter(110),
                 horizontal: !horizontal,
             });
             out.push(QPaintCommand::StrokeRoundedRect {
-                rect: inner,
+                rect: path,
                 radius: 1.0,
                 width: 1.0,
                 color: outline,
@@ -676,20 +692,20 @@ fn draw_slider(option: &QStyleOption, slider: &QSlider) -> Vec<QPaintCommand> {
                         rect: Some(rect_adjusted(clipped, 0.0, 0.0, 1.0, 1.0)),
                     });
                     out.push(QPaintCommand::FillLinearGradientRect {
-                        rect: inner,
+                        rect: path,
                         radius: 1.0,
                         start: highlight,
                         end: highlight.lighter(130),
                         horizontal: !horizontal,
                     });
                     out.push(QPaintCommand::StrokeRoundedRect {
-                        rect: inner,
+                        rect: path,
                         radius: 1.0,
                         width: 1.0,
                         color: outline,
                     });
                     // Inner contrast line (Fusion).
-                    let contrast = rect_adjusted(inner, 1.0, 1.0, -1.0, -1.0);
+                    let contrast = rect_adjusted(path, 1.0, 1.0, -1.0, -1.0);
                     if contrast.width > 0.0 && contrast.height > 0.0 {
                         out.push(QPaintCommand::StrokeRoundedRect {
                             rect: contrast,
@@ -705,8 +721,10 @@ fn draw_slider(option: &QStyleOption, slider: &QSlider) -> Vec<QPaintCommand> {
     }
 
     if handle.width > 0.0 && handle.height > 0.0 {
-        let r = rect_adjusted(handle, 1.0, 1.0, -2.0, -2.0);
+        // Same QRect→QRectF inset correction as the groove (see above).
+        let r = rect_adjusted(handle, 1.0, 1.0, -1.0, -1.0);
         if r.width > 0.0 && r.height > 0.0 {
+            let path = fusion_stroke_path(r);
             let fill = if !enabled {
                 window
             } else if slider.pressed {
@@ -720,24 +738,21 @@ fn draw_slider(option: &QStyleOption, slider: &QSlider) -> Vec<QPaintCommand> {
                 window.darker(105)
             };
             out.push(QPaintCommand::FillLinearGradientRect {
-                rect: r,
+                rect: path,
                 radius: 2.0,
                 start: fill.lighter(106),
                 end: grad_end,
                 horizontal: !horizontal,
             });
-            let pen = if option.state.contains(QStyleState::FOCUSED) {
-                highlight.darker(120)
-            } else {
-                window.darker(140)
-            };
+            // Fusion handle outline does not switch to Highlight when focused
+            // (Qt goldens keep Window.darker(140) on the thumb).
             out.push(QPaintCommand::StrokeRoundedRect {
-                rect: r,
+                rect: path,
                 radius: 2.0,
                 width: 1.0,
-                color: pen,
+                color: window.darker(140),
             });
-            let inner = rect_adjusted(r, 1.0, 1.0, -1.0, -1.0);
+            let inner = rect_adjusted(path, 1.0, 1.0, -1.0, -1.0);
             if inner.width > 0.0 && inner.height > 0.0 {
                 out.push(QPaintCommand::StrokeRoundedRect {
                     rect: inner,
@@ -892,11 +907,15 @@ impl QStyle for QFusionStyle {
                 let gradient_base = if hovered { base } else { base.darker(104) };
                 let start = gradient_base.lighter(124);
                 let stop = gradient_base.lighter(102);
+                // Fusion: `translate(0.5,0.5)` + `drawRoundedRect(adjusted(0,0,-1,-1), 2, 2)`.
+                // Centered SDF stroke on that path. Qt's painter AA reads slightly
+                // rounder than analytic r=2; r=2.5 matches the corner footprint.
+                const BUTTON_RADIUS: f32 = 2.5;
                 let r = QRectF::new(
-                    option.rect.x,
-                    option.rect.y,
-                    option.rect.width.max(1.0),
-                    option.rect.height.max(1.0),
+                    option.rect.x + 0.5,
+                    option.rect.y + 0.5,
+                    (option.rect.width - 1.0).max(1.0),
+                    (option.rect.height - 1.0).max(1.0),
                 );
                 let inner = QRectF::new(
                     r.x + 1.0,
@@ -908,13 +927,13 @@ impl QStyle for QFusionStyle {
                     if down {
                         QPaintCommand::FillRoundedRect {
                             rect: r,
-                            radius: 2.0,
+                            radius: BUTTON_RADIUS,
                             color: base.darker(110),
                         }
                     } else {
                         QPaintCommand::FillLinearGradientRect {
                             rect: r,
-                            radius: 2.0,
+                            radius: BUTTON_RADIUS,
                             start,
                             end: stop,
                             horizontal: false,
@@ -922,7 +941,7 @@ impl QStyle for QFusionStyle {
                     },
                     QPaintCommand::StrokeRoundedRect {
                         rect: r,
-                        radius: 2.0,
+                        radius: BUTTON_RADIUS,
                         width: 1.0,
                         color: if enabled {
                             dark_outline
@@ -932,18 +951,17 @@ impl QStyle for QFusionStyle {
                     },
                     QPaintCommand::StrokeRoundedRect {
                         rect: inner,
-                        radius: 2.0,
+                        radius: BUTTON_RADIUS,
                         width: 1.0,
                         color: crate::gui::QColor::rgba8(255, 255, 255, 30),
                     },
                 ]
             }
             QControlElement::LineEdit => {
-                // Qt Fusion `PE_PanelLineEdit` + `PE_FrameLineEdit` (qtbase
-                // qfusionstyle.cpp): sharp Base fill inset by 1px, then an
-                // AA rounded outline on `rect.adjusted(0,0,-1,-1)` with radius
-                // 2. Focus uses `highlight.darker(125)` (not raw Highlight),
-                // a soft inner ring (α=40, r≈1.7), and a 1px top shadow.
+                // Qt Fusion `PE_PanelLineEdit` + `PE_FrameLineEdit`: Base fill
+                // inset 1px; outline is `translate(0.5,0.5)` +
+                // `drawRoundedRect(adjusted(0,0,-1,-1), 2, 2)` — centered SDF
+                // stroke on that path (outer pixel-center ring).
                 let outer = option.rect;
                 let fill_rect = QRectF::new(
                     outer.x + 1.0,
@@ -951,12 +969,9 @@ impl QStyle for QFusionStyle {
                     (outer.width - 2.0).max(1.0),
                     (outer.height - 2.0).max(1.0),
                 );
-                // Fusion: `drawRoundedRect(r.adjusted(0,0,-1,-1), 2, 2)` after
-                // `translate(0.5,0.5)`. Raster stroke uses the half-open
-                // geometry box; AA + path inset live in `fill_rounded_border`.
                 let frame = QRectF::new(
-                    outer.x,
-                    outer.y,
+                    outer.x + 0.5,
+                    outer.y + 0.5,
                     (outer.width - 1.0).max(1.0),
                     (outer.height - 1.0).max(1.0),
                 );
@@ -965,7 +980,6 @@ impl QStyle for QFusionStyle {
                     let mut outline = palette
                         .color(crate::gui::QPaletteRole::Highlight)
                         .darker(125);
-                    // Fusion clamps value ≤ 160 after darkening.
                     if outline.value() > 160 {
                         outline = outline.with_value(160);
                     }
@@ -987,29 +1001,26 @@ impl QStyle for QFusionStyle {
                     },
                     QPaintCommand::StrokeRoundedRect {
                         rect: frame,
-                        // Qt uses r=2 after translate(0.5,0.5); without that
-                        // shift a hair more radius matches the corner cut.
-                        radius: 2.5,
+                        radius: 2.0,
                         width: self.pixel_metric(QPixelMetric::DefaultFrameWidth),
                         color: outline,
                     },
                 ];
                 if focused {
-                    // Fusion soft ring: `adjusted(1,1,-2,-2)`, radius 1.7, α=40.
+                    // Fusion soft ring: `adjusted(1,1,-2,-2)` after translate(0.5).
                     let soft = QRectF::new(
-                        outer.x + 1.0,
-                        outer.y + 1.0,
+                        outer.x + 1.5,
+                        outer.y + 1.5,
                         (outer.width - 3.0).max(1.0),
                         (outer.height - 3.0).max(1.0),
                     );
                     commands.push(QPaintCommand::StrokeRoundedRect {
                         rect: soft,
-                        radius: 2.0,
+                        radius: 1.7,
                         width: 1.0,
                         color: outline.with_alpha(40.0 / 255.0),
                     });
                 }
-                // Fusion `topShadow()` = rgba(0,0,0,18) under the top edge.
                 let shadow_y = outer.y + 1.0;
                 commands.push(QPaintCommand::DrawLine {
                     from: QPointF::new(outer.x + 2.0, shadow_y),
@@ -1048,13 +1059,13 @@ impl QStyle for QFusionStyle {
                 self.draw_primitive(QPrimitiveElement::IndicatorRadioButton, &indicator)
             }
             QControlElement::ComboBox => {
+                // Fusion combo frame: same centered path as LineEdit/PushButton
+                // (`translate(0.5)` + adjusted(0,0,-1,-1), radius 2).
+                // Outline stays Window.darker(140) even when focused — Qt Fusion
+                // does not paint a Highlight frame on QComboBox (unlike QLineEdit).
                 let enabled = option.state.contains(QStyleState::ENABLED);
                 let hovered = option.state.contains(QStyleState::HOVER) && enabled;
-                let has_focus = option.state.contains(QStyleState::FOCUSED);
                 let outline = palette.color(crate::gui::QPaletteRole::Window).darker(140);
-                let highlighted = palette
-                    .color(crate::gui::QPaletteRole::Highlight)
-                    .darker(125);
                 let base = palette
                     .color(crate::gui::QPaletteRole::Button)
                     .lighter(
@@ -1067,31 +1078,21 @@ impl QStyle for QFusionStyle {
                 let gradient_base = if hovered { base } else { base.darker(104) };
                 let start = gradient_base.lighter(124);
                 let stop = gradient_base.lighter(102);
-                let r = QRectF::new(
-                    option.rect.x,
-                    option.rect.y,
-                    option.rect.width.max(1.0),
-                    option.rect.height.max(1.0),
-                );
-                let inner = QRectF::new(
-                    r.x + 1.0,
-                    r.y + 1.0,
-                    (r.width - 2.0).max(1.0),
-                    (r.height - 2.0).max(1.0),
-                );
+                let path = fusion_stroke_path(option.rect);
+                let inner = rect_adjusted(path, 1.0, 1.0, -1.0, -1.0);
                 vec![
                     QPaintCommand::FillLinearGradientRect {
-                        rect: r,
+                        rect: path,
                         radius: 2.0,
                         start,
                         end: stop,
                         horizontal: false,
                     },
                     QPaintCommand::StrokeRoundedRect {
-                        rect: r,
+                        rect: path,
                         radius: 2.0,
                         width: 1.0,
-                        color: if has_focus { highlighted } else { outline },
+                        color: outline,
                     },
                     QPaintCommand::StrokeRoundedRect {
                         rect: inner,

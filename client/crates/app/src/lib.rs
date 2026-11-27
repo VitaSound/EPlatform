@@ -3368,6 +3368,12 @@ impl App {
                     }
                 }
             }
+            // Spin boxes embed a line-edit caret; keep them on `focused` so
+            // blink/`set_cursor_visible` runs (gallery/focus/168–169).
+            "QSpinBox" | "QDoubleSpinBox" => {
+                self.focused = Some((form_id.to_string(), name.clone()));
+                self.table_focus = None;
+            }
             "QTableWidget" | "QListWidget" | "QTreeWidget" | "QComboBox" => {
                 self.focused = None;
                 self.table_focus = Some((form_id.to_string(), name.clone()));

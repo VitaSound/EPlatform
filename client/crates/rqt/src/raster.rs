@@ -2,6 +2,7 @@ use cosmic_text::{Attrs, Buffer, Family, Metrics, Shaping, SwashCache};
 use std::path::Path;
 
 use crate::gui::{with_font_system, QColor, QFont, QPaintCommand, QPointF, QRectF};
+use crate::render::sdf::{rounded_fill_cover, rounded_stroke_cover, sd_rounded_rect};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct QRasterImage {
@@ -258,6 +259,7 @@ fn fill_rounded_border(
     color: QColor,
     clip: Option<QRectF>,
 ) {
+    // Same SDF stroke band as live GPU `ShapePrim::stroke_rounded` (gfx SHAPE_WGSL).
     let left = rect.left();
     let top = rect.top();
     let right = rect.right();
@@ -266,15 +268,16 @@ fn fill_rounded_border(
         return;
     }
     let stroke = width.max(1.0);
-    // Keep fractional radii (Fusion focus soft-ring uses ~1.7).
     let radius = radius.max(0.0).min((right - left).min(bottom - top) / 2.0);
-    let inner_left = left + stroke;
-    let inner_top = top + stroke;
-    let inner_right = right - stroke;
-    let inner_bottom = bottom - stroke;
-    let inner_radius = (radius - stroke).max(0.0);
+    // Centered pen extends stroke/2 outside the path; +1 for AA fringe.
+    let pad = stroke * 0.5 + 1.0;
     let bounds = intersect(
-        QRectF::new(left, top, (right - left).max(0.0), (bottom - top).max(0.0)),
+        QRectF::new(
+            left - pad,
+            top - pad,
+            (right - left + 2.0 * pad).max(0.0),
+            (bottom - top + 2.0 * pad).max(0.0),
+        ),
         clip,
     );
     let Some(bounds) = bounds else {
@@ -286,75 +289,37 @@ fn fill_rounded_border(
     let y1 = bounds.bottom().ceil() as i32;
     for y in y0..y1 {
         for x in x0..x1 {
-            // 4×4 supersampling: radius-2 corners get Fusion-like AA instead of
-            // a hard stairstep that reads as a square frame.
-            let mut cover = 0.0_f32;
-            for sy in [0.125_f32, 0.375, 0.625, 0.875] {
-                for sx in [0.125_f32, 0.375, 0.625, 0.875] {
-                    let px = x as f32 + sx;
-                    let py = y as f32 + sy;
-                    let outer = inside_rounded_rect_f(px, py, left, top, right, bottom, radius);
-                    let inner = inside_rounded_rect_f(
-                        px,
-                        py,
-                        inner_left,
-                        inner_top,
-                        inner_right,
-                        inner_bottom,
-                        inner_radius,
-                    );
-                    if outer && !inner {
-                        cover += 1.0 / 16.0;
-                    }
+            let d = sd_rounded_rect(
+                x as f32 + 0.5,
+                y as f32 + 0.5,
+                left,
+                top,
+                right,
+                bottom,
+                radius,
+            );
+            let cover = if radius <= 0.0 {
+                // Sharp StrokeRect: binary ring (outer box minus inset).
+                let px = x as f32 + 0.5;
+                let py = y as f32 + 0.5;
+                let outer = px >= left && px < right && py >= top && py < bottom;
+                let inner = px >= left + stroke
+                    && px < right - stroke
+                    && py >= top + stroke
+                    && py < bottom - stroke;
+                if outer && !inner {
+                    1.0
+                } else {
+                    0.0
                 }
-            }
-            if cover > 0.0 {
+            } else {
+                rounded_stroke_cover(d, stroke)
+            };
+            if cover > 0.001 {
                 image.blend_pixel(x, y, color.with_alpha(color.alpha * cover), None);
             }
         }
     }
-}
-
-fn inside_rounded_rect(
-    x: f32,
-    y: f32,
-    left: i32,
-    top: i32,
-    right: i32,
-    bottom: i32,
-    radius: f32,
-) -> bool {
-    inside_rounded_rect_f(
-        x,
-        y,
-        left as f32,
-        top as f32,
-        right as f32,
-        bottom as f32,
-        radius,
-    )
-}
-
-fn inside_rounded_rect_f(
-    x: f32,
-    y: f32,
-    left: f32,
-    top: f32,
-    right: f32,
-    bottom: f32,
-    radius: f32,
-) -> bool {
-    if x < left || x >= right || y < top || y >= bottom {
-        return false;
-    }
-    if radius <= 0.0 {
-        return true;
-    }
-    let cx = (left + radius).max((right - radius).min(x));
-    let cy = (top + radius).max((bottom - radius).min(y));
-    let dx = x - cx;
-    let dy = y - cy;
-    dx * dx + dy * dy <= radius * radius
 }
 
 fn fill_triangle(
@@ -512,31 +477,24 @@ fn fill_rounded(
     color: QColor,
     clip: Option<QRectF>,
 ) {
-    let left = rect.left().round() as i32;
-    let top = rect.top().round() as i32;
-    let right = rect.right().round() as i32;
-    let bottom = rect.bottom().round() as i32;
+    // Same SDF fill cover as live GPU `ShapePrim::solid`.
+    let left = rect.left();
+    let top = rect.top();
+    let right = rect.right();
+    let bottom = rect.bottom();
     if right <= left || bottom <= top {
         return;
     }
-    let radius = radius
-        .round()
-        .max(0.0)
-        .min((right - left).min(bottom - top) as f32 / 2.0);
+    let radius = radius.max(0.0).min((right - left).min(bottom - top) / 2.0);
     let Some(bounds) = intersect(
-        QRectF::new(
-            left as f32,
-            top as f32,
-            (right - left) as f32,
-            (bottom - top) as f32,
-        ),
+        QRectF::new(left, top, (right - left).max(0.0), (bottom - top).max(0.0)),
         clip,
     ) else {
         return;
     };
     for y in bounds.top().floor() as i32..bounds.bottom().ceil() as i32 {
         for x in bounds.left().floor() as i32..bounds.right().ceil() as i32 {
-            if inside_rounded_rect(
+            let d = sd_rounded_rect(
                 x as f32 + 0.5,
                 y as f32 + 0.5,
                 left,
@@ -544,8 +502,10 @@ fn fill_rounded(
                 right,
                 bottom,
                 radius,
-            ) {
-                image.blend_pixel(x, y, color, None);
+            );
+            let cover = rounded_fill_cover(d);
+            if cover > 0.001 {
+                image.blend_pixel(x, y, color.with_alpha(color.alpha * cover), None);
             }
         }
     }
@@ -561,40 +521,30 @@ fn fill_linear_gradient(
     horizontal: bool,
     clip: Option<QRectF>,
 ) {
-    let left = rect.left().round() as i32;
-    let top = rect.top().round() as i32;
-    let right = rect.right().round() as i32;
-    let bottom = rect.bottom().round() as i32;
+    let left = rect.left();
+    let top = rect.top();
+    let right = rect.right();
+    let bottom = rect.bottom();
     if right <= left || bottom <= top {
         return;
     }
-    let radius = radius
-        .round()
-        .max(0.0)
-        .min((right - left).min(bottom - top) as f32 / 2.0);
+    let radius = radius.max(0.0).min((right - left).min(bottom - top) / 2.0);
     let Some(bounds) = intersect(
-        QRectF::new(
-            left as f32,
-            top as f32,
-            (right - left) as f32,
-            (bottom - top) as f32,
-        ),
+        QRectF::new(left, top, (right - left).max(0.0), (bottom - top).max(0.0)),
         clip,
     ) else {
         return;
     };
     let span = if horizontal {
-        (right - left).max(1) as f32
+        (right - left).max(1.0)
     } else {
-        (bottom - top).max(1) as f32
+        (bottom - top).max(1.0)
     };
     for y in bounds.top().floor() as i32..bounds.bottom().ceil() as i32 {
-        let column_t = |x: i32| {
-            ((x as f32 + 0.5 - left as f32) / span).clamp(0.0, 1.0)
-        };
-        let row_color = start.lerp(end, ((y as f32 + 0.5 - top as f32) / span).clamp(0.0, 1.0));
+        let column_t = |x: i32| ((x as f32 + 0.5 - left) / span).clamp(0.0, 1.0);
+        let row_color = start.lerp(end, ((y as f32 + 0.5 - top) / span).clamp(0.0, 1.0));
         for x in bounds.left().floor() as i32..bounds.right().ceil() as i32 {
-            if inside_rounded_rect(
+            let d = sd_rounded_rect(
                 x as f32 + 0.5,
                 y as f32 + 0.5,
                 left,
@@ -602,9 +552,15 @@ fn fill_linear_gradient(
                 right,
                 bottom,
                 radius,
-            ) {
-                let color = if horizontal { start.lerp(end, column_t(x)) } else { row_color };
-                image.blend_pixel(x, y, color, None);
+            );
+            let cover = rounded_fill_cover(d);
+            if cover > 0.001 {
+                let color = if horizontal {
+                    start.lerp(end, column_t(x))
+                } else {
+                    row_color
+                };
+                image.blend_pixel(x, y, color.with_alpha(color.alpha * cover), None);
             }
         }
     }

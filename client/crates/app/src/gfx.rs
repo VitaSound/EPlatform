@@ -73,6 +73,7 @@ fn vs(
     return out;
 }
 
+// Keep in sync with `rqt::render::sdf::sd_rounded_box` (CPU review raster).
 fn sd_rounded_box(p: vec2f, b: vec2f, r: f32) -> f32 {
     let rr = min(r, min(b.x, b.y));
     let q = abs(p) - b + vec2f(rr, rr);
@@ -121,15 +122,17 @@ fn fs(in: Out) -> @location(0) vec4f {
 
     var d: f32;
     var cover: f32;
+    // AA ±0.5; strokes are centered pens (d==0 is the path). Sync with
+    // `rqt::render::sdf::rounded_stroke_cover`.
+    let aa = 0.5;
     if (kind > 3.5 && kind < 4.5) {
         // color1 = local endpoints (not a color). Capsule around the segment.
         d = sd_segment(in.local, in.color1.xy, in.color1.zw) - max(stroke, 1.0) * 0.5;
-        cover = 1.0 - smoothstep(-0.75, 0.75, d);
+        cover = 1.0 - smoothstep(-aa, aa, d);
     } else if (kind > 4.5) {
         d = sd_rounded_box(in.local, in.half_size, radius);
-        let outer = 1.0 - smoothstep(-0.75, 0.75, d);
-        let inner = 1.0 - smoothstep(-0.75, 0.75, d + max(stroke, 1.0));
-        cover = clamp(outer - inner, 0.0, 1.0);
+        let half = max(stroke, 1.0) * 0.5;
+        cover = clamp(1.0 - smoothstep(-aa, aa, abs(d) - half), 0.0, 1.0);
         let dash = max(in.color1.x, 1.0);
         let gap = max(in.color1.y, 1.0);
         let period = dash + gap;
@@ -144,11 +147,10 @@ fn fs(in: Out) -> @location(0) vec4f {
             d = sd_rounded_box(in.local, in.half_size, radius);
         }
         if (stroke > 0.0) {
-            let outer = 1.0 - smoothstep(-0.75, 0.75, d);
-            let inner = 1.0 - smoothstep(-0.75, 0.75, d + stroke);
-            cover = clamp(outer - inner, 0.0, 1.0);
+            let half = stroke * 0.5;
+            cover = clamp(1.0 - smoothstep(-aa, aa, abs(d) - half), 0.0, 1.0);
         } else {
-            cover = 1.0 - smoothstep(-0.75, 0.75, d);
+            cover = 1.0 - smoothstep(-aa, aa, d);
         }
     }
     if (cover <= 0.001) {
@@ -1519,17 +1521,31 @@ fn push_shape_quad(
     surface_w: f32,
     surface_h: f32,
 ) {
-    let x = (s.x * scale).round();
-    let y = (s.y * scale).round();
-    let w = (s.w * scale).round().max(1.0);
-    let h = (s.h * scale).round().max(1.0);
+    // Keep fractional device coords. Fusion strokes sit on `*.5` pixel centers;
+    // `f32::round` (half away from zero) turns 179.5→180 and breaks L/R symmetry.
+    let x = s.x * scale;
+    let y = s.y * scale;
+    let w = (s.w * scale).max(1.0);
+    let h = (s.h * scale).max(1.0);
     let radius = (s.radius * scale).max(0.0);
     let stroke = (s.stroke * scale).max(0.0);
     let half = [w * 0.5, h * 0.5];
-    let x0 = x / surface_w * 2.0 - 1.0;
-    let x1 = (x + w) / surface_w * 2.0 - 1.0;
-    let y0 = 1.0 - y / surface_h * 2.0;
-    let y1 = 1.0 - (y + h) / surface_h * 2.0;
+    // Centered pen + AA fringe sit outside the path box — expand the quad but
+    // keep `half_size` as the logical shape so SDF `d==0` stays on the path.
+    let pad = if stroke > 0.0 {
+        (stroke * 0.5 + 1.0).ceil()
+    } else {
+        1.0
+    };
+    let x_q = x - pad;
+    let y_q = y - pad;
+    let w_q = w + 2.0 * pad;
+    let h_q = h + 2.0 * pad;
+    let ext = [half[0] + pad, half[1] + pad];
+    let x0 = x_q / surface_w * 2.0 - 1.0;
+    let x1 = (x_q + w_q) / surface_w * 2.0 - 1.0;
+    let y0 = 1.0 - y_q / surface_h * 2.0;
+    let y1 = 1.0 - (y_q + h_q) / surface_h * 2.0;
     let c0 = color_linear(s.color0);
     // kind 4 packs local endpoints; kind 5 packs dash/gap — scale, don't sRGB.
     let c1 = if s.kind == 4 {
@@ -1552,12 +1568,12 @@ fn push_shape_quad(
     let params = [radius, stroke, s.kind as f32, 0.0];
     // local coords: origin at rect center, Y down (matches paint space).
     let corners = [
-        ([-half[0], -half[1]], [x0, y0]),
-        ([half[0], -half[1]], [x1, y0]),
-        ([-half[0], half[1]], [x0, y1]),
-        ([half[0], -half[1]], [x1, y0]),
-        ([half[0], half[1]], [x1, y1]),
-        ([-half[0], half[1]], [x0, y1]),
+        ([-ext[0], -ext[1]], [x0, y0]),
+        ([ext[0], -ext[1]], [x1, y0]),
+        ([-ext[0], ext[1]], [x0, y1]),
+        ([ext[0], -ext[1]], [x1, y0]),
+        ([ext[0], ext[1]], [x1, y1]),
+        ([-ext[0], ext[1]], [x0, y1]),
     ];
     for (local, pos) in corners {
         out.push(ShapeVert {

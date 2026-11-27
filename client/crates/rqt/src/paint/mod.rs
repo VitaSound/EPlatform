@@ -1542,7 +1542,8 @@ mod tests {
             QPaintCommand::FillLinearGradientRect { rect, .. } => Some(*rect),
             _ => None,
         });
-        assert_eq!(gradient, Some(QRectF::new(5.0, 5.0, 90.0, 30.0)));
+        // Fusion path is translate(0.5)+adjusted(0,0,-1,-1) on the margin box.
+        assert_eq!(gradient, Some(QRectF::new(5.5, 5.5, 89.0, 29.0)));
 
         let edit_text = painter.commands().iter().find_map(|command| match command {
             QPaintCommand::DrawText { rect, text, .. } if text == "abc" => Some(*rect),
@@ -1737,6 +1738,49 @@ mod tests {
             _ => None,
         });
         let caret = caret.expect("caret at Qt advance position");
+        assert!((caret.y - (geometry.y + 4.0)).abs() < 0.01);
+        assert!((caret.height - (geometry.height - 8.0)).abs() < 0.01);
+    }
+
+    #[test]
+    fn focused_spin_box_draws_line_edit_caret_like_qt() {
+        let ui = r#"
+        <ui version="4.0">
+         <class>Dialog</class>
+         <widget class="QDialog" name="Dialog">
+          <property name="geometry"><rect><x>0</x><y>0</y><width>200</width><height>80</height></rect></property>
+          <widget class="QSpinBox" name="spin">
+           <property name="geometry"><rect><x>10</x><y>10</y><width>120</width><height>25</height></rect></property>
+           <property name="value"><number>42</number></property>
+          </widget>
+         </widget>
+        </ui>
+        "#;
+        let (mut tree, root) = load_ui(ui).expect("loads ui");
+        let spin = tree.find_widget("spin").expect("spin");
+        tree.layout(root, tree.widget(root).unwrap().geometry);
+        tree.set_focus(spin);
+        tree.widget_mut(spin).unwrap().cursor_visible = true;
+        // Qt OtherFocusReason leaves the embedded edit cursor at 0.
+        tree.set_cursor_position(spin, 0);
+
+        let geometry = tree.widget(spin).unwrap().geometry;
+        let expected_x = geometry.x + 5.0;
+        let style = QFusionStyle::default();
+        let mut painter = QPainter::new();
+        paint_widget_tree(&tree, root, &style, &mut painter);
+
+        let caret = painter.commands().iter().find_map(|command| match command {
+            QPaintCommand::FillRect { rect, .. }
+                if (rect.width - 1.0).abs() < 0.01
+                    && rect.height > 8.0
+                    && (rect.x - expected_x).abs() < 0.01 =>
+            {
+                Some(*rect)
+            }
+            _ => None,
+        });
+        let caret = caret.expect("spin caret at text inset");
         assert!((caret.y - (geometry.y + 4.0)).abs() < 0.01);
         assert!((caret.height - (geometry.height - 8.0)).abs() < 0.01);
     }
