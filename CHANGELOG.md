@@ -2,6 +2,26 @@
 
 ## 2026-11-27
 
+### Волна: agent-plan 44 — dynamic forms without `.ui`
+
+- **Variant B (declarative).** Lua `require("ui")` → `Ui.dialog` /
+  vbox/hbox/grid/form + gallery controls → Designer-compatible XML →
+  `Form:create(..., { ui_spec | ui_xml })` / host `create_form_xml`.
+- **Variant A (imperative).** `Form:create_empty` + `add_layout` /
+  `add` / `remove`; typed WS `createEmptyForm` / `addLayout` /
+  `addWidget` / `removeWidget` (no `invoke_qt`). Client: named layouts +
+  `QWidgetTree` mutate + empty dialog shell.
+- **Handles.** `form:widget` / `form:add` → `:set` / `:get` / `:on` /
+  `:hide`; string `form:set` retained.
+- **Demos / tests.** `test_dyn_declarative.lua`, `test_dyn_imperative.lua`
+  (no `.ui`); `dynamic_forms_test.exs`; rqt `dynamic_add_layout_and_widget`.
+- **Docs.** `docs/user/Dynamic-Forms.md`; B1 in `questions.md` reversed;
+  plan 44 adequacy bar (not thin MVP).
+- **Tab focus lag.** Text-input queue now wakes the event loop
+  (`__epWakeFromTextInput`); Tab always `preventDefault` + routed through
+  `__epTextInput` (even when textarea inactive) so the browser doesn’t
+  steal DOM focus.
+
 ### Волна: agent-plan 43 — layout / style metrics dedup
 
 - **Рефакторинг только.** Те же Fusion-числа; убраны дублирующие

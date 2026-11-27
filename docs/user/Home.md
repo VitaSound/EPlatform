@@ -9,8 +9,9 @@
 1. [[Quick Start]] — поднять сервер, открыть форму в браузере
 2. [[Supported Widgets]] — что можно класть в `.ui` *(автоген)*
 3. [[Lua Form API]] / [[Lua App API]] / [[Host Lua API]] — API *(автоген)*
-4. [[Architecture]] — слои системы
-5. [[Rendering Pipeline]] / [[Paint Commands]] — отрисовка *(enum’ы автоген)*
+4. [[Dynamic Forms]] — формы без Designer / без файла `.ui`
+5. [[Architecture]] — слои системы
+6. [[Rendering Pipeline]] / [[Paint Commands]] — отрисовка *(enum’ы автоген)*
 
 Справочники виджетов, Lua и paint-команд **пересобираются** из кода (`scripts/gen_user_docs.py`); обзорные страницы правятся вручную в `docs/user/`.
 

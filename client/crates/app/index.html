@@ -346,9 +346,27 @@
         // Registered before the wasm/winit bundle, in capture phase: while
         // the hidden field owns the keyboard, winit must not also receive
         // `keydown` (otherwise every printable key is inserted twice).
+        //
+        // Tab is special: always preventDefault + route through `__epTextInput`
+        // (even when the textarea is inactive). Otherwise the browser moves
+        // DOM focus (canvas / address bar) and focus changes feel lagged when
+        // a button/checkbox has Qt focus.
         window.addEventListener(
           "keydown",
           function (event) {
+            if (event.isComposing || composing || event.key === "Process") {
+              if (active) event.stopImmediatePropagation();
+              return;
+            }
+
+            var shift = event.shiftKey ? "1" : "";
+            if (event.key === "Tab") {
+              event.preventDefault();
+              event.stopImmediatePropagation();
+              send("tab", shift);
+              return;
+            }
+
             if (!active) return;
             // Canvas owns pointer hit-testing; after a click the textarea may
             // be blurred while `active` stays true. Without focus, printable
@@ -357,9 +375,7 @@
             var owned = document.activeElement === ta;
             if (!owned) focusTextInput();
             event.stopImmediatePropagation();
-            if (event.isComposing || composing || event.key === "Process") return;
 
-            var shift = event.shiftKey ? "1" : "";
             if (event.ctrlKey || event.metaKey) {
               // Use `code` so Ctrl+A works on non-Latin layouts (e.g. key "ф").
               if (
@@ -385,10 +401,6 @@
               case "Enter":
                 event.preventDefault();
                 send("commit", "");
-                break;
-              case "Tab":
-                event.preventDefault();
-                send("tab", shift);
                 break;
               case "Escape":
                 event.preventDefault();

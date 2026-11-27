@@ -7,6 +7,7 @@
 - [[Rendering Pipeline]]
 - [[Paint Commands]]
 - [[Supported Widgets]]
+- [[Dynamic Forms]]
 - [[Lua Form API]]
 - [[Lua App API]]
 - [[Host Lua API]]

@@ -3,11 +3,16 @@
 
 Функции, которые Lua видит через Elixir `deflua` (`server/lib/e_platform/lua/api.ex`). Платформенные `Form`/`App` вызывают их внутри.
 
-_Generated 2026-11-27 11:48 UTC._
+_Generated 2026-11-27 12:19 UTC._
 
 | Функция | Аргументы |
 | --- | --- |
 | `create_form` | `application_id, form_id, form_file` |
+| `create_form_xml` | `application_id, form_id, ui_xml` |
+| `create_empty_form` | `application_id, form_id, opts` |
+| `add_layout` | `application_id, form_id, class, object_name, parent, opts` |
+| `add_widget` | `application_id, form_id, class, object_name, parent, opts` |
+| `remove_widget` | `application_id, form_id, object_name` |
 | `close_form` | `application_id, form_id` |
 | `close_modal` | `application_id, form_id, result` |
 | `open_modal_lua` | `application_id, form_id, lua_file, opts` |

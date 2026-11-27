@@ -698,9 +698,10 @@ A продолжает обработку очереди
 
 1. `setTableHeaders`/`setTableData` на поддерживаемых payload.
 2. `setTableLayout`/`groupedHeader` — только после реализации в клиенте.
-3. `addLayout`/`addWidget`/`connectSignal` — только если действительно
-   нужны; иначе не тащить.
-4. `invoke_qt` — только allowlist, не общий мост.
+3. `addLayout`/`addWidget` — **реализованы** (plan 44): typed host
+   commands + `Form:add` / `Form:add_layout` / handles; `connectSignal`
+   не нужен — `form:on` / `formEvent`.
+4. `invoke_qt` — **не** тащим; только allowlist команд.
 
 ### Этап 6. Данные
 

@@ -128,6 +128,9 @@ impl QLayoutItem {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct QLayout {
+    /// Designer / Lua object name (`verticalLayout`, …). Used by dynamic
+    /// `addLayout` / `addWidget` to find the target layout.
+    pub name: String,
     pub kind: QLayoutKind,
     pub spacing: f32,
     pub margins: QMargins,
@@ -153,6 +156,7 @@ pub struct QLayout {
 impl QLayout {
     pub fn new(kind: QLayoutKind) -> Self {
         Self {
+            name: String::new(),
             kind,
             spacing: QLAYOUT_DEFAULT_SPACING,
             margins: QMargins::default(),
@@ -164,6 +168,11 @@ impl QLayout {
             vertical_spacing: None,
             items: Vec::new(),
         }
+    }
+
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = name.into();
+        self
     }
 
     pub fn is_horizontal(&self) -> bool {
@@ -3027,6 +3036,218 @@ impl QWidgetTree {
         self.widgets
             .iter()
             .position(|widget| widget.object_name == object_name)
+    }
+
+    /// Whether a named layout exists anywhere under the tree.
+    pub fn find_layout_name(&self, name: &str) -> bool {
+        self.widgets.iter().any(|widget| {
+            widget
+                .layout
+                .as_ref()
+                .is_some_and(|layout| layout_contains_name(layout, name))
+        })
+    }
+
+    /// Attach a layout to a widget (if it has none) or nest it into a parent layout.
+    ///
+    /// `parent` is a widget objectName or an existing layout name. When `parent`
+    /// is empty, the first root widget (no parent) is used.
+    pub fn add_layout(
+        &mut self,
+        class: &str,
+        name: &str,
+        parent: &str,
+        cell: form_xml::LayoutCell,
+    ) -> Result<(), String> {
+        if name.is_empty() {
+            return Err("addLayout: empty layout name".into());
+        }
+        if self.find_layout_name(name) {
+            return Err(format!("addLayout: layout '{name}' already exists"));
+        }
+        let mut layout = QLayout::new(QLayoutKind::from_class(class)).with_name(name);
+        if parent.is_empty() {
+            let root = self
+                .widgets
+                .iter()
+                .position(|widget| widget.parent.is_none())
+                .ok_or_else(|| "addLayout: no root widget".to_string())?;
+            if self.widgets[root].layout.is_some() {
+                return Err("addLayout: root already has a layout".into());
+            }
+            if matches!(self.widgets[root].class_name.as_str(), "QDialog" | "QWidget") {
+                layout.margins = QMargins::uniform(QLAYOUT_ROOT_MARGIN);
+            }
+            self.widgets[root].layout = Some(layout);
+            return Ok(());
+        }
+        if let Some(widget) = self.find_widget(parent) {
+            if self.widgets[widget].layout.is_some() {
+                return Err(format!(
+                    "addLayout: widget '{parent}' already has a layout; nest into that layout by name"
+                ));
+            }
+            if widget
+                == self
+                    .widgets
+                    .iter()
+                    .position(|node| node.parent.is_none())
+                    .unwrap_or(usize::MAX)
+            {
+                layout.margins = QMargins::uniform(QLAYOUT_ROOT_MARGIN);
+            }
+            self.widgets[widget].layout = Some(layout);
+            return Ok(());
+        }
+        if !self.find_layout_name(parent) {
+            return Err(format!("addLayout: parent '{parent}' not found"));
+        }
+        let inserted = self.with_named_layout_mut(parent, |_owner, host| {
+            host.items.push(QLayoutItem::Layout {
+                layout: Box::new(layout),
+                cell,
+            });
+        });
+        if inserted {
+            Ok(())
+        } else {
+            Err(format!("addLayout: parent layout '{parent}' not found"))
+        }
+    }
+
+    /// Create a widget and insert it into a layout (or reparent under a container).
+    pub fn add_widget(
+        &mut self,
+        class: &str,
+        object_name: &str,
+        parent: &str,
+        cell: form_xml::LayoutCell,
+        properties: &[(String, QVariant)],
+    ) -> Result<QWidgetId, String> {
+        if object_name.is_empty() {
+            return Err("addWidget: empty object name".into());
+        }
+        if self.find_widget(object_name).is_some() {
+            return Err(format!("addWidget: '{object_name}' already exists"));
+        }
+        let id = self.create_widget(class, object_name);
+        for (name, value) in properties {
+            self.set_property(id, name.clone(), value.clone());
+        }
+
+        let parent_key = if parent.is_empty() {
+            // Default: root layout if present, else root widget objectName.
+            // The new widget is itself parentless, so skip `id`.
+            let root = self
+                .widgets
+                .iter()
+                .enumerate()
+                .find_map(|(idx, widget)| {
+                    (idx != id && widget.parent.is_none()).then_some(idx)
+                })
+                .ok_or_else(|| "addWidget: no root widget".to_string())?;
+            if let Some(layout) = self.widgets[root].layout.as_ref() {
+                if layout.name.is_empty() {
+                    self.widgets[root].object_name.clone()
+                } else {
+                    layout.name.clone()
+                }
+            } else {
+                self.widgets[root].object_name.clone()
+            }
+        } else {
+            parent.to_string()
+        };
+        let parent = parent_key.as_str();
+
+        if self.find_layout_name(parent) {
+            let Some(owner) = self.with_named_layout_owner(parent) else {
+                return Err(format!("addWidget: layout '{parent}' not found"));
+            };
+            self.add_child(owner, id);
+            let ok = self.with_named_layout_mut(parent, |_owner, layout| {
+                layout.items.push(QLayoutItem::Widget { id, cell });
+            });
+            if ok {
+                return Ok(id);
+            }
+            return Err(format!("addWidget: layout '{parent}' not found"));
+        }
+
+        if let Some(container) = self.find_widget(parent) {
+            // Prefer the container's own layout when present.
+            if self.widgets[container].layout.is_some() {
+                let layout_name = self.widgets[container]
+                    .layout
+                    .as_ref()
+                    .map(|layout| layout.name.clone())
+                    .unwrap_or_default();
+                self.add_child(container, id);
+                if !layout_name.is_empty() {
+                    let _ = self.with_named_layout_mut(&layout_name, |_owner, layout| {
+                        layout.items.push(QLayoutItem::Widget { id, cell });
+                    });
+                } else if let Some(layout) = self.widgets[container].layout.as_mut() {
+                    layout.items.push(QLayoutItem::Widget { id, cell });
+                }
+                return Ok(id);
+            }
+            self.add_child(container, id);
+            return Ok(id);
+        }
+
+        Err(format!("addWidget: parent '{parent}' not found"))
+    }
+
+    /// Detach a widget from its parent layout / parent list (slot kept in the vec).
+    pub fn remove_widget(&mut self, object_name: &str) -> bool {
+        let Some(id) = self.find_widget(object_name) else {
+            return false;
+        };
+        for widget in &mut self.widgets {
+            if let Some(layout) = widget.layout.as_mut() {
+                remove_widget_from_layout(layout, id);
+            }
+        }
+        if let Some(parent) = self.widgets[id].parent {
+            if let Some(parent) = self.widgets.get_mut(parent) {
+                parent.children.retain(|child| *child != id);
+            }
+        }
+        self.widgets[id].parent = None;
+        self.widgets[id].visible = false;
+        true
+    }
+
+    fn with_named_layout_owner(&self, name: &str) -> Option<QWidgetId> {
+        for (id, widget) in self.widgets.iter().enumerate() {
+            if let Some(layout) = widget.layout.as_ref() {
+                if layout_contains_name(layout, name) {
+                    return Some(id);
+                }
+            }
+        }
+        None
+    }
+
+    fn with_named_layout_mut<F>(&mut self, name: &str, f: F) -> bool
+    where
+        F: FnOnce(QWidgetId, &mut QLayout),
+    {
+        let mut f = Some(f);
+        for id in 0..self.widgets.len() {
+            let Some(layout) = self.widgets[id].layout.as_mut() else {
+                continue;
+            };
+            if with_layout_named_mut(layout, name, &mut |layout| {
+                if let Some(callback) = f.take() {
+                    callback(id, layout);
+                }
+            }) {
+                return true;
+            }
+        }
+        false
     }
 
     pub fn len(&self) -> usize {
@@ -6065,7 +6286,79 @@ fn set_table_property(table: &mut QTableWidget, name: &str, value: &QVariant) ->
     }
 }
 
+/// Minimal empty `QDialog` shell for `createEmptyForm` / empty `createForm`.
+pub fn empty_dialog(
+    object_name: &str,
+    title: &str,
+    width: f32,
+    height: f32,
+) -> (QWidgetTree, QWidgetId) {
+    let mut tree = QWidgetTree::new();
+    let root = tree.create_widget("QDialog", object_name);
+    tree.set_property(
+        root,
+        "windowTitle",
+        QVariant::String(title.to_string()),
+    );
+    let rect = QRectF::new(0.0, 0.0, width.max(1.0), height.max(1.0));
+    tree.widgets[root].geometry = rect;
+    tree.layout(root, rect);
+    (tree, root)
+}
+
+fn layout_contains_name(layout: &QLayout, name: &str) -> bool {
+    if layout.name == name {
+        return true;
+    }
+    layout.items.iter().any(|item| match item {
+        QLayoutItem::Layout { layout, .. } => layout_contains_name(layout, name),
+        _ => false,
+    })
+}
+
+fn with_layout_named_mut(
+    layout: &mut QLayout,
+    name: &str,
+    f: &mut dyn FnMut(&mut QLayout),
+) -> bool {
+    if layout.name == name {
+        f(layout);
+        return true;
+    }
+    for item in &mut layout.items {
+        if let QLayoutItem::Layout { layout: inner, .. } = item {
+            if with_layout_named_mut(inner, name, f) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn remove_widget_from_layout(layout: &mut QLayout, id: QWidgetId) -> bool {
+    let before = layout.items.len();
+    layout.items.retain(|item| match item {
+        QLayoutItem::Widget { id: widget, .. } => *widget != id,
+        _ => true,
+    });
+    if layout.items.len() != before {
+        return true;
+    }
+    for item in &mut layout.items {
+        if let QLayoutItem::Layout { layout: inner, .. } = item {
+            if remove_widget_from_layout(inner, id) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 pub fn load_ui(xml: &str) -> Result<(QWidgetTree, QWidgetId), String> {
+    let xml = xml.trim();
+    if xml.is_empty() {
+        return Ok(empty_dialog("Dialog", "Dialog", 400.0, 300.0));
+    }
     let form = form_xml::parse(xml).map_err(|error| error.to_string())?;
     let mut tree = QWidgetTree::new();
     let root = load_widget(&mut tree, &form.root, None, true, false);
@@ -6254,6 +6547,7 @@ fn load_layout(
         None => QMargins::default(),
     };
     let mut layout = QLayout {
+        name: spec.name.clone(),
         kind,
         spacing: spec
             .spacing
@@ -7825,6 +8119,58 @@ mod tests {
         assert_eq!(tree.text(edit).as_deref(), Some("reset\nvalue"));
         assert_eq!(tree.cursor_position(edit), "reset\nvalue".chars().count());
         assert_eq!(tree.line_edit_selection(edit), None);
+    }
+
+    #[test]
+    fn dynamic_add_layout_and_widget() {
+        let (mut tree, root) = empty_dialog("Dialog", "Dyn", 320.0, 200.0);
+        tree.add_layout("QVBoxLayout", "root", "Dialog", form_xml::LayoutCell::default())
+            .unwrap();
+        let ok = tree
+            .add_widget(
+                "QPushButton",
+                "ok",
+                "root",
+                form_xml::LayoutCell::default(),
+                &[("text".into(), QVariant::String("OK".into()))],
+            )
+            .unwrap();
+        let edit = tree
+            .add_widget(
+                "QLineEdit",
+                "nameEdit",
+                "root",
+                form_xml::LayoutCell::default(),
+                &[],
+            )
+            .unwrap();
+        tree.add_layout("QHBoxLayout", "row", "root", form_xml::LayoutCell::default())
+            .unwrap();
+        let cancel = tree
+            .add_widget(
+                "QPushButton",
+                "cancel",
+                "row",
+                form_xml::LayoutCell::default(),
+                &[("text".into(), QVariant::String("Cancel".into()))],
+            )
+            .unwrap();
+
+        assert!(tree.find_layout_name("root"));
+        assert!(tree.find_layout_name("row"));
+        assert_eq!(tree.find_widget("ok"), Some(ok));
+        assert_eq!(tree.find_widget("nameEdit"), Some(edit));
+        assert_eq!(tree.find_widget("cancel"), Some(cancel));
+        assert_eq!(
+            tree.property(ok, "text"),
+            Some(&QVariant::String("OK".into()))
+        );
+
+        let rect = tree.widget(root).unwrap().geometry;
+        tree.layout(root, rect);
+        assert!(tree.remove_widget("cancel"));
+        assert!(!tree.widget(cancel).unwrap().visible);
+        tree.layout(root, rect);
     }
 
 }

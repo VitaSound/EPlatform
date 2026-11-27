@@ -18,29 +18,112 @@ defmodule EPlatform.Lua.Api do
 
     case File.read(path) do
       {:ok, content} ->
-        mdi = Map.get(session, :mdi, true)
-        placement = if mdi, do: "mdi", else: "top-level"
-
-        payload = %{
-          "command" => "createForm",
-          "application_id" => application_id,
-          "form_id" => form_id,
-          "ui_xml" => content,
-          "role" => session |> Map.get(:role, :form) |> Atom.to_string(),
-          "mode" => session |> Map.get(:mode, :standalone) |> Atom.to_string(),
-          "placement" => placement,
-          "mdi" => mdi,
-          "modal" => Map.get(session, :modal, false),
-          "modal_scope" => Map.get(session, :modal_scope, "none")
-        }
-
-        DialogSession.broadcast(application_id, payload)
-
+        broadcast_create_form(session, application_id, form_id, content)
         form_id
 
       {:error, _} ->
         raise "Ошибка чтения файла ui: #{form_file}"
     end
+  end
+
+  @doc """
+  Create a form from an inline Designer-compatible `.ui` XML string
+  (Variant B / dynamic forms — no file under `priv/qt_forms`).
+  """
+  deflua create_form_xml(application_id, form_id, ui_xml) do
+    session = Process.get(:e_platform_session, %{})
+    xml = ui_xml || ""
+
+    if is_binary(xml) and String.trim(xml) != "" do
+      broadcast_create_form(session, application_id, form_id, xml)
+      form_id
+    else
+      raise "create_form_xml: empty ui_xml"
+    end
+  end
+
+  @doc """
+  Create an empty dialog shell (Variant A). Optional opts:
+  `object_name`, `window_title`, `width`, `height`.
+  """
+  deflua create_empty_form(application_id, form_id, opts), state do
+    session = Process.get(:e_platform_session, %{})
+    opts = normalize_opts(decode_value(state, opts))
+    mdi = Map.get(session, :mdi, true)
+    placement = if mdi, do: "mdi", else: "top-level"
+
+    payload = %{
+      "command" => "createEmptyForm",
+      "application_id" => application_id,
+      "form_id" => form_id,
+      "ui_xml" => "",
+      "object_name" => Map.get(opts, "object_name", "Dialog"),
+      "window_title" => Map.get(opts, "window_title", Map.get(opts, "title", "Dialog")),
+      "width" => Map.get(opts, "width", 400),
+      "height" => Map.get(opts, "height", 300),
+      "role" => session |> Map.get(:role, :form) |> Atom.to_string(),
+      "mode" => session |> Map.get(:mode, :standalone) |> Atom.to_string(),
+      "placement" => placement,
+      "mdi" => mdi,
+      "modal" => Map.get(session, :modal, false),
+      "modal_scope" => Map.get(session, :modal_scope, "none")
+    }
+
+    DialogSession.broadcast(application_id, payload)
+    form_id
+  end
+
+  deflua add_layout(application_id, form_id, class, object_name, parent, opts), state do
+    opts = normalize_opts(decode_value(state, opts))
+
+    DialogSession.broadcast(application_id, %{
+      "command" => "addLayout",
+      "application_id" => application_id,
+      "form_id" => form_id,
+      "class" => class || "",
+      "object_name" => object_name || "",
+      "parent" => parent || "",
+      "row" => Map.get(opts, "row", 0),
+      "column" => Map.get(opts, "column", Map.get(opts, "col", 0)),
+      "row_span" => Map.get(opts, "row_span", Map.get(opts, "rowspan", 1)),
+      "column_span" => Map.get(opts, "column_span", Map.get(opts, "colspan", 1)),
+      "alignment" => Map.get(opts, "alignment", 0)
+    })
+
+    object_name
+  end
+
+  deflua add_widget(application_id, form_id, class, object_name, parent, opts), state do
+    opts = normalize_opts(decode_value(state, opts))
+    {cell, properties} = split_widget_opts(opts)
+
+    DialogSession.broadcast(application_id, %{
+      "command" => "addWidget",
+      "application_id" => application_id,
+      "form_id" => form_id,
+      "class" => class || "",
+      "object_name" => object_name || "",
+      "parent" => parent || "",
+      "row" => Map.get(cell, "row", 0),
+      "column" => Map.get(cell, "column", Map.get(cell, "col", 0)),
+      "row_span" => Map.get(cell, "row_span", Map.get(cell, "rowspan", 1)),
+      "column_span" => Map.get(cell, "column_span", Map.get(cell, "colspan", 1)),
+      "alignment" => Map.get(cell, "alignment", 0),
+      "properties" => to_map(properties)
+    })
+
+    object_name
+  end
+
+  deflua remove_widget(application_id, form_id, object_name) do
+    DialogSession.broadcast(application_id, %{
+      "command" => "removeWidget",
+      "application_id" => application_id,
+      "form_id" => form_id,
+      "object_name" => object_name || ""
+    })
+
+    0
   end
 
   deflua close_form(application_id, form_id) do
@@ -269,6 +352,37 @@ defmodule EPlatform.Lua.Api do
   end
 
   # -- helpers ----------------------------------------------------------------
+
+  defp broadcast_create_form(session, application_id, form_id, ui_xml) do
+    mdi = Map.get(session, :mdi, true)
+    placement = if mdi, do: "mdi", else: "top-level"
+
+    DialogSession.broadcast(application_id, %{
+      "command" => "createForm",
+      "application_id" => application_id,
+      "form_id" => form_id,
+      "ui_xml" => ui_xml,
+      "role" => session |> Map.get(:role, :form) |> Atom.to_string(),
+      "mode" => session |> Map.get(:mode, :standalone) |> Atom.to_string(),
+      "placement" => placement,
+      "mdi" => mdi,
+      "modal" => Map.get(session, :modal, false),
+      "modal_scope" => Map.get(session, :modal_scope, "none")
+    })
+  end
+
+  defp split_widget_opts(opts) when is_map(opts) do
+    cell_keys = ~w(row column col row_span rowspan column_span colspan alignment parent)
+    cell = Map.take(opts, cell_keys)
+    properties =
+      opts
+      |> Map.drop(cell_keys ++ ["parent"])
+      |> Map.new(fn {k, v} -> {to_key(k), v} end)
+
+    {cell, properties}
+  end
+
+  defp split_widget_opts(_opts), do: {%{}, %{}}
 
   @doc """
   Sends the modal result to the parent process exactly once.

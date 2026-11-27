@@ -4,6 +4,60 @@
 local Form = {}
 Form.__index = Form
 
+local WidgetHandle = {}
+WidgetHandle.__index = WidgetHandle
+
+local function handle_name(handle_or_name)
+    if type(handle_or_name) == "table" and handle_or_name.object_name then
+        return handle_or_name.object_name
+    end
+    return handle_or_name
+end
+
+function WidgetHandle.new(form, object_name, kind)
+    return setmetatable({
+        form = form,
+        object_name = object_name,
+        kind = kind or "widget",
+    }, WidgetHandle)
+end
+
+function WidgetHandle:set(property, value)
+    return self.form:set(self.object_name, property, value)
+end
+
+function WidgetHandle:get(property)
+    return self.form:get(self.object_name, property)
+end
+
+function WidgetHandle:on(event_type, callback)
+    return self.form:on(self.object_name, event_type, callback)
+end
+
+function WidgetHandle:set_enabled(enabled)
+    return self.form:setEnabled(self.object_name, enabled)
+end
+
+function WidgetHandle:set_visible(visible)
+    return self.form:setVisible(self.object_name, visible)
+end
+
+function WidgetHandle:hide()
+    return self:set_visible(false)
+end
+
+function WidgetHandle:show()
+    return self:set_visible(true)
+end
+
+function WidgetHandle:set_text(text)
+    return self.form:setText(self.object_name, text)
+end
+
+function WidgetHandle:set_checked(checked)
+    return self.form:setChecked(self.object_name, checked)
+end
+
 -- Конструктор
 function Form.new()
     local self = setmetatable({}, Form)
@@ -20,7 +74,9 @@ function Form.new()
     return self
 end
 
--- Создаём форму на GUI
+-- Создаём форму на GUI.
+-- Third arg may be a `.ui` filename, or opts:
+--   { ui_file = "…" } | { ui_xml = "…" } | { ui_spec = Ui.dialog{…} }
 function Form:create(application_id, form_id, ui_file_or_opts)
     local opts = {}
     local ui_file = ui_file_or_opts
@@ -44,7 +100,92 @@ function Form:create(application_id, form_id, ui_file_or_opts)
         self.open_opts = opts.open_opts
     end
 
+    if opts.ui_xml ~= nil then
+        create_form_xml(self.application_id, self.form_id, opts.ui_xml)
+        return
+    end
+
+    if opts.ui_spec ~= nil then
+        local Ui = require("ui")
+        local xml = Ui.to_xml(opts.ui_spec)
+        create_form_xml(self.application_id, self.form_id, xml)
+        return
+    end
+
     create_form(self.application_id, self.form_id, self.ui_file)
+end
+
+-- Empty dialog shell (Variant A). Same opts keys as create_empty_form host API.
+function Form:create_empty(application_id, form_id, opts)
+    opts = opts or {}
+    self.application_id = application_id
+    self.form_id = form_id
+    self.ui_file = nil
+    if opts.mdi ~= nil then
+        self.mdi = opts.mdi and true or false
+    end
+    if opts.modal ~= nil then
+        self.modal = opts.modal and true or false
+    end
+    create_empty_form(self.application_id, self.form_id, opts)
+end
+
+function Form:widget(object_name)
+    return WidgetHandle.new(self, object_name, "widget")
+end
+
+function Form:find(object_name)
+    return self:widget(object_name)
+end
+
+local function copy_without_parent(opts)
+    local out = {}
+    for k, v in pairs(opts or {}) do
+        if k ~= "parent" then
+            out[k] = v
+        end
+    end
+    return out
+end
+
+function Form:add_layout(class, object_name, opts)
+    opts = opts or {}
+    local parent = ""
+    if opts.parent ~= nil then
+        parent = handle_name(opts.parent) or ""
+    end
+    add_layout(
+        self.application_id,
+        self.form_id,
+        class,
+        object_name,
+        parent,
+        copy_without_parent(opts)
+    )
+    return WidgetHandle.new(self, object_name, "layout")
+end
+
+function Form:add(class, object_name, opts)
+    opts = opts or {}
+    local parent = ""
+    if opts.parent ~= nil then
+        parent = handle_name(opts.parent) or ""
+    end
+    -- Host splits cell keys from widget properties.
+    add_widget(
+        self.application_id,
+        self.form_id,
+        class,
+        object_name,
+        parent,
+        copy_without_parent(opts)
+    )
+    return WidgetHandle.new(self, object_name, "widget")
+end
+
+function Form:remove(handle_or_name)
+    local name = handle_name(handle_or_name)
+    remove_widget(self.application_id, self.form_id, name)
 end
 
 -- Закрываем форму

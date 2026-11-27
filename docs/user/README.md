@@ -12,6 +12,7 @@ GitHub Wiki is a published mirror.
 | `Quick-Start.md` | Quick Start |
 | `Architecture.md` | Architecture |
 | `Rendering-Pipeline.md` | Rendering Pipeline |
+| `Dynamic-Forms.md` | Dynamic Forms (no `.ui`) |
 | `gen_notes.yaml` | Notes merged into generated pages |
 
 ## Generated (`scripts/gen_user_docs.py`)

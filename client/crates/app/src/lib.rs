@@ -820,7 +820,10 @@ impl App {
             .and_then(|f| f.as_str())
             .unwrap_or("");
         match command {
-            "createForm" => self.on_create_form(payload),
+            "createForm" | "createEmptyForm" => self.on_create_form(payload),
+            "addLayout" => self.on_add_layout(payload),
+            "addWidget" => self.on_add_widget(payload),
+            "removeWidget" => self.on_remove_widget(payload),
             "loadMainWindow" => self.on_load_main_window(payload),
             "setProperty" => {
                 let object_name = str_field(payload, "object_name");
@@ -1386,11 +1389,38 @@ impl App {
             WindowLayer::Mdi
         };
 
-        let (mut tree, root) = match rqt::widgets::load_ui(xml) {
-            Ok(form) => form,
-            Err(err) => {
-                Self::log(format!("createForm parse error: {err}"));
-                return;
+        let (mut tree, root) = if payload
+            .get("command")
+            .and_then(|v| v.as_str())
+            == Some("createEmptyForm")
+            || xml.trim().is_empty()
+        {
+            let name = payload
+                .get("object_name")
+                .and_then(|v| v.as_str())
+                .filter(|name| !name.is_empty())
+                .unwrap_or("Dialog");
+            let title = payload
+                .get("window_title")
+                .and_then(|v| v.as_str())
+                .filter(|title| !title.is_empty())
+                .unwrap_or("Dialog");
+            let width = payload
+                .get("width")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(400.0) as f32;
+            let height = payload
+                .get("height")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(300.0) as f32;
+            rqt::widgets::empty_dialog(name, title, width, height)
+        } else {
+            match rqt::widgets::load_ui(xml) {
+                Ok(form) => form,
+                Err(err) => {
+                    Self::log(format!("createForm parse error: {err}"));
+                    return;
+                }
             }
         };
         let form_area = tree
@@ -1509,6 +1539,63 @@ impl App {
             self.editing = None;
         }
         self.focus_initial_form(&form_id);
+    }
+
+    fn on_add_layout(&mut self, payload: &serde_json::Value) {
+        let form_id = str_field(payload, "form_id");
+        let class = str_field(payload, "class");
+        let object_name = str_field(payload, "object_name");
+        let parent = str_field(payload, "parent");
+        let cell = layout_cell_from_payload(payload);
+        let Some(form) = self.forms.get_mut(form_id) else {
+            Self::log(format!("addLayout: unknown form {form_id}"));
+            return;
+        };
+        match form.tree.add_layout(class, object_name, parent, cell) {
+            Ok(()) => {
+                form.tree.relayout(form.root);
+                Self::log(format!("addLayout {object_name} class={class} parent={parent}"));
+            }
+            Err(err) => Self::log(format!("addLayout error: {err}")),
+        }
+    }
+
+    fn on_add_widget(&mut self, payload: &serde_json::Value) {
+        let form_id = str_field(payload, "form_id");
+        let class = str_field(payload, "class");
+        let object_name = str_field(payload, "object_name");
+        let parent = str_field(payload, "parent");
+        let cell = layout_cell_from_payload(payload);
+        let properties = properties_from_payload(payload.get("properties"));
+        let Some(form) = self.forms.get_mut(form_id) else {
+            Self::log(format!("addWidget: unknown form {form_id}"));
+            return;
+        };
+        match form
+            .tree
+            .add_widget(class, object_name, parent, cell, &properties)
+        {
+            Ok(_) => {
+                form.tree.relayout(form.root);
+                Self::log(format!("addWidget {object_name} class={class} parent={parent}"));
+            }
+            Err(err) => Self::log(format!("addWidget error: {err}")),
+        }
+    }
+
+    fn on_remove_widget(&mut self, payload: &serde_json::Value) {
+        let form_id = str_field(payload, "form_id");
+        let object_name = str_field(payload, "object_name");
+        let Some(form) = self.forms.get_mut(form_id) else {
+            Self::log(format!("removeWidget: unknown form {form_id}"));
+            return;
+        };
+        if form.tree.remove_widget(object_name) {
+            form.tree.relayout(form.root);
+            Self::log(format!("removeWidget {object_name}"));
+        } else {
+            Self::log(format!("removeWidget: '{object_name}' not found"));
+        }
     }
 
     /// Collect the Qt-painted form commands into an ordered display list.
@@ -2634,10 +2721,14 @@ impl App {
     }
 
     /// Apply messages from the hidden mobile field in arrival order.
+    /// Returns `true` when at least one action was applied (caller must dirty paint).
     #[cfg(target_arch = "wasm32")]
-    fn drain_web_text_input(&mut self) {
+    fn drain_web_text_input(&mut self) -> bool {
         let events: Vec<(String, String)> =
             WEB_TEXT_INPUT.with(|queue| queue.borrow_mut().drain(..).collect());
+        if events.is_empty() {
+            return false;
+        }
         for (kind, text) in events {
             let (action, shift) = text_input_action(&kind, &text);
             let previous_shift = self.shift;
@@ -2645,10 +2736,13 @@ impl App {
             self.apply_key_action(action);
             self.shift = previous_shift;
         }
+        true
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn drain_web_text_input(&mut self) {}
+    fn drain_web_text_input(&mut self) -> bool {
+        false
+    }
 
     /// Keyboard half of the event loop: an open cell edit first, then
     /// typing into a selected table cell, then the focused line/plain edit.
@@ -3558,6 +3652,17 @@ fn install_web_text_input() {
     };
     let callback = Closure::<dyn FnMut(String, String)>::new(|kind: String, text: String| {
         WEB_TEXT_INPUT.with(|queue| queue.borrow_mut().push((kind, text)));
+        // JS capture stops the event before winit; wake immediately so
+        // redraw/`about_to_wait` drain Tab and typing without caret lag.
+        if let Some(win) = web_sys::window() {
+            if let Ok(wake) =
+                js_sys::Reflect::get(win.as_ref(), &JsValue::from_str("__epWakeFromTextInput"))
+            {
+                if let Ok(wake) = wake.dyn_into::<js_sys::Function>() {
+                    let _ = wake.call0(&JsValue::NULL);
+                }
+            }
+        }
     });
     let _ = js_sys::Reflect::set(
         window.as_ref(),
@@ -3574,6 +3679,24 @@ fn install_web_text_input() {
             let _ = flush.call0(&JsValue::NULL);
         }
     }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn install_web_text_wake(window: Arc<Window>) {
+    use wasm_bindgen::{closure::Closure, JsCast, JsValue};
+
+    let Some(dom_window) = web_sys::window() else {
+        return;
+    };
+    let callback = Closure::<dyn FnMut()>::new(move || {
+        window.request_redraw();
+    });
+    let _ = js_sys::Reflect::set(
+        dom_window.as_ref(),
+        &JsValue::from_str("__epWakeFromTextInput"),
+        callback.as_ref().unchecked_ref(),
+    );
+    callback.forget();
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -3630,6 +3753,41 @@ fn now_ms() -> f64 {
 
 fn str_field<'a>(payload: &'a serde_json::Value, key: &str) -> &'a str {
     payload.get(key).and_then(|v| v.as_str()).unwrap_or("")
+}
+
+fn i64_field(payload: &serde_json::Value, key: &str, default: i64) -> i64 {
+    payload
+        .get(key)
+        .and_then(|v| v.as_i64().or_else(|| v.as_f64().map(|n| n as i64)))
+        .unwrap_or(default)
+}
+
+fn layout_cell_from_payload(payload: &serde_json::Value) -> form_xml::LayoutCell {
+    let cell = payload.get("cell").unwrap_or(payload);
+    form_xml::LayoutCell {
+        row: i64_field(cell, "row", 0),
+        column: i64_field(cell, "column", i64_field(cell, "col", 0)),
+        row_span: i64_field(cell, "row_span", i64_field(cell, "rowspan", 1)).max(1),
+        column_span: i64_field(cell, "column_span", i64_field(cell, "colspan", 1)).max(1),
+        alignment: i64_field(cell, "alignment", 0).max(0) as u32,
+    }
+}
+
+fn properties_from_payload(
+    value: Option<&serde_json::Value>,
+) -> Vec<(String, rqt::core::QVariant)> {
+    let Some(value) = value else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    if let Some(map) = value.as_object() {
+        for (key, raw) in map {
+            if let Some(prop) = prop_from_json(Some(raw)) {
+                out.push((key.clone(), rqt::core::QVariant::from_prop(&prop)));
+            }
+        }
+    }
+    out
 }
 
 /// Wire JSON value → typed property (geometry/size objects included).
@@ -4771,6 +4929,9 @@ impl ApplicationHandler for App {
                 }
             }
 
+            #[cfg(target_arch = "wasm32")]
+            install_web_text_wake(window.clone());
+
             self.window = Some(window);
         }
     }
@@ -4833,6 +4994,11 @@ impl ApplicationHandler for App {
             WindowEvent::RedrawRequested => {
                 #[cfg(target_arch = "wasm32")]
                 self.sync_canvas_geometry();
+                // Drain before paint so Tab/focus from the hidden textarea
+                // lands in the same frame as the wake from `__epTextInput`.
+                if self.drain_web_text_input() {
+                    self.paint_dirty = true;
+                }
                 self.drain_socket_events();
                 self.refresh_viewports();
                 let caret_visible = if let Some((form_id, name)) = self.focused.clone() {
@@ -5020,18 +5186,7 @@ impl ApplicationHandler for App {
             }
         }
         self.sync_web_text_input();
-        let had_text_events = {
-            #[cfg(target_arch = "wasm32")]
-            {
-                WEB_TEXT_INPUT.with(|queue| !queue.borrow().is_empty())
-            }
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                false
-            }
-        };
-        self.drain_web_text_input();
-        if had_text_events {
+        if self.drain_web_text_input() {
             self.mark_paint_dirty();
         }
         self.drain_socket_events();

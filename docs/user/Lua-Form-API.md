@@ -4,11 +4,17 @@
 Объект формы: `server/priv/lua_modules/form.lua`.
 Методы — сахар над host API. Таблица ниже **сгенерирована** из исходников.
 
-_Generated 2026-11-27 11:48 UTC from `server/priv/lua_modules/form.lua`._
+_Generated 2026-11-27 12:19 UTC from `server/priv/lua_modules/form.lua`._
 
 | Метод | Аргументы | Комментарий в коде |
 | --- | --- | --- |
-| `Form:create` | `application_id, form_id, ui_file_or_opts` | Создаём форму на GUI |
+| `Form:create` | `application_id, form_id, ui_file_or_opts` | Создаём форму на GUI. Third arg may be a `.ui` filename, or opts: { ui_file = "…" } \| { ui_xml = "…" } \| { ui_spec = Ui.dialog{…} } |
+| `Form:create_empty` | `application_id, form_id, opts` | Empty dialog shell (Variant A). Same opts keys as create_empty_form host API. |
+| `Form:widget` | `object_name` |  |
+| `Form:find` | `object_name` |  |
+| `Form:add_layout` | `class, object_name, opts` |  |
+| `Form:add` | `class, object_name, opts` |  |
+| `Form:remove` | `handle_or_name` |  |
 | `Form:close` | — | Закрываем форму |
 | `Form:open_modal_lua` | `lua_file, opts` | Открываем модальную форму и ждём её результат. Вызов блокирует текущий Lua-процесс, но дочерняя форма живёт в своём GenServer, поэтому вложенные модалки не приводят к дедлоку. |
 | `Form:finish_modal` | `result` | Закрываем модальную форму и возвращаем результат родителю. |
