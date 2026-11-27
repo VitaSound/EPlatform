@@ -11,8 +11,20 @@ use crate::scroll::{
     QOrientation, QScrollAreaLayout, QScrollBar, QScrollBarPolicy, QScrollBarSubControl,
 };
 use crate::slider::{QSlider, QSLIDER_HINT_LENGTH, QSLIDER_THICKNESS};
+use crate::style::{QFusionStyle, QPixelMetric, QStyle};
 
 pub type QWidgetId = usize;
+
+/// Qt Designer / Fusion default box spacing when `.ui` omits it
+/// (`PM_LayoutHorizontalSpacing` / `PM_LayoutVerticalSpacing`).
+pub const QLAYOUT_DEFAULT_SPACING: f32 = 6.0;
+/// Root form margins when `.ui` omits them (Qt Designer default).
+pub const QLAYOUT_ROOT_MARGIN: f32 = 11.0;
+/// Nested layout margins when `.ui` omits them.
+pub const QLAYOUT_NESTED_MARGIN: f32 = 9.0;
+/// Vertical padding added to font height for shared control `sizeHint`s
+/// (line edit, progress bar, generic fallback).
+const QSIZEHINT_FONT_V_PAD: f32 = 8.0;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum QSizePolicy {
@@ -130,10 +142,10 @@ pub struct QLayout {
     /// (`AlignLeft | AlignTop`).
     pub form_alignment: u32,
     /// Explicit `QFormLayout::horizontalSpacing`; `None` falls back to
-    /// `spacing` and then to the style default (6).
+    /// `spacing` and then to [`QLAYOUT_DEFAULT_SPACING`].
     pub horizontal_spacing: Option<f32>,
     /// Explicit `QFormLayout::verticalSpacing`; `None` falls back to
-    /// `spacing` and then to the style default (6).
+    /// `spacing` and then to [`QLAYOUT_DEFAULT_SPACING`].
     pub vertical_spacing: Option<f32>,
     pub items: Vec<QLayoutItem>,
 }
@@ -142,7 +154,7 @@ impl QLayout {
     pub fn new(kind: QLayoutKind) -> Self {
         Self {
             kind,
-            spacing: 6.0,
+            spacing: QLAYOUT_DEFAULT_SPACING,
             margins: QMargins::default(),
             field_growth_policy: form_xml::FieldGrowthPolicy::default(),
             row_wrap_policy: form_xml::RowWrapPolicy::default(),
@@ -170,7 +182,7 @@ impl QLayout {
         match self.horizontal_spacing {
             Some(value) if value >= 0.0 => value,
             _ if self.spacing >= 0.0 => self.spacing,
-            _ => 6.0,
+            _ => QLAYOUT_DEFAULT_SPACING,
         }
     }
 
@@ -178,7 +190,7 @@ impl QLayout {
         match self.vertical_spacing {
             Some(value) if value >= 0.0 => value,
             _ if self.spacing >= 0.0 => self.spacing,
-            _ => 6.0,
+            _ => QLAYOUT_DEFAULT_SPACING,
         }
     }
 }
@@ -236,7 +248,7 @@ pub const QTOOLBOX_TAB_V_PAD: f32 = 8.0;
 
 /// Spacing between toolbox headers / content — Qt `QVBoxLayout` default
 /// (Fusion `PM_LayoutVerticalSpacing`).
-pub const QTOOLBOX_SPACING: f32 = 6.0;
+pub const QTOOLBOX_SPACING: f32 = QLAYOUT_DEFAULT_SPACING;
 
 /// `QToolBox` accordion state. Pages are direct children; labels come from
 /// each page's `<attribute name="label">`. Only one page is open (Qt default).
@@ -669,7 +681,7 @@ impl QWidget {
             }
             "QLineEdit" => QSizeF::new(
                 (17.0 * metrics.horizontal_advance("x")).ceil() + 5.0,
-                (font_height + 8.0).round(),
+                (font_height + QSIZEHINT_FONT_V_PAD).round(),
             ),
             "QPushButton" => {
                 let icon_extra = self
@@ -731,7 +743,7 @@ impl QWidget {
                 // (Fusion probe: 99×24 with DejaVu Sans 14).
                 let digit = metrics.horizontal_advance("0");
                 let width = (QPROGRESS_CHUNK_W * 7.0 + digit * 4.0).round();
-                let height = (font_height + 8.0).round();
+                let height = (font_height + QSIZEHINT_FONT_V_PAD).round();
                 match self
                     .progress
                     .as_deref()
@@ -754,7 +766,7 @@ impl QWidget {
                 // 22 (root margins) for gallery/text/group_long_title.
                 QSizeF::new(title_width + 30.0, font_height + 16.0)
             }
-            _ => QSizeF::new(100.0, font_height + 8.0),
+            _ => QSizeF::new(100.0, font_height + QSIZEHINT_FONT_V_PAD),
         }
     }
 }
@@ -2227,8 +2239,7 @@ impl QWidgetTree {
     }
 
     fn tab_bar_height() -> f32 {
-        // Matches `QFusionStyle::pixel_metric(TabBarHeight)` / Qt probe (~28).
-        28.0
+        QFusionStyle::default().pixel_metric(QPixelMetric::TabBarHeight)
     }
 
     /// Sync page visibility to `tabs.current_index` (only the current page
@@ -6146,12 +6157,12 @@ fn load_widget(
         let explicit_margins = layout.margins.is_some();
         let mut layout = load_layout(tree, layout, id, is_root);
         if !is_root && !explicit_margins {
-            layout.margins = QMargins::uniform(9.0);
+            layout.margins = QMargins::uniform(QLAYOUT_NESTED_MARGIN);
         }
         if spec.class == "QGroupBox" {
             let metrics = QFontMetrics::new(&tree.widgets[id].font);
             layout.margins.left += 3.0;
-            layout.margins.top += metrics.height() + 6.0;
+            layout.margins.top += metrics.height() + QLAYOUT_DEFAULT_SPACING;
             layout.margins.right += 3.0;
             layout.margins.bottom += 3.0;
         }
@@ -6239,12 +6250,15 @@ fn load_layout(
         Some((left, top, right, bottom)) => {
             QMargins::new(left as f32, top as f32, right as f32, bottom as f32)
         }
-        None if is_root => QMargins::uniform(11.0),
+        None if is_root => QMargins::uniform(QLAYOUT_ROOT_MARGIN),
         None => QMargins::default(),
     };
     let mut layout = QLayout {
         kind,
-        spacing: spec.spacing.map(|value| value as f32).unwrap_or(6.0),
+        spacing: spec
+            .spacing
+            .map(|value| value as f32)
+            .unwrap_or(QLAYOUT_DEFAULT_SPACING),
         margins,
         field_growth_policy: spec.field_growth_policy,
         row_wrap_policy: spec.row_wrap_policy,

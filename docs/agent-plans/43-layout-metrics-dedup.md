@@ -1,10 +1,19 @@
 # 43 — Layout / style metrics: dedup + Qt-shaped sources
 
-Status: ready
+Status: done
 Priority: P2
 Depends-on: []
 Blocks: []
 Estimate: M
+
+### Status notes
+
+Consolidated (same Fusion numbers, named sources):
+- Layout defaults → `QLAYOUT_DEFAULT_SPACING` / `QLAYOUT_ROOT_MARGIN` / `QLAYOUT_NESTED_MARGIN`; `QTOOLBOX_SPACING` aliases spacing.
+- `tab_bar_height()` → `QFusionStyle::pixel_metric(TabBarHeight)`.
+- `QPixelMetric::ScrollBar*` / `SliderThickness|Length` → domain consts `QSCROLLBAR_*` / `QSLIDER_THICKNESS`.
+- Check/radio text inset → `ButtonMargin`; shared sizeHint v-pad → `QSIZEHINT_FONT_V_PAD`.
+- `cargo test -p rqt --lib`: 175 passed.
 
 ## Goal
 
@@ -68,9 +77,18 @@ Known at plan creation; treat as hints only:
 
 ## Current findings
 
-_(Fill during re-audit; replace this stub.)_
+Re-audit of `client/crates/rqt` (2026-03-27). Seed items still present; additional repeats below. Scope = shared/repeated only.
 
-- …
+| Area | Paths | Symptom |
+|------|-------|---------|
+| Layout defaults | `widgets.rs` `QLayout::new` (~145), `form_*_spacing` (~173/181), `load_widget` nested margins (~6149), groupbox top pad (~6154), `load_layout` root/spacing (~6242/6247) | Literals `6.0` / `9.0` / `11.0` with no named source; `QTOOLBOX_SPACING` also `6.0` separately |
+| Tab bar chrome | `widgets.rs` `tab_bar_height()` (~2229) vs `style.rs` `QPixelMetric::TabBarHeight` (~764) vs `paint/tabs.rs` (already `pixel_metric`) | Helper hardcodes `28.0` while style + paint already agree |
+| Scrollbar chrome | `scroll.rs` `QSCROLLBAR_EXTENT`/`SLIDER_MIN` (~3–4) vs `style.rs` `ScrollBarExtent`/`ScrollBarSliderMin` (~760–761) | Same literals twice; callers correctly use domain consts |
+| Slider chrome | `slider.rs` `QSLIDER_THICKNESS` (~6) vs `style.rs` `SliderThickness`/`SliderLength` (~762) | Same `15.0` twice (domain already SoT for layout) |
+| Checkbox/radio text inset | `paint/mod.rs` (~1152), `paint/focus.rs` (~49); test mirror in `paint/mod.rs` (~1620) | `font.pixel_size + 6.0` — `6.0` matches `ButtonMargin` |
+| Size-hint v-pad | `widgets.rs` `size_hint_from_props` LineEdit (~672), ProgressBar (~734), fallback (~757) | Shared `font_height + 8.0` unnamed |
+
+**Left alone (out of scope / not duplicates):** one-off paint nudges; QTABLE_* vs QVIEW_* parallel domain sizes; pushbutton `+9` / combo `+8.7` / spin `25` probe-only hints; MDI `INSET_Y = 28` (cascade inset, not tab bar); unused `MenuItemHeight` definition.
 
 ## Files to touch
 
@@ -85,11 +103,11 @@ Exact list comes from **Current findings**, not this table alone.
 
 ## Tests / acceptance
 
-- [ ] Re-audit section filled with current paths before merge of the cleanup
-- [ ] No intentional behavior/visual change vs prior Fusion defaults (same numbers, better sources)
-- [ ] Call sites for consolidated metrics use const / `pixel_metric`, not raw duplicates
-- [ ] `cargo test` (workspace or scoped `rqt` + affected crates)
-- [ ] Quick gallery smoke if layout defaults moved
+- [x] Re-audit section filled with current paths before merge of the cleanup
+- [x] No intentional behavior/visual change vs prior Fusion defaults (same numbers, better sources)
+- [x] Call sites for consolidated metrics use const / `pixel_metric`, not raw duplicates
+- [x] `cargo test` (workspace or scoped `rqt` + affected crates)
+- [x] Quick gallery smoke if layout defaults moved (numbers unchanged; no visual delta expected)
 
 ## Agent handoff prompt (copy-paste)
 

@@ -4,7 +4,9 @@ use crate::qss::{
     QBackgroundRepeat, QBackgroundVAlign, QBorderImage, QBorderImageMode, QBorderSide,
     QStyleDeclarations, QStyleSheet, QTextAlign,
 };
-use crate::style::{QControlElement, QPrimitiveElement, QStyle, QStyleOption, QStyleState};
+use crate::style::{
+    QControlElement, QPixelMetric, QPrimitiveElement, QStyle, QStyleOption, QStyleState,
+};
 use crate::widgets::{wrap_text_lines, QWidget, QWidgetId, QWidgetTree, QCOMBO_POPUP_ROW_H};
 
 mod focus;
@@ -141,7 +143,7 @@ fn paint_widget(
     paint_line_edit_selection(widget, painter, &qss);
     paint_widget_text(widget, painter, style, &option, &qss);
     paint_line_edit_caret(widget, painter, &qss);
-    paint_focus_indicators(widget, painter, &qss);
+    paint_focus_indicators(widget, painter, style, &qss);
 
     // Keep the widget's clip active while painting children: Qt clips a
     // child to every ancestor, so content that overflows a small form does
@@ -1149,7 +1151,7 @@ fn paint_widget_text(
         }
         "QLineEdit" => {}
         "QCheckBox" | "QRadioButton" => {
-            text_x += widget.font.pixel_size + 6.0;
+            text_x += widget.font.pixel_size + style.pixel_metric(QPixelMetric::ButtonMargin);
         }
         "QLabel" => {
             text_x = aligned_text_x(content, text_width, align.horizontal);
@@ -1617,8 +1619,9 @@ mod tests {
         let font = tree.widget(check).unwrap().font.clone();
         let metrics = QFontMetrics::new(&font);
         let text = "CheckBox";
-        let text_x = geometry.x + font.pixel_size + 6.0;
         let style = QFusionStyle::default();
+        let text_x =
+            geometry.x + font.pixel_size + style.pixel_metric(QPixelMetric::ButtonMargin);
         let mut painter = QPainter::new();
         paint_widget_tree(&tree, root, &style, &mut painter);
         let rings = painter

@@ -2,6 +2,18 @@
 
 ## 2026-11-27
 
+### Волна: agent-plan 43 — layout / style metrics dedup
+
+- **Рефакторинг только.** Те же Fusion-числа; убраны дублирующие
+  литералы. Поведение/картинка без изменений.
+- **Layout defaults.** `QLAYOUT_DEFAULT_SPACING` / `ROOT_MARGIN` /
+  `NESTED_MARGIN`; `QTOOLBOX_SPACING` алиасит spacing.
+- **Chrome.** `tab_bar_height()` → `pixel_metric(TabBarHeight)`;
+  scrollbar/slider metrics → `QSCROLLBAR_*` / `QSLIDER_THICKNESS`.
+- **Paint / sizeHint.** Check/radio inset → `ButtonMargin`; общий
+  v-pad sizeHint → `QSIZEHINT_FONT_V_PAD`.
+- **План.** `docs/agent-plans/43-layout-metrics-dedup.md` → done.
+
 ### Волна: agent-plan 42 — dirty paint / scissor / letterbox / text_hd
 
 - **Dirty paint.** `paint_dirty` + `paint_cache`: idle не крутит

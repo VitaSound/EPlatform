@@ -1,6 +1,6 @@
 use crate::gui::{QColor, QFont, QPalette, QPaletteRole, QPointF, QRectF, QSizeF};
-use crate::scroll::{QOrientation, QScrollBar, QScrollBarSubControl};
-use crate::slider::QSlider;
+use crate::scroll::{QOrientation, QScrollBar, QScrollBarSubControl, QSCROLLBAR_EXTENT, QSCROLLBAR_SLIDER_MIN};
+use crate::slider::{QSlider, QSLIDER_THICKNESS};
 
 pub use crate::gui::QPaintCommand;
 
@@ -757,9 +757,11 @@ impl QStyle for QFusionStyle {
             QPixelMetric::ButtonDefaultIndicator => 1.0,
             QPixelMetric::DefaultFrameWidth => 1.0,
             QPixelMetric::FocusFrameWidth => 1.0,
-            QPixelMetric::ScrollBarExtent => 14.0,
-            QPixelMetric::ScrollBarSliderMin => 26.0,
-            QPixelMetric::SliderThickness | QPixelMetric::SliderLength => 15.0,
+            // Domain SoT: `scroll::QSCROLLBAR_*` (layout/hit-test without a style).
+            QPixelMetric::ScrollBarExtent => QSCROLLBAR_EXTENT,
+            QPixelMetric::ScrollBarSliderMin => QSCROLLBAR_SLIDER_MIN,
+            // Domain SoT: `slider::QSLIDER_THICKNESS`.
+            QPixelMetric::SliderThickness | QPixelMetric::SliderLength => QSLIDER_THICKNESS,
             // Fusion: font (~16) + PM_TabBarTabVSpace (12) → ~28 (Qt probe).
             QPixelMetric::TabBarHeight => 28.0,
             QPixelMetric::MenuItemHeight => 20.0,
@@ -779,7 +781,9 @@ impl QStyle for QFusionStyle {
             ),
             QControlElement::LineEdit => QSizeF::new(
                 contents_size.width.max(100.0),
-                contents_size.height.max(option.font.pixel_size + 6.0),
+                contents_size.height.max(
+                    option.font.pixel_size + self.pixel_metric(QPixelMetric::ButtonMargin),
+                ),
             ),
             _ => contents_size,
         }

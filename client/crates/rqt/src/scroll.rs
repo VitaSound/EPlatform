@@ -1,6 +1,9 @@
 use crate::gui::{QPointF, QRectF, QSizeF};
 
+/// Fusion `PM_ScrollBarExtent`. `QFusionStyle::pixel_metric(ScrollBarExtent)`
+/// returns this — keep the literal here as the single definition.
 pub const QSCROLLBAR_EXTENT: f32 = 14.0;
+/// Fusion `PM_ScrollBarSliderMin`. Style metric routes through this const.
 pub const QSCROLLBAR_SLIDER_MIN: f32 = 26.0;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

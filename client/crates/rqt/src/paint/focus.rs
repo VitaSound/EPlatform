@@ -1,5 +1,6 @@
 use crate::gui::{QColor, QFontMetrics, QPainter, QPaletteRole, QRectF};
 use crate::qss::QStyleDeclarations;
+use crate::style::{QPixelMetric, QStyle};
 use crate::widgets::QWidget;
 
 use super::{qss_content_rect, qss_font, qss_frame_rect, widget_text};
@@ -10,7 +11,12 @@ use super::{qss_content_rect, qss_font, qss_frame_rect, widget_text};
 /// EPlatform uses the dotted variant for check/radio/button so the focus is
 /// obvious on its flat palette; line edits and combos keep the Fusion blue
 /// frame.
-pub(crate) fn paint_focus_indicators(widget: &QWidget, painter: &mut QPainter, qss: &QStyleDeclarations) {
+pub(crate) fn paint_focus_indicators(
+    widget: &QWidget,
+    painter: &mut QPainter,
+    style: &dyn QStyle,
+    qss: &QStyleDeclarations,
+) {
     if !widget.has_focus || !widget.enabled {
         return;
     }
@@ -46,7 +52,8 @@ pub(crate) fn paint_focus_indicators(widget: &QWidget, painter: &mut QPainter, q
             let metrics = QFontMetrics::new(&font);
             let line_height = metrics.height();
             let text_width = metrics.horizontal_advance(&text);
-            let text_x = content.x + widget.font.pixel_size + 6.0;
+            let text_x =
+                content.x + widget.font.pixel_size + style.pixel_metric(QPixelMetric::ButtonMargin);
             let text_y = content.y + ((content.height - line_height) / 2.0).max(0.0);
             paint_dotted_rect(
                 painter,
