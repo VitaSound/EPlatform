@@ -10,12 +10,13 @@
 
 1. Size from **DOM** (`getBoundingClientRect` + `devicePixelRatio`), not `winit::inner_size()` as SoT.
 2. Pointer: `logical = raw / dpr` — never `/ ui_scale`. Mode 3 also multiplies by `layout_from_css`.
-3. `backing == wgpu surface`. Mode 2/3 fill the window (no CSS letterbox). Mode 3 keeps `scale=1` and shrinks logical (`layout_from_css`); never `ui_scale < 1` (breaks glyphon).
-4. Prefer GPU / device-step primitives over logical-pixel strip lowering.
-5. **Text draw width:** never pass `QFontMetrics::horizontal_advance(text)` as the `draw_text` rect width. Align with metrics, draw through the content/box right edge (`draw_text_line`). Metric-tight widths clip glyphon (`"OK"`→`"O"`, `"value"`→`"valu"`).
-6. Glyphon: on `PrepareError::AtlasFull` trim+retry; `atlas.trim()` after each frame.
-7. Never edit `client/review/comments.md` when regenerating review PNGs.
-8. **Gallery diff gate:** after Qt vs rust PNG, **read mean / max / %** from the
+3. `backing == wgpu surface`. Mode 2/3 fill the window (no CSS letterbox). Mode 3 keeps `scale=1` and shrinks logical (`layout_from_css`); never `ui_scale < 1` (breaks glyphon). Letterbox centering exists on `resize_canvas_box(Some)` only (rollback); do not re-enable mode-3 CSS letterbox without revisiting status-bar layout.
+4. Prefer GPU / device-step primitives over logical-pixel strip lowering. `SetClip` emits `PaintBatch::Scissor` for the GPU pass.
+5. Idle frames: only rebuild `collect_paint` when `paint_dirty` (input/socket/caret/status). Do not spin `request_redraw` every `about_to_wait`.
+6. **Text draw width:** never pass `QFontMetrics::horizontal_advance(text)` as the `draw_text` rect width. Align with metrics, draw through the content/box right edge (`draw_text_line`). Metric-tight widths clip glyphon (`"OK"`→`"O"`, `"value"`→`"valu"`).
+7. Glyphon: on `PrepareError::AtlasFull` trim+retry; `atlas.trim()` after each frame. Mode-2 sharper text experiment: `?texthd=1` / `__epTextHd`.
+8. Never edit `client/review/comments.md` when regenerating review PNGs.
+9. **Gallery diff gate:** after Qt vs rust PNG, **read mean / max / %** from the
    overlap diff (and from review `index.html`). If **>2%** pixels differ (or mean
    is large / widget bbox / height / width disagree), open both images, find the
    cause (often `sizePolicy` Fixed vs Preferred, wrong `sizeHint`, inset/border),

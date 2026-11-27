@@ -1,6 +1,6 @@
 # 42 — Perf and wasm UX: dirty paint, scissor, letterbox, text scale
 
-Status: ready
+Status: done
 Priority: P2
 Depends-on: [01-canvas-geometry-pointer.md]
 Blocks: []
@@ -43,10 +43,15 @@ Qt dirty regions / backing store updates; high-DPI glyph raster.
 
 ## Tests / acceptance
 
-- [ ] Idle frames skip full rebuild when possible
-- [ ] Letterbox centered
-- [ ] Mode 2 text acceptably sharper or documented deferral
-- [ ] `cargo test`
+- [x] Idle frames skip full rebuild when possible (`paint_dirty` + `paint_cache`; no spin `request_redraw`)
+- [x] Letterbox centered (`letterbox_offset` + `resize_canvas_box` top/left; mode 3 still shrink-logical / no letterbox per plan 01)
+- [x] Mode 2 text acceptably sharper or documented deferral (`?texthd=1` / `__epTextHd` experiment; default off)
+- [x] `cargo test`
+
+## Notes
+
+- Mode 3 does **not** enable CSS letterbox (status bar stuck at `max_dim` — see `wasm-canvas-geometry.md` §7.4). Centering is implemented on the `resize_canvas_box(Some)` path for rollback/future.
+- Continuous `about_to_wait` → `request_redraw` loop removed; caret/status use `ControlFlow::WaitUntil`.
 
 ## Agent handoff prompt (copy-paste)
 

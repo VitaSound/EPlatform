@@ -30,6 +30,11 @@
       canvas {
         display: block;
         outline: none;
+        /* Default full-viewport; letterbox mode sets fixed width/height and
+           centers via top/left (see App::resize_canvas_box). */
+        position: fixed;
+        top: 0;
+        left: 0;
         /* Touch devices: the canvas owns all gestures, so the browser must not
            scroll/zoom/double-tap-zoom instead of delivering pointer events. */
         touch-action: none;

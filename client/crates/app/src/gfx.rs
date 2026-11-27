@@ -388,6 +388,9 @@ pub enum PaintBatch {
     Shapes(Vec<ShapePrim>),
     Textures(Vec<TexturedRect>),
     Text(Vec<ColoredText>),
+    /// GPU scissor in logical px `[x, y, w, h]`. `None` = full surface
+    /// (clears a previous `SetClip`). Emitted from `QPaintCommand::SetClip`.
+    Scissor(Option<[f32; 4]>),
 }
 
 /// Font metrics for widget text (labels, inputs, buttons).
@@ -510,6 +513,10 @@ pub struct Gfx {
     max_dim: u32,
     dpr: f32,
     ui_scale: f32,
+    /// When true (mode-2 experiment via `?texthd=1` / `__epTextHd`), glyphon
+    /// metrics use `dpr` even if `ui_scale == 1`, then `TextArea.scale`
+    /// compensates so layout size stays correct while glyphs stay sharp.
+    text_hd: bool,
     rect_pipeline: wgpu::RenderPipeline,
     shape_pipeline: wgpu::RenderPipeline,
     texture_pipeline: wgpu::RenderPipeline,
@@ -814,6 +821,11 @@ impl Gfx {
             renderers: vec![renderer],
         };
 
+        let text_hd = text_hd_enabled();
+        if text_hd {
+            crate::App::log("gfx: text_hd=1 (glyphon metrics at surface DPR)");
+        }
+
         Ok(Self {
             surface,
             device,
@@ -822,6 +834,7 @@ impl Gfx {
             max_dim,
             dpr,
             ui_scale,
+            text_hd,
             rect_pipeline,
             shape_pipeline,
             texture_pipeline,
@@ -1096,12 +1109,45 @@ impl Gfx {
             Shapes(u32, u32),
             Textures(Vec<(u64, u32, u32)>),
             Text(Option<usize>),
+            /// Framebuffer scissor `[x, y, w, h]`; full surface when reset.
+            Scissor { x: u32, y: u32, w: u32, h: u32 },
         }
         let mut built: Vec<Built> = Vec::with_capacity(batches.len());
         let mut text_count = 0usize;
+        let surf_w_u = self.config.width.max(1);
+        let surf_h_u = self.config.height.max(1);
+        let to_scissor = |rect: Option<[f32; 4]>| -> Built {
+            match rect {
+                None => Built::Scissor {
+                    x: 0,
+                    y: 0,
+                    w: surf_w_u,
+                    h: surf_h_u,
+                },
+                Some(rect) => {
+                    let x = (rect[0] * scale).floor().max(0.0) as u32;
+                    let y = (rect[1] * scale).floor().max(0.0) as u32;
+                    let right = ((rect[0] + rect[2].max(0.0)) * scale)
+                        .ceil()
+                        .min(surface_w) as u32;
+                    let bottom = ((rect[1] + rect[3].max(0.0)) * scale)
+                        .ceil()
+                        .min(surface_h) as u32;
+                    let w = right.saturating_sub(x).min(surf_w_u.saturating_sub(x));
+                    let h = bottom.saturating_sub(y).min(surf_h_u.saturating_sub(y));
+                    Built::Scissor {
+                        x,
+                        y,
+                        w: w.max(1),
+                        h: h.max(1),
+                    }
+                }
+            }
+        };
 
         for batch in batches {
             match batch {
+                PaintBatch::Scissor(rect) => built.push(to_scissor(*rect)),
                 PaintBatch::Rects(rects) => {
                     let start = self.scratch.len() as u32;
                     for r in rects {
@@ -1221,8 +1267,20 @@ impl Gfx {
         }
         // Quantize metrics so resize float drift does not mint a new glyph
         // set every frame and fill the atlas permanently.
-        let font_size = quantize_font_px(FONT_SIZE * scale);
-        let line_height = quantize_font_px(LINE_HEIGHT * scale).max(font_size);
+        // Mode-2 text_hd: rasterize glyphs at DPR, then shrink via TextArea.scale
+        // so layout positions stay in surface pixels while strokes stay sharp.
+        let glyph_scale = if self.text_hd {
+            self.dpr.max(scale).max(1.0)
+        } else {
+            scale
+        };
+        let area_scale = if self.text_hd && glyph_scale > scale && glyph_scale > 0.0 {
+            scale / glyph_scale
+        } else {
+            1.0
+        };
+        let font_size = quantize_font_px(FONT_SIZE * glyph_scale);
+        let line_height = quantize_font_px(LINE_HEIGHT * glyph_scale).max(font_size);
         let mut shaped: Vec<(usize, Vec<Buffer>, Vec<&ColoredText>)> =
             Vec::with_capacity(text_count);
         for (batch, slot) in batches.iter().zip(built.iter()) {
@@ -1238,7 +1296,10 @@ impl Gfx {
                     &mut self.text.font_system,
                     Metrics::new(font_size, line_height),
                 );
-                buffer.set_size(Some(t.wrap_w.max(1.0) * scale), Some(line_height));
+                buffer.set_size(
+                    Some(t.wrap_w.max(1.0) * glyph_scale),
+                    Some(line_height),
+                );
                 buffer.set_text(
                     &t.text,
                     &Attrs::new().family(Family::Name("DejaVu Sans")),
@@ -1264,7 +1325,7 @@ impl Gfx {
                         buffer,
                         left: t.x * scale,
                         top: t.y * scale,
-                        scale: 1.0,
+                        scale: area_scale,
                         bounds: TextBounds {
                             left: (t.clip[0] as f32 * scale) as i32,
                             top: (t.clip[1] as f32 * scale) as i32,
@@ -1328,6 +1389,9 @@ impl Gfx {
             });
             for item in &built {
                 match item {
+                    Built::Scissor { x, y, w, h } => {
+                        pass.set_scissor_rect(*x, *y, (*w).max(1), (*h).max(1));
+                    }
                     Built::SolidVerts(start, end) if end > start => {
                         pass.set_pipeline(&self.rect_pipeline);
                         pass.set_vertex_buffer(0, self.rect_buffer.slice(..));
@@ -1528,4 +1592,56 @@ fn push_tex_quad(
 
 fn quantize_font_px(px: f32) -> f32 {
     ((px * 4.0).round() / 4.0).max(1.0)
+}
+
+/// Mode-2 sharper text experiment. Opt-in via `?texthd=1` or `window.__epTextHd`.
+fn text_hd_enabled() -> bool {
+    #[cfg(target_arch = "wasm32")]
+    {
+        if let Some(window) = web_sys::window() {
+            if js_sys::Reflect::get(window.as_ref(), &wasm_bindgen::JsValue::from_str("__epTextHd"))
+                .ok()
+                .and_then(|v| v.as_bool())
+                == Some(true)
+            {
+                return true;
+            }
+            if let Ok(search) = window.location().search() {
+                return parse_texthd_query(&search);
+            }
+        }
+        false
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        false
+    }
+}
+
+/// `true` when the query string enables the mode-2 text atlas scale experiment.
+pub(crate) fn parse_texthd_query(search: &str) -> bool {
+    let q = search.trim_start_matches('?');
+    for pair in q.split('&') {
+        let (key, value) = match pair.split_once('=') {
+            Some(kv) => kv,
+            None => (pair, ""),
+        };
+        if key == "texthd" {
+            return matches!(value, "1" | "true" | "yes");
+        }
+    }
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn texthd_query_parses_flag() {
+        assert!(parse_texthd_query("?texthd=1"));
+        assert!(parse_texthd_query("main=gallery.lua&texthd=true"));
+        assert!(!parse_texthd_query("?texthd=0"));
+        assert!(!parse_texthd_query(""));
+    }
 }

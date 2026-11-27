@@ -2,6 +2,21 @@
 
 ## 2026-11-27
 
+### Волна: agent-plan 42 — dirty paint / scissor / letterbox / text_hd
+
+- **Dirty paint.** `paint_dirty` + `paint_cache`: idle не крутит
+  `collect_paint` каждый кадр; redraw только на ввод/сокет/caret/status.
+  Снят spin `about_to_wait` → `request_redraw`; caret/status —
+  `ControlFlow::wait_duration`.
+- **GPU scissor.** `SetClip` → `PaintBatch::Scissor` → `set_scissor_rect`
+  в render pass (CPU-intersect остаётся).
+- **Letterbox.** `letterbox_offset` + centering `top`/`left` в
+  `resize_canvas_box(Some)`. Mode 3 по-прежнему shrink-logical без CSS
+  letterbox (как plan 01).
+- **Mode 2 text.** Опционально `?texthd=1` / `__epTextHd` — glyphon
+  metrics в DPR; по умолчанию выкл. (на mode 1 разницы почти нет).
+- **План.** `docs/agent-plans/42-perf-dirty-scissor-letterbox.md` → done.
+
 ### Волна: agent-plan 41 — QSS url() / border-image + assets
 
 - **Assets.** `rqt::assets` — embedded PNG registry (`client/assets/…`)

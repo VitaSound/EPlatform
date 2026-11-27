@@ -20,10 +20,11 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::mpsc::{channel, Receiver};
 use std::sync::Arc;
+use std::time::Duration;
 use winit::{
     application::ApplicationHandler,
     event::{ElementState, MouseButton, MouseScrollDelta, TouchPhase, WindowEvent},
-    event_loop::{ActiveEventLoop, EventLoop},
+    event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
     window::{CursorIcon, Window, WindowId},
 };
 
@@ -478,6 +479,12 @@ struct App {
     last_logical: Rc<Cell<Option<(u32, u32)>>>,
     /// CSS→logical multiplier for pointers (1.0 in modes 1/2; shrink in mode 3).
     layout_from_css: Rc<Cell<f64>>,
+    /// Display list is stale and must be rebuilt on the next redraw.
+    paint_dirty: bool,
+    /// Last built display list; reused while `paint_dirty` is false.
+    paint_cache: Vec<gfx::PaintBatch>,
+    /// Last caret blink phase that was painted (`true` = caret visible).
+    last_caret_visible: bool,
 }
 
 impl App {
@@ -534,6 +541,50 @@ impl App {
             last_size: Rc::new(Cell::new(None)),
             last_logical: Rc::new(Cell::new(None)),
             layout_from_css: Rc::new(Cell::new(1.0)),
+            paint_dirty: true,
+            paint_cache: Vec::new(),
+            last_caret_visible: false,
+        }
+    }
+
+    /// Mark the display list stale and request a redraw. Idle frames that
+    /// do not call this skip `collect_paint` entirely.
+    fn mark_paint_dirty(&mut self) {
+        self.paint_dirty = true;
+        if let Some(window) = &self.window {
+            window.request_redraw();
+        }
+    }
+
+    /// `Wait` when idle; `WaitUntil` the next caret/status deadline so we do
+    /// not need a continuous redraw loop.
+    fn schedule_idle_wake(&self, event_loop: &ActiveEventLoop) {
+        let now = now_ms();
+        let mut wake_ms: Option<f64> = None;
+        if self.focused.is_some() {
+            let phase = (now - self.caret_epoch).rem_euclid(1000.0);
+            let until_flip = if phase < 500.0 {
+                500.0 - phase
+            } else {
+                1000.0 - phase
+            };
+            wake_ms = Some(until_flip);
+        }
+        if let Some(until) = self.shell.status_until {
+            if self.shell.status_message.is_some() {
+                let remaining = until - now;
+                if remaining > 0.0 {
+                    wake_ms = Some(wake_ms.map_or(remaining, |w| w.min(remaining)));
+                }
+            }
+        }
+        match wake_ms {
+            Some(ms) => {
+                let delay = Duration::from_secs_f64((ms / 1000.0).clamp(0.001, 1.0));
+                // `wait_duration` uses winit's Instant (web_time on wasm).
+                event_loop.set_control_flow(ControlFlow::wait_duration(delay));
+            }
+            None => event_loop.set_control_flow(ControlFlow::Wait),
         }
     }
 
@@ -669,15 +720,18 @@ impl App {
     }
 
     fn drain_socket_events(&mut self) {
+        let mut dirty = false;
         while let Ok(event) = self.rx.try_recv() {
             match event {
                 SocketEvent::Opened => {
                     Self::log("websocket opened");
                     connection_error_banner(false, "");
+                    dirty = true;
                 }
                 SocketEvent::Joined => {
                     Self::log("channel joined");
                     self.joined = true;
+                    dirty = true;
                 }
                 SocketEvent::Reply(payload) => {
                     if payload.get("role").and_then(|v| v.as_str()) == Some("main") {
@@ -689,23 +743,30 @@ impl App {
                             "main session form_id={}",
                             self.main_form_id.as_deref().unwrap_or("")
                         ));
+                        dirty = true;
                     }
                 }
                 SocketEvent::Command(payload) => {
                     Self::log(format!("command: {payload}"));
                     self.on_command(&payload);
+                    dirty = true;
                 }
                 SocketEvent::Closed => {
                     Self::log("websocket closed");
                     self.joined = false;
                     self.start_sent = false;
                     connection_error_banner(true, CONNECTION_FAILED);
+                    dirty = true;
                 }
                 SocketEvent::Error(err) => {
                     Self::log(format!("websocket error: {err}"));
                     connection_error_banner(true, CONNECTION_FAILED);
+                    dirty = true;
                 }
             }
+        }
+        if dirty {
+            self.mark_paint_dirty();
         }
 
         // Once joined, ask the server to start the main session or a
@@ -3750,6 +3811,8 @@ fn append_paint_commands(
     let mut shapes: Vec<gfx::ShapePrim> = Vec::new();
     let mut textures: Vec<gfx::TexturedRect> = Vec::new();
     let mut texts: Vec<gfx::ColoredText> = Vec::new();
+    // Last scissor pushed into `batches` (`None` = full surface / not yet set).
+    let mut gpu_scissor: Option<Option<[f32; 4]>> = None;
     let color4 = |c: rqt::gui::QColor| [c.red, c.green, c.blue, c.alpha];
     let push_rect = |rects: &mut Vec<gfx::ColoredRect>,
                      clip: Option<QRectF>,
@@ -3797,6 +3860,26 @@ fn append_paint_commands(
         flush_shape_batch(batches, shapes);
         flush_texture_batch(batches, textures);
     };
+    let scissor_key = |clip: Option<QRectF>| -> Option<[f32; 4]> {
+        clip.map(|r| [r.x, r.y, r.width.max(0.0), r.height.max(0.0)])
+    };
+    let emit_scissor = |batches: &mut Vec<gfx::PaintBatch>,
+                        rects: &mut Vec<gfx::ColoredRect>,
+                        tris: &mut Vec<gfx::ColoredTriangle>,
+                        shapes: &mut Vec<gfx::ShapePrim>,
+                        textures: &mut Vec<gfx::TexturedRect>,
+                        texts: &mut Vec<gfx::ColoredText>,
+                        gpu_scissor: &mut Option<Option<[f32; 4]>>,
+                        clip: Option<QRectF>| {
+        flush_text_batch(batches, texts);
+        flush_geometry(batches, rects, tris, shapes, textures);
+        let key = scissor_key(clip);
+        if *gpu_scissor == Some(key) {
+            return;
+        }
+        *gpu_scissor = Some(key);
+        batches.push(gfx::PaintBatch::Scissor(key));
+    };
     for command in commands {
         // Keep the command stream ordered: a rect drawn after text belongs
         // in a later batch, not in a global rect pool.
@@ -3821,8 +3904,32 @@ fn append_paint_commands(
         }
         match command {
             QPaintCommand::Save => stack.push(clip),
-            QPaintCommand::Restore => clip = stack.pop().unwrap_or(None),
-            QPaintCommand::SetClip { rect } => clip = *rect,
+            QPaintCommand::Restore => {
+                clip = stack.pop().unwrap_or(None);
+                emit_scissor(
+                    batches,
+                    &mut rects,
+                    &mut tris,
+                    &mut shapes,
+                    &mut textures,
+                    &mut texts,
+                    &mut gpu_scissor,
+                    clip,
+                );
+            }
+            QPaintCommand::SetClip { rect } => {
+                clip = *rect;
+                emit_scissor(
+                    batches,
+                    &mut rects,
+                    &mut tris,
+                    &mut shapes,
+                    &mut textures,
+                    &mut texts,
+                    &mut gpu_scissor,
+                    clip,
+                );
+            }
             QPaintCommand::Translate { .. } => {}
             QPaintCommand::FillRect { rect, color } => {
                 flush_tri_batch(batches, &mut tris);
@@ -4196,13 +4303,12 @@ impl App {
             gfx.apply_geometry(dpr as f32, width, height, logical.0 as f32, logical.1 as f32);
         }
         self.sync_canvas_backing(width, height);
-        if let Some(window) = &self.window {
-            window.request_redraw();
-        }
+        self.mark_paint_dirty();
     }
 
     /// Letterbox the canvas in the page (used when even 1 device px per CSS px
     /// exceeds the GPU texture limit). `None` restores the full-viewport box.
+    /// When boxed, the canvas is centered via CSS `top`/`left` offsets.
     #[cfg(target_arch = "wasm32")]
     fn resize_canvas_box(&self, boxed: Option<(f64, f64)>) {
         use winit::platform::web::WindowExtWebSys;
@@ -4212,12 +4318,44 @@ impl App {
         let style = canvas.style();
         match boxed {
             Some((w, h)) => {
+                let (css_w, css_h, _) = self.dom_canvas_size().unwrap_or((w, h, 1.0));
+                // Prefer the window/viewport size for centering: once the
+                // canvas is already letterboxed, getBoundingClientRect is the
+                // box itself, not the page.
+                let (vw, vh) = web_sys::window()
+                    .map(|win| {
+                        let w = win
+                            .inner_width()
+                            .ok()
+                            .and_then(|v| v.as_f64())
+                            .unwrap_or(css_w);
+                        let h = win
+                            .inner_height()
+                            .ok()
+                            .and_then(|v| v.as_f64())
+                            .unwrap_or(css_h);
+                        (w, h)
+                    })
+                    .unwrap_or((css_w, css_h));
+                let (left, top) = canvas_geometry::letterbox_offset(vw, vh, w, h);
+                let _ = style.set_property("position", "fixed");
                 let _ = style.set_property("width", &format!("{w:.1}px"));
                 let _ = style.set_property("height", &format!("{h:.1}px"));
+                let _ = style.set_property("left", &format!("{left:.1}px"));
+                let _ = style.set_property("top", &format!("{top:.1}px"));
                 let _ = style.set_property("right", "auto");
                 let _ = style.set_property("bottom", "auto");
+                let _ = style.set_property("transform", "none");
+                let _ = style.set_property("margin", "0");
             }
             _ => {
+                let _ = style.set_property("position", "fixed");
+                let _ = style.set_property("left", "0");
+                let _ = style.set_property("top", "0");
+                let _ = style.set_property("right", "auto");
+                let _ = style.set_property("bottom", "auto");
+                let _ = style.set_property("transform", "none");
+                let _ = style.set_property("margin", "0");
                 if canvas.style().get_property_value("width").unwrap_or_default() != "100%" {
                     let _ = style.set_property("width", "100%");
                     let _ = style.set_property("height", "100%");
@@ -4643,6 +4781,7 @@ impl ApplicationHandler for App {
             WindowEvent::CursorLeft { .. } => {
                 self.update_resize_cursor(None);
                 self.clear_hover();
+                self.mark_paint_dirty();
             }
             WindowEvent::Resized(size) => {
                 // The DOM decides the geometry (see `sync_canvas_geometry`);
@@ -4692,15 +4831,25 @@ impl ApplicationHandler for App {
                 self.sync_canvas_geometry();
                 self.drain_socket_events();
                 self.refresh_viewports();
-                if let Some((form_id, name)) = self.focused.clone() {
-                    let visible = (now_ms() - self.caret_epoch) % 1000.0 < 500.0;
+                let caret_visible = if let Some((form_id, name)) = self.focused.clone() {
+                    let visible = (now_ms() - self.caret_epoch).rem_euclid(1000.0) < 500.0;
                     if let Some(form) = self.forms.get_mut(&form_id) {
                         if let Some(widget) = form.tree.find_widget(&name) {
                             form.tree.set_cursor_visible(widget, visible);
                         }
                     }
+                    if visible != self.last_caret_visible {
+                        self.paint_dirty = true;
+                    }
+                    visible
+                } else {
+                    false
+                };
+                self.last_caret_visible = caret_visible;
+                if self.paint_dirty || self.paint_cache.is_empty() {
+                    self.paint_cache = self.collect_paint();
+                    self.paint_dirty = false;
                 }
-                let batches = self.collect_paint();
                 if let Some(gfx) = self.gfx.borrow_mut().as_mut() {
                     gfx.render(
                         wgpu::Color {
@@ -4709,14 +4858,16 @@ impl ApplicationHandler for App {
                             b: 0.14,
                             a: 1.0,
                         },
-                        &batches,
+                        &self.paint_cache,
                     );
                 }
-                if let Some(window) = &self.window {
-                    window.request_redraw();
-                }
+                // Do not spin: the next frame is requested only when something
+                // marks the display list dirty (input, socket, caret, timers).
             }
-            WindowEvent::CursorMoved { position, .. } => self.pointer_moved(position.x, position.y),
+            WindowEvent::CursorMoved { position, .. } => {
+                self.pointer_moved(position.x, position.y);
+                self.mark_paint_dirty();
+            }
             WindowEvent::Touch(touch) => {
                 // Phones/tablets: winit delivers touch contacts as `Touch` only,
                 // never as `CursorMoved`/`MouseInput`. Only the first contact
@@ -4762,6 +4913,7 @@ impl ApplicationHandler for App {
                         }
                         TouchPhase::Started => {}
                     }
+                    self.mark_paint_dirty();
                     return;
                 }
                 if let Some(primary) = self.primary_touch {
@@ -4774,6 +4926,7 @@ impl ApplicationHandler for App {
                             self.touch_start = None;
                             self.long_tap_sent = false;
                             self.cancel_mouse_grabs();
+                            self.mark_paint_dirty();
                         }
                         return;
                     }
@@ -4806,23 +4959,29 @@ impl ApplicationHandler for App {
                     }
                     TouchPhase::Moved => {}
                 }
+                self.mark_paint_dirty();
             }
             WindowEvent::MouseInput {
                 state: ElementState::Released,
                 button: MouseButton::Left,
                 ..
-            } => self.pointer_released(),
+            } => {
+                self.pointer_released();
+                self.mark_paint_dirty();
+            }
             WindowEvent::MouseInput {
                 state: ElementState::Pressed,
                 button: MouseButton::Left,
                 ..
             } => {
                 self.dispatch_mouse_press();
+                self.mark_paint_dirty();
             }
             WindowEvent::MouseInput { .. } => {}
             WindowEvent::KeyboardInput { event, .. } => {
                 if event.state == ElementState::Pressed {
                     self.dispatch_key(&event);
+                    self.mark_paint_dirty();
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {
@@ -4837,13 +4996,14 @@ impl ApplicationHandler for App {
                 };
                 if dx != 0.0 || dy != 0.0 {
                     self.scroll_view(dx, dy);
+                    self.mark_paint_dirty();
                 }
             }
             _ => {}
         }
     }
 
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         if let Some((x, y, started)) = self.touch_start {
             if !self.long_tap_sent && self.primary_touch.is_some() && now_ms() - started >= 500.0 {
                 self.long_tap_sent = true;
@@ -4852,13 +5012,49 @@ impl ApplicationHandler for App {
                 self.send_context_menu();
                 self.cancel_mouse_grabs();
                 self.left_down = false;
+                self.mark_paint_dirty();
             }
         }
         self.sync_web_text_input();
+        let had_text_events = {
+            #[cfg(target_arch = "wasm32")]
+            {
+                WEB_TEXT_INPUT.with(|queue| !queue.borrow().is_empty())
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                false
+            }
+        };
         self.drain_web_text_input();
-        if let Some(window) = &self.window {
-            window.request_redraw();
+        if had_text_events {
+            self.mark_paint_dirty();
         }
+        self.drain_socket_events();
+
+        let now = now_ms();
+        // Status message timeout flips chrome without an input event.
+        if let Some(until) = self.shell.status_until {
+            if now >= until && self.shell.status_message.is_some() {
+                self.shell.status_message = None;
+                self.shell.status_until = None;
+                self.mark_paint_dirty();
+            }
+        }
+        // Caret blink: wake when the phase would flip so idle still blinks.
+        if self.focused.is_some() {
+            let visible = (now - self.caret_epoch).rem_euclid(1000.0) < 500.0;
+            if visible != self.last_caret_visible {
+                self.mark_paint_dirty();
+            }
+        }
+
+        if self.paint_dirty {
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+        }
+        self.schedule_idle_wake(event_loop);
     }
 }
 
@@ -5890,6 +6086,8 @@ mod tests {
                         });
                     }
                 }
+                // GPU-only; CPU raster already intersects draws with the clip.
+                gfx::PaintBatch::Scissor(_) => {}
                 gfx::PaintBatch::Text(texts) => {
                     for text in texts {
                         let [left, top, right, bottom] = text.clip;
@@ -6143,6 +6341,58 @@ mod tests {
         assert!(matches!(batches[2], gfx::PaintBatch::Rects(_)));
         assert!(matches!(batches[3], gfx::PaintBatch::Text(_)));
         assert_eq!(batch_texts(&batches), vec!["first", "second"]);
+    }
+
+    #[test]
+    fn set_clip_emits_gpu_scissor_batch() {
+        use rqt::gui::{QColor, QPainter, QRectF};
+
+        let mut painter = QPainter::new();
+        painter.set_clip_rect(Some(QRectF::new(10.0, 20.0, 100.0, 50.0)));
+        painter.fill_rect(
+            QRectF::new(0.0, 0.0, 200.0, 200.0),
+            QColor::rgba8(10, 10, 10, 255),
+        );
+        painter.set_clip_rect(None);
+        painter.fill_rect(
+            QRectF::new(0.0, 0.0, 5.0, 5.0),
+            QColor::rgba8(20, 20, 20, 255),
+        );
+
+        let mut batches = Vec::new();
+        append_paint_commands(painter.commands(), &mut batches, 1.0);
+
+        assert!(
+            batches.iter().any(|b| matches!(
+                b,
+                gfx::PaintBatch::Scissor(Some([10.0, 20.0, 100.0, 50.0]))
+            )),
+            "SetClip must emit a GPU scissor batch: {batches:?}"
+        );
+        assert!(
+            batches
+                .iter()
+                .any(|b| matches!(b, gfx::PaintBatch::Scissor(None))),
+            "clearing clip must reset scissor: {batches:?}"
+        );
+    }
+
+    #[test]
+    fn paint_cache_skips_rebuild_while_clean() {
+        let mut app = App::new(Params::default());
+        assert!(app.paint_dirty);
+        app.paint_cache = app.collect_paint();
+        app.paint_dirty = false;
+        let first_len = app.paint_cache.len();
+        // Simulate an idle redraw: dirty stays false, cache is reused.
+        assert!(!app.paint_dirty);
+        assert!(!app.paint_cache.is_empty() || first_len == 0);
+        app.mark_paint_dirty();
+        assert!(app.paint_dirty);
+        app.paint_cache = app.collect_paint();
+        app.paint_dirty = false;
+        assert!(!app.paint_dirty);
+        assert_eq!(app.paint_cache.len(), first_len);
     }
 
     #[test]

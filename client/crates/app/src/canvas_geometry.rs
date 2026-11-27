@@ -67,6 +67,16 @@ pub fn surface_size(mode: RenderMode) -> (u32, u32) {
     (w, h)
 }
 
+/// CSS `top`/`left` offset that centers a letterboxed canvas inside the
+/// window. Mode 3 no longer letterboxes (see `choose_render_mode`); this
+/// stays for `App::resize_canvas_box(Some)` rollback / future use.
+pub fn letterbox_offset(window_w: f64, window_h: f64, box_w: f64, box_h: f64) -> (f64, f64) {
+    (
+        ((window_w - box_w) * 0.5).max(0.0),
+        ((window_h - box_h) * 0.5).max(0.0),
+    )
+}
+
 /// winit-web delivers CSS×dpr; convert to logical layout pixels.
 pub fn pointer_to_logical(
     raw_x: f64,
@@ -135,5 +145,12 @@ mod tests {
         let (x, y) = pointer_to_logical(238.5, 57.0, 1.5, 1.0);
         assert!((x - 159.0).abs() < 0.1);
         assert!((y - 38.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn letterbox_offset_centers_box() {
+        let (left, top) = letterbox_offset(1000.0, 800.0, 640.0, 480.0);
+        assert!((left - 180.0).abs() < 1e-9);
+        assert!((top - 160.0).abs() < 1e-9);
     }
 }
