@@ -61,6 +61,10 @@ static void dumpLayout(QLayout *layout, QJsonArray &array)
         object["h"] = geometry.height();
         object["hint_w"] = item->sizeHint().width();
         object["hint_h"] = item->sizeHint().height();
+        object["max_w"] = item->maximumSize().width();
+        object["max_h"] = item->maximumSize().height();
+        object["exp_h"] = bool(item->expandingDirections() & Qt::Horizontal);
+        object["exp_v"] = bool(item->expandingDirections() & Qt::Vertical);
         if (QWidget *widget = item->widget()) {
             object["widget"] = widget->objectName();
             object["class"] = QString::fromLatin1(widget->metaObject()->className());

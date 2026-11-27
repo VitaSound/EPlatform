@@ -2,6 +2,25 @@
 
 ## 2026-11-27
 
+### Nested box layout: expand like Qt `QBoxLayout`
+
+- **`item_expands` for nested HBox/VBox.** Nested box expands on an axis
+  when any child does (`QBoxLayout::expandingDirections` / setupGeom).
+  Fixes Preferred-label eating vbox slack while list/table HBoxes stuck
+  at `sizeHint` 192 (`#086` focus/171_list, `#087` 172_tree,
+  `#088` 173_table → Qt heights 215/235). Grid/Form stay non-expansive
+  so rowspan Expanding views don’t steal spacer slack (`#119` lists/204).
+- **Review.** Re-render focus list/tree/table rust PNGs + `index.html`
+  (list mean 2.79→0.44, >30 1.4%→0.4%; table 6.92→0.89, >30 5.6%→0.7%).
+- **`qt_reference`.** Dump layout-item `max_*` / `exp_*` for probes.
+
+### QProgressBar: Fusion groove like LineEdit
+
+- **Groove frame.** Sharp Base inset + AA rounded outline
+  `translate(0.5)+adjusted(0,0,-1,-1)` radius 2; inner top shadow
+  `rgba(0,0,0,18)` (outer corners stay Window).
+- Review progress gallery rust PNGs refreshed.
+
 ### Shared SDF rounded stroke (CPU = GPU)
 
 - **`rqt::render::sdf`.** Общий `sd_rounded_box` + smoothstep cover; CPU

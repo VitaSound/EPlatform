@@ -5437,13 +5437,19 @@ impl QWidgetTree {
                     spacer.vertical_policy == QSizePolicy::Expanding
                 }
             }
-            // A nested layout is not an expander for `qGeomCalc`: Qt lets an
-            // expanding spacer take all the slack while the nested layout
-            // keeps its hint (gallery/lists/190: the grid rows grew and the
-            // list became 83 px tall instead of Qt's ~60). When there is no
-            // spacer the layout still grows through `item_can_grow` (its
-            // maximum exceeds the hint).
-            QLayoutItem::Layout { .. } => false,
+            // QBoxLayout::expandingDirections (setupGeom): a nested box expands
+            // on an axis when any child does. That lets focus/171 list +
+            // focus/173 table HBoxes take the vbox slack instead of the
+            // Preferred label. QGridLayout stays non-expansive here: a
+            // rowspan Expanding view does not mark rows expansive in Qt
+            // (gallery/lists/204), so a sibling spacer still takes the slack.
+            QLayoutItem::Layout { layout, .. } => match layout.kind {
+                QLayoutKind::HBox | QLayoutKind::VBox => layout
+                    .items
+                    .iter()
+                    .any(|child| self.item_expands(child, horizontal)),
+                QLayoutKind::Grid | QLayoutKind::Form => false,
+            },
         }
     }
 

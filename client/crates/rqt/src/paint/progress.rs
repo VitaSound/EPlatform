@@ -1,8 +1,11 @@
-use crate::gui::{QColor, QFontMetrics, QPainter, QPaletteRole, QRectF};
+use crate::gui::{QColor, QFontMetrics, QPainter, QPaletteRole, QPointF, QRectF};
 use crate::scroll::QOrientation;
 use crate::widgets::QWidget;
 
 /// Fusion-like `QProgressBar`: Base groove, Highlight chunk gradient, dual-color label.
+///
+/// Groove frame matches `QLineEdit` / Fusion `translate(0.5)+adjusted(0,0,-1,-1)`:
+/// sharp Base fill inset 1px, AA rounded outline radius 2 (outer corner stays Window).
 pub(crate) fn paint_progress_bar(widget: &QWidget, painter: &mut QPainter) {
     let Some(bar) = widget.progress.as_deref() else {
         return;
@@ -21,20 +24,29 @@ pub(crate) fn paint_progress_bar(widget: &QWidget, painter: &mut QPainter) {
     let mut outline = window.darker(140);
     let highlight = widget.palette.color(QPaletteRole::Highlight);
 
-    // Groove: Fusion `adjusted(0,0,-1,-1)` + 0.5 pen translate covers the full
-    // widget height; without subpixel AA we keep height=rect.height so the
-    // bottom outline lands on the last row (probe h=24 → rows 0..23).
-    let groove = QRectF::new(
-        rect.x,
-        rect.y,
-        (rect.width - 1.0).max(1.0),
-        rect.height.max(1.0),
+    // Same path as LineEdit: sharp Base inset + centered SDF stroke on
+    // `translate(0.5,0.5)` + `adjusted(0,0,-1,-1)`, radius 2.
+    let fill_rect = QRectF::new(
+        rect.x + 1.0,
+        rect.y + 1.0,
+        (rect.width - 2.0).max(1.0),
+        (rect.height - 2.0).max(1.0),
     );
-    painter.fill_rounded_rect(groove, 2.0, base);
-    painter.stroke_rounded_rect(groove, 2.0, 1.0, outline);
-    // Skip Fusion's inner topShadow line: on the GPU path a translucent
-    // FillRect over the SDF AA fringe reads as a second dark border on top
-    // only (bottom stays 1 px). Outline alone matches the live thickness.
+    let frame = QRectF::new(
+        rect.x + 0.5,
+        rect.y + 0.5,
+        (rect.width - 1.0).max(1.0),
+        (rect.height - 1.0).max(1.0),
+    );
+    painter.fill_rect(fill_rect, base);
+    painter.stroke_rounded_rect(frame, 2.0, 1.0, outline);
+    // Fusion/LineEdit inner top shadow (skip outer alpha-16 line above the bar).
+    painter.draw_line(
+        QPointF::new(rect.x + 2.0, rect.y + 1.0),
+        QPointF::new(rect.right() - 2.0, rect.y + 1.0),
+        1.0,
+        QColor::rgba8(0, 0, 0, 18),
+    );
 
     let horizontal = matches!(bar.orientation, QOrientation::Horizontal);
     let indeterminate = bar.is_indeterminate();
@@ -43,30 +55,31 @@ pub(crate) fn paint_progress_bar(widget: &QWidget, painter: &mut QPainter) {
     let show_chunk = indeterminate || bar.value > bar.minimum;
 
     if show_chunk {
+        // Fusion CE_ProgressBarContents after translate(0.5): size is
+        // (progressWidth-1) × (height-1) / (width-1) × (progressHeight-1).
         let (chunk_w, chunk_h) = if horizontal {
             let w = if indeterminate {
-                groove.width
+                rect.width
             } else {
-                // Fusion: progressSteps * rect.width() / totalSteps, then width-1.
                 (fraction * rect.width).floor().max(0.0)
             };
-            ((w - 1.0).max(0.0), groove.height)
+            ((w - 1.0).max(0.0), (rect.height - 1.0).max(1.0))
         } else {
             let h = if indeterminate {
-                groove.height
+                rect.height
             } else {
                 (fraction * rect.height).floor().max(0.0)
             };
-            (groove.width, (h - 1.0).max(0.0))
+            ((rect.width - 1.0).max(1.0), (h - 1.0).max(0.0))
         };
         if chunk_w > 0.5 && chunk_h > 0.5 {
             let chunk = if horizontal {
-                QRectF::new(rect.x, rect.y, chunk_w, chunk_h)
+                QRectF::new(frame.x, frame.y, chunk_w, chunk_h)
             } else {
                 // Fill from the bottom upward (Qt default vertical progress).
                 QRectF::new(
-                    rect.x,
-                    rect.y + (groove.height - chunk_h).max(0.0),
+                    frame.x,
+                    frame.y + (frame.height - chunk_h).max(0.0),
                     chunk_w,
                     chunk_h,
                 )
@@ -85,15 +98,15 @@ pub(crate) fn paint_progress_bar(widget: &QWidget, painter: &mut QPainter) {
                 QRectF::new(
                     chunk.x,
                     chunk.y,
-                    (chunk.width + 2.0).min(groove.width),
+                    (chunk.width + 2.0).min(frame.width),
                     chunk.height,
                 )
             } else if !complete && !indeterminate && !horizontal {
                 QRectF::new(
                     chunk.x,
-                    (chunk.y - 2.0).max(rect.y),
+                    (chunk.y - 2.0).max(frame.y),
                     chunk.width,
-                    (chunk.height + 2.0).min(groove.height),
+                    (chunk.height + 2.0).min(frame.height),
                 )
             } else {
                 chunk
