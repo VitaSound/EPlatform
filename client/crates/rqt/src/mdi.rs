@@ -614,31 +614,36 @@ impl<T> QMdiArea<T> {
     /// Qt `QMdiArea::cascadeSubWindows`: re-arrange every normal-state
     /// subwindow from the cascade origin (probed step: x 10, y = title
     /// height). Maximised/minimized windows are left alone, like Qt.
+    ///
+    /// After `tile_subwindows`, frames are often nearly viewport-tall; using
+    /// that size in `cascade_pos` collapses the cascade grid to a single row
+    /// (two windows land side-by-side at the same Y — looks like tile did
+    /// nothing). Restore the pre-tile size from `restore_frame` when present
+    /// so cascade stairs again; otherwise keep the current frame size.
     pub fn cascade_subwindows(&mut self) {
         let mut placed = 0usize;
         for index in 0..self.subwindows.len() {
-            let (visible, frame) = {
+            let (visible, size) = {
                 let subwindow = &self.subwindows[index];
-                (
-                    subwindow.visible && !subwindow.maximized && !subwindow.minimized,
-                    QRectF::new(
-                        subwindow.frame.x,
-                        subwindow.frame.y,
-                        subwindow.frame.width,
-                        subwindow.frame.height,
-                    ),
-                )
+                if !(subwindow.visible && !subwindow.maximized && !subwindow.minimized) {
+                    (false, QSizeF::default())
+                } else if let Some(saved) = subwindow.restore_frame {
+                    (true, QSizeF::new(saved.width, saved.height))
+                } else {
+                    (
+                        true,
+                        QSizeF::new(subwindow.frame.width, subwindow.frame.height),
+                    )
+                }
             };
             if !visible {
                 continue;
             }
-            let pos = Self::cascade_pos(
-                self.viewport,
-                placed,
-                QSizeF::new(frame.width, frame.height),
-            );
+            let pos = Self::cascade_pos(self.viewport, placed, size);
             let subwindow = &mut self.subwindows[index];
-            subwindow.frame = QRectF::new(pos.x, pos.y, frame.width, frame.height);
+            subwindow.restore_frame = None;
+            subwindow.frame =
+                subwindow.constrained_frame(QRectF::new(pos.x, pos.y, size.width, size.height));
             placed += 1;
         }
         // Follow-up `add_subwindow` calls continue after the arranged set.
@@ -649,6 +654,9 @@ impl<T> QMdiArea<T> {
     /// the viewport with an integer cell split; frames shrink to their cell
     /// but never below the subwindow's size constraints (Qt keeps the
     /// minimum too, letting tiles overflow a too-small area).
+    ///
+    /// Remembers the pre-tile frame in `restore_frame` (when unset) so a
+    /// later `cascade_subwindows` can restore that size.
     pub fn tile_subwindows(&mut self) {
         let viewport = self.viewport;
         let indices: Vec<usize> = (0..self.subwindows.len())
@@ -673,6 +681,9 @@ impl<T> QMdiArea<T> {
                 viewport.height / rows as f32,
             );
             let subwindow = &mut self.subwindows[index];
+            if subwindow.restore_frame.is_none() {
+                subwindow.restore_frame = Some(subwindow.frame);
+            }
             subwindow.frame = subwindow.constrained_frame(cell);
         }
     }
@@ -1208,5 +1219,46 @@ mod tests {
         for (slot, &index) in added.iter().enumerate() {
             assert_eq!(area.subwindow(index).unwrap().frame, expected[slot]);
         }
+    }
+
+    #[test]
+    fn cascade_after_tile_restores_size_and_stairs_two_windows() {
+        // Two full-height tiles make `cascade_pos(frame)` collapse to one row;
+        // cascade must restore the pre-tile size so the windows stair again.
+        let mut area = area();
+        let a = area.add_subwindow("A", "a".to_string(), QSizeF::new(300.0, 150.0));
+        let b = area.add_subwindow("B", "b".to_string(), QSizeF::new(300.0, 150.0));
+        let before = [
+            area.subwindow(a).unwrap().frame,
+            area.subwindow(b).unwrap().frame,
+        ];
+        area.tile_subwindows();
+        let tiled = [
+            area.subwindow(a).unwrap().frame,
+            area.subwindow(b).unwrap().frame,
+        ];
+        assert_eq!(tiled[0], QRectF::new(0.0, 0.0, 640.0, 800.0));
+        assert_eq!(tiled[1], QRectF::new(640.0, 0.0, 640.0, 800.0));
+
+        area.cascade_subwindows();
+        let cascaded = [
+            area.subwindow(a).unwrap().frame,
+            area.subwindow(b).unwrap().frame,
+        ];
+        assert_eq!(
+            (cascaded[0].width, cascaded[0].height),
+            (before[0].width, before[0].height),
+            "cascade restores pre-tile size"
+        );
+        assert_eq!(
+            (cascaded[1].width, cascaded[1].height),
+            (before[1].width, before[1].height),
+        );
+        assert_eq!((cascaded[0].x, cascaded[0].y), (32.0, 28.0));
+        assert_eq!(
+            (cascaded[1].x - cascaded[0].x, cascaded[1].y - cascaded[0].y),
+            (10.0, QMDI_TITLE_H),
+            "second window must stair, not sit beside the first"
+        );
     }
 }

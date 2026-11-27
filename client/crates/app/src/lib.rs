@@ -5313,6 +5313,38 @@ mod tests {
                 "form {id} geometry must match tiled content_rect"
             );
         }
+
+        // Cascade after tile must restore pre-tile sizes and stair again
+        // (two full-height tiles otherwise collapse cascade to one row).
+        app.on_command(&json!({
+            "command": "setAppProperty",
+            "property": "cascadeWindows",
+            "value": true,
+        }));
+        let again = frames(&app);
+        assert_eq!((again[0].x, again[0].y), (32.0, 28.0));
+        assert_eq!(
+            (again[1].x - again[0].x, again[1].y - again[0].y),
+            (10.0, 24.0)
+        );
+        assert_eq!(
+            (again[2].x - again[1].x, again[2].y - again[1].y),
+            (10.0, 24.0)
+        );
+        assert!(
+            again[0].width < tiled[0].width || again[0].height < tiled[0].height,
+            "cascade after tile should shrink back from the tile cell"
+        );
+        for id in ["a", "b", "c"] {
+            let index = app.mdi.index_of(|payload| payload == id).unwrap();
+            let content = app.mdi.subwindow(index).unwrap().content_rect();
+            let form = app.forms.get(id).unwrap();
+            assert_eq!(
+                form.tree.widget(form.root).unwrap().geometry,
+                content,
+                "form {id} geometry must follow cascade after tile"
+            );
+        }
     }
 
     #[test]

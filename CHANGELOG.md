@@ -2,6 +2,15 @@
 
 ## 2026-11-27
 
+### Fix: MDI cascade after tile
+
+- **Плитка → Каскад.** `tile_subwindows` сохраняет pre-tile `frame` в
+  `restore_frame`; `cascade_subwindows` возвращает этот размер перед
+  раскладкой. Иначе после двух full-height плиток `cascade_pos` схлопывает
+  сетку в один ряд (окна рядом по Y, каскад «не работает»).
+- **Тесты.** `cascade_after_tile_restores_size_and_stairs_two_windows`;
+  app `cascade_and_tile_app_commands` — cascade после tile.
+
 ### Fix: Ctrl+A / shell cascade
 
 - **Ctrl+A (LineEdit / PlainTextEdit).** Select All по физической `KeyA`
