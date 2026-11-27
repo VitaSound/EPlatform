@@ -668,6 +668,9 @@ fn draw_slider(option: &QStyleOption, slider: &QSlider) -> Vec<QPaintCommand> {
                         std::mem::swap(&mut outline, &mut highlighted_outline);
                     }
                     out.push(QPaintCommand::Save);
+                    // Fusion: clip.adjusted(0, 0, 1, 1). The +1 width is needed
+                    // so blue meets the handle (Qt paints through handle.x);
+                    // without it a 1px gray groove strip remains.
                     out.push(QPaintCommand::SetClip {
                         rect: Some(rect_adjusted(clipped, 0.0, 0.0, 1.0, 1.0)),
                     });

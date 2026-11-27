@@ -149,14 +149,24 @@ impl QSlider {
     }
 
     /// Active (highlighted) groove clip — from the minimum end up to the handle.
+    ///
+    /// Horizontal: stop at the handle's leading edge (Fusion/`handle.left()`), so
+    /// blue does not peek past the thumb on the trailing side.
+    /// Vertical: reach a couple px into the handle rect — our inset handle fill
+    /// would otherwise leave a gray groove strip under the thumb.
     pub fn active_groove_clip(&self, rect: QRectF) -> QRectF {
         let groove = self.groove_rect(rect);
         let handle = self.handle_rect(rect);
+        let into = 2.0;
         match self.orientation {
             QOrientation::Horizontal => {
                 if self.upside_down {
-                    let x = handle.right();
-                    QRectF::new(x, groove.y, (groove.right() - x).max(0.0), groove.height)
+                    QRectF::new(
+                        handle.right(),
+                        groove.y,
+                        (groove.right() - handle.right()).max(0.0),
+                        groove.height,
+                    )
                 } else {
                     QRectF::new(
                         groove.x,
@@ -168,14 +178,16 @@ impl QSlider {
             }
             QOrientation::Vertical => {
                 if self.upside_down {
-                    let y = handle.bottom();
+                    // Maximum at top: blue is below the thumb — start inside the handle.
+                    let y = (handle.y + into).min(handle.bottom());
                     QRectF::new(groove.x, y, groove.width, (groove.bottom() - y).max(0.0))
                 } else {
+                    let bottom = (handle.bottom() - into).max(handle.y);
                     QRectF::new(
                         groove.x,
                         groove.y,
                         groove.width,
-                        (handle.y - groove.y).max(0.0),
+                        (bottom - groove.y).max(0.0),
                     )
                 }
             }
@@ -235,5 +247,41 @@ mod tests {
         assert_eq!(slider.handle_rect(rect).y, 0.0);
         slider.set_value(70);
         assert_eq!(slider.handle_rect(rect).y, 73.0);
+    }
+}
+
+#[cfg(test)]
+mod ui_load_tests {
+    use super::*;
+    use crate::widgets::load_ui;
+
+    #[test]
+    fn vertical_gallery_ui_expands_and_keeps_upside_down() {
+        let xml = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../review/forms/gallery/slider/219_vertical.ui"
+        ))
+        .expect("ui");
+        let (mut tree, root) = load_ui(&xml).expect("load");
+        tree.layout(root, tree.widget(root).unwrap().geometry);
+        let id = tree.find_widget("slider").expect("slider");
+        let node = tree.widget(id).unwrap();
+        let slider = node.slider.as_ref().unwrap();
+        assert_eq!(slider.orientation, QOrientation::Vertical);
+        assert!(slider.upside_down, "vertical must be upside_down");
+        assert_eq!(slider.value, 70);
+        let g = node.geometry;
+        // Qt probe: label stays ~17px, slider Expanding fills the rest (~235).
+        assert!(
+            g.height > 200.0,
+            "vertical QSlider should expand in a vbox, got h={}",
+            g.height
+        );
+        let handle = slider.handle_rect(g);
+        assert!(
+            handle.y < g.y + g.height * 0.5,
+            "handle should be in upper half for value 70, got y={}",
+            handle.y
+        );
     }
 }

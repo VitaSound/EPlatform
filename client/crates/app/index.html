@@ -274,6 +274,9 @@
           if (next === active) {
             applyRect();
             updatePointerEvents();
+            // Canvas clicks steal DOM focus from the textarea; Rust may call
+            // again with the same active flag after pointer-up — re-focus.
+            if (active) focusTextInput();
             return;
           }
           active = next;
@@ -342,6 +345,12 @@
           "keydown",
           function (event) {
             if (!active) return;
+            // Canvas owns pointer hit-testing; after a click the textarea may
+            // be blurred while `active` stays true. Without focus, printable
+            // keys never fire `input`, and stopImmediatePropagation would
+            // also block winit — re-focus and synthesize insert for this key.
+            var owned = document.activeElement === ta;
+            if (!owned) focusTextInput();
             event.stopImmediatePropagation();
             if (event.isComposing || composing || event.key === "Process") return;
 
@@ -408,7 +417,15 @@
                 send("pageDown", "");
                 break;
               default:
-                // Printable characters go through `input`/IME composition.
+                if (
+                  !owned &&
+                  event.key.length === 1 &&
+                  !event.altKey
+                ) {
+                  event.preventDefault();
+                  send("insert", event.key);
+                }
+                // When owned, printable characters go through `input`/IME.
                 break;
             }
           },

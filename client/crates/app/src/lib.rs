@@ -1887,7 +1887,7 @@ impl App {
                     form.tree.combo_popup_hit(point).is_none()
                         && form.tree.scrollbar_at(form.root, point).is_some()
                 });
-                self.line_select = (class == "QLineEdit").then(|| LineSelect {
+                self.line_select = (class == "QLineEdit" || class == "QPlainTextEdit").then(|| LineSelect {
                     form_id: form_id.clone(),
                     name: name.clone(),
                 });
@@ -2467,7 +2467,7 @@ impl App {
         };
         if !matches!(
             class.as_str(),
-            "QTableWidget" | "QListWidget" | "QTreeWidget"
+            "QTableWidget" | "QListWidget" | "QTreeWidget" | "QPlainTextEdit"
         ) {
             return;
         }
@@ -2483,6 +2483,12 @@ impl App {
         let rect = node.geometry;
         let font = node.font.clone();
         let shift = self.shift;
+        if class == "QPlainTextEdit" {
+            if form.tree.scroll_plain_text(widget, -dy) {
+                return;
+            }
+            return;
+        }
         if class == "QTableWidget" {
             let Some(table) = form.tree.table_mut(widget) else {
                 return;
@@ -2535,7 +2541,7 @@ impl App {
     }
 
     /// Show/hide the mobile HTML input and keep its transparent hit area over
-    /// the focused `QLineEdit`. Only sends a change when the rect changes;
+    /// the focused line/plain edit. Only sends a change when the rect changes;
     /// this runs from focus/layout updates, not every frame.
     fn sync_web_text_input(&mut self) {
         let rect = self.focused.as_ref().and_then(|(form_id, name)| {
@@ -2546,6 +2552,19 @@ impl App {
         if self.web_input_rect == rect {
             return;
         }
+        self.web_input_rect = rect;
+        set_web_text_input(rect.is_some(), rect);
+    }
+
+    /// Re-assert the hidden textarea after a canvas click. `sync_web_text_input`
+    /// skips when the rect is unchanged, but the canvas steals DOM focus on
+    /// every pointer down — without this, desktop keys never reach the field.
+    fn refocus_web_text_input(&mut self) {
+        let rect = self.focused.as_ref().and_then(|(form_id, name)| {
+            let form = self.forms.get(form_id)?;
+            let widget = form.tree.find_widget(name)?;
+            form.tree.widget(widget).map(|node| node.geometry)
+        });
         self.web_input_rect = rect;
         set_web_text_input(rect.is_some(), rect);
     }
@@ -2617,6 +2636,10 @@ impl App {
             return;
         }
 
+        if matches!(action, KeyEdit::Up | KeyEdit::Down) && self.plain_text_vertical(&action) {
+            return;
+        }
+
         if matches!(
             action,
             KeyEdit::Left
@@ -2650,6 +2673,9 @@ impl App {
                     }
                 }
                 if !applied.is_empty() {
+                    if form.tree.is_plain_text_edit(widget) {
+                        form.tree.ensure_plain_text_cursor_visible(widget);
+                    }
                     form.tree.relayout(form.root);
                     Self::log(format!("edit {name}: +{applied:?}"));
                 }
@@ -2739,6 +2765,17 @@ impl App {
                 let Some((form_id, name)) = self.focused.clone() else {
                     return;
                 };
+                if let Some(form) = self.forms.get_mut(&form_id) {
+                    if let Some(widget) = form.tree.find_widget(&name) {
+                        if form.tree.is_plain_text_edit(widget) {
+                            if form.tree.insert_text(widget, '\n') {
+                                form.tree.ensure_plain_text_cursor_visible(widget);
+                                form.tree.relayout(form.root);
+                            }
+                            return;
+                        }
+                    }
+                }
                 if let Some(socket) = &self.socket {
                     socket.send(
                         "send_event",
@@ -2764,6 +2801,28 @@ impl App {
     /// Keyboard handling for `QComboBox`: arrows change the current item
     /// when closed and move the popup highlight when open; Enter commits or
     /// opens, Escape closes, Space opens (Qt behavior).
+    fn plain_text_vertical(&mut self, action: &KeyEdit) -> bool {
+        let up = match action {
+            KeyEdit::Up => true,
+            KeyEdit::Down => false,
+            _ => return false,
+        };
+        let Some((form_id, name)) = self.focused.clone() else {
+            return false;
+        };
+        let Some(form) = self.forms.get_mut(&form_id) else {
+            return false;
+        };
+        let Some(widget) = form.tree.find_widget(&name) else {
+            return false;
+        };
+        if !form.tree.is_plain_text_edit(widget) {
+            return false;
+        }
+        form.tree
+            .move_plain_text_cursor_vertical(widget, up, self.shift)
+    }
+
     fn spin_key(&mut self, action: &KeyEdit) -> bool {
         let up = match action {
             KeyEdit::Up | KeyEdit::PageUp => true,
@@ -3114,7 +3173,7 @@ impl App {
         };
         self.caret_epoch = now_ms();
         match class.as_str() {
-            "QLineEdit" => {
+            "QLineEdit" | "QPlainTextEdit" => {
                 self.focused = Some((form_id.to_string(), name.clone()));
                 self.table_focus = None;
                 if select_text {
@@ -4194,6 +4253,14 @@ impl App {
             if let Some(select) = self.line_select.clone() {
                 if let Some(form) = self.forms.get_mut(&select.form_id) {
                     if let Some(widget) = form.tree.find_widget(&select.name) {
+                        if form.tree.is_plain_text_edit(widget) {
+                            form.tree.select_plain_text_to(
+                                widget,
+                                rqt::gui::QPointF::new(self.cursor.0, self.cursor.1),
+                            );
+                            self.caret_epoch = now_ms();
+                            return;
+                        }
                         if let Some(rect) = form.tree.widget(widget).map(|widget| widget.geometry) {
                             form.tree
                                 .select_line_edit_to(widget, self.cursor.0 - rect.x);
@@ -4359,10 +4426,18 @@ impl App {
         self.dispatch_mouse_release();
 
         if let Some((form_id, name, class)) = &hit {
-            if double_tap && class == "QLineEdit" {
+            if double_tap && (class == "QLineEdit" || class == "QPlainTextEdit") {
                 if let Some(form) = self.forms.get_mut(form_id) {
                     if let Some(widget) = form.tree.find_widget(name) {
-                        if let Some(rect) = form.tree.widget(widget).map(|node| node.geometry) {
+                        if class == "QPlainTextEdit" {
+                            form.tree.select_word_at_point(
+                                widget,
+                                rqt::gui::QPointF::new(self.cursor.0, self.cursor.1),
+                            );
+                            self.caret_epoch = now_ms();
+                        } else if let Some(rect) =
+                            form.tree.widget(widget).map(|node| node.geometry)
+                        {
                             form.tree.select_word_at(widget, self.cursor.0 - rect.x);
                             self.caret_epoch = now_ms();
                         }
@@ -4373,6 +4448,10 @@ impl App {
 
         self.last_tap =
             hit.map(|(form_id, name, _)| (form_id, name, self.cursor.0, self.cursor.1, now));
+
+        if self.focused.is_some() {
+            self.refocus_web_text_input();
+        }
     }
 }
 
@@ -6688,6 +6767,49 @@ mod tests {
         assert_eq!(
             text_input_action("clearFocus", ""),
             (KeyEdit::ClearFocus, false)
+        );
+    }
+
+    #[test]
+    fn plain_text_edit_focus_types_and_selects() {
+        const UI: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0"><class>Dialog</class>
+ <widget class="QDialog" name="Dialog">
+  <property name="geometry"><rect><x>0</x><y>0</y><width>360</width><height>200</height></rect></property>
+  <layout class="QVBoxLayout" name="l">
+   <item>
+    <widget class="QPlainTextEdit" name="edit">
+     <property name="plainText"><string>hello</string></property>
+    </widget>
+   </item>
+  </layout>
+ </widget>
+</ui>"#;
+        let mut app = App::new(Params::default());
+        app.on_create_form(&serde_json::json!({
+            "form_id": "f",
+            "ui_xml": UI,
+        }));
+        let edit = app.forms["f"].tree.find_widget("edit").unwrap();
+        app.forms.get_mut("f").unwrap().tree.set_focus(edit);
+        app.sync_focus("f", edit, false);
+        assert_eq!(app.focused, Some(("f".into(), "edit".into())));
+
+        app.apply_key_action(KeyEdit::Insert("X".into()));
+        let text = app.forms["f"].tree.text(edit).unwrap_or_default();
+        assert!(text.contains('X'), "typed into plain text, got {text:?}");
+
+        app.apply_key_action(KeyEdit::SelectAll);
+        assert_eq!(
+            app.forms["f"].tree.line_edit_selection(edit),
+            Some((0, text.chars().count()))
+        );
+
+        app.apply_key_action(KeyEdit::Commit);
+        let after = app.forms["f"].tree.text(edit).unwrap_or_default();
+        assert!(
+            after.contains('\n'),
+            "Enter should insert newline in plain text, got {after:?}"
         );
     }
 }

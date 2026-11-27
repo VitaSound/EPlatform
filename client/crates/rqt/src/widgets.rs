@@ -1750,17 +1750,45 @@ impl QWidgetTree {
     /// Word characters follow Qt closely enough for UI text: Unicode
     /// alphanumerics plus `_`; punctuation/whitespace selects one character.
     pub fn select_word_at(&mut self, widget: QWidgetId, local_x: f32) -> bool {
-        if self
+        let class = self
             .widgets
             .get(widget)
-            .map(|node| node.class_name.as_str())
-            != Some("QLineEdit")
-        {
-            return false;
-        }
-        let Some(position) = self.cursor_at_x(widget, local_x) else {
+            .map(|node| node.class_name.as_str().to_string())
+            .unwrap_or_default();
+        let position = if class == "QPlainTextEdit" {
+            let Some(node) = self.widgets.get(widget) else {
+                return false;
+            };
+            let point = QPointF::new(node.geometry.x + local_x, node.geometry.y + 8.0);
+            let Some(position) = self.plain_text_cursor_at(widget, point) else {
+                return false;
+            };
+            position
+        } else if class == "QLineEdit" {
+            let Some(position) = self.cursor_at_x(widget, local_x) else {
+                return false;
+            };
+            position
+        } else {
             return false;
         };
+        self.select_word_around(widget, position)
+    }
+
+    /// Select the word under a global point (multiline plain text).
+    pub fn select_word_at_point(&mut self, widget: QWidgetId, point: QPointF) -> bool {
+        let Some(position) = self.plain_text_cursor_at(widget, point).or_else(|| {
+            let node = self.widgets.get(widget)?;
+            (node.class_name == "QLineEdit")
+                .then(|| self.cursor_at_x(widget, point.x - node.geometry.x))
+                .flatten()
+        }) else {
+            return false;
+        };
+        self.select_word_around(widget, position)
+    }
+
+    fn select_word_around(&mut self, widget: QWidgetId, position: usize) -> bool {
         let text: Vec<char> = self.text(widget).unwrap_or_default().chars().collect();
         if text.is_empty() {
             return false;
@@ -3035,10 +3063,18 @@ impl QWidgetTree {
             .or_else(|| {
                 order
                     .iter()
+                    .find(|id| self.widgets[**id].class_name == "QPlainTextEdit")
+            })
+            .or_else(|| {
+                order
+                    .iter()
                     .find(|id| self.widgets[**id].class_name == "QTableWidget")
             })?;
         self.set_focus(first);
-        if self.widgets[first].class_name == "QLineEdit" {
+        if matches!(
+            self.widgets[first].class_name.as_str(),
+            "QLineEdit" | "QPlainTextEdit"
+        ) {
             let length = self.text(first).unwrap_or_default().chars().count();
             self.set_cursor_position(first, length);
         }
@@ -5195,12 +5231,17 @@ impl QWidgetTree {
             .progress
             .as_deref()
             .is_some_and(|bar| bar.orientation == QOrientation::Vertical);
+        let slider_vertical = widget
+            .slider
+            .as_deref()
+            .is_some_and(|slider| slider.orientation == QOrientation::Vertical);
         if horizontal {
             widget.size_policy == QSizePolicy::Expanding
                 || widget.size_policy == QSizePolicy::MinimumExpanding
                 || widget.class_name == "QLineEdit"
                 || widget.class_name == "QSpinBox"
                 || widget.class_name == "QDoubleSpinBox"
+                || (widget.class_name == "QSlider" && !slider_vertical)
                 || (widget.class_name == "QProgressBar" && !progress_vertical)
                 || widget.class_name == "QTableWidget"
                 || widget.class_name == "QListWidget"
@@ -5209,6 +5250,7 @@ impl QWidgetTree {
         } else {
             widget.size_policy_v == QSizePolicy::Expanding
                 || widget.size_policy_v == QSizePolicy::MinimumExpanding
+                || (widget.class_name == "QSlider" && slider_vertical)
                 || (widget.class_name == "QProgressBar" && progress_vertical)
                 || widget.class_name == "QTableWidget"
                 || widget.class_name == "QListWidget"
