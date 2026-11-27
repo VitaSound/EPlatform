@@ -1,0 +1,25 @@
+# EPlatform prod/local: nginx (wasm + gallery landing) + Phoenix backend.
+# Publish only nginx on host :4000 (hermes → 10.0.0.14:4000 unchanged).
+services:
+  phoenix:
+    image: eplatform-phoenix:latest
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      PHX_SERVER: "true"
+      PORT: "4000"
+    restart: unless-stopped
+
+  nginx:
+    image: eplatform-web:latest
+    build:
+      context: .
+      dockerfile: client/Dockerfile
+    ports:
+      - "4000:80"
+    depends_on:
+      - phoenix
+    restart: unless-stopped

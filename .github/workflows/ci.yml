@@ -38,16 +38,12 @@ jobs:
       - run: mix test
 
   # Авторедеплой main → CT115 (eplatform.olabix.com).
-  # Секрет DEPLOY_SSH_KEY — тот же ed25519, что у mandela/blocks
-  # (pubkey уже на hermes-vps и CT115 как mandela-gha-deploy).
-  # Цепочка: runner → VPS 31.76.42.242 → hop → CT115 10.0.0.14 → /opt/eplatform.
+  # Секрет: DEPLOY_SSH_KEY (eplatform-gha-deploy).
+  # runner → hermes → CT115 → docker compose (nginx wasm + phoenix).
   deploy:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: test
     runs-on: ubuntu-24.04
-    defaults:
-      run:
-        working-directory: server
     steps:
       - uses: actions/checkout@v4
 
@@ -60,9 +56,8 @@ jobs:
             echo "has_key=true" >> "$GITHUB_OUTPUT"
           else
             echo "has_key=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::Секрет DEPLOY_SSH_KEY не задан — деплой пропущен (Settings → Secrets and variables → Actions)"
+            echo "::notice::Секрет DEPLOY_SSH_KEY не задан — деплой пропущен"
           fi
-        working-directory: .
 
       - name: Setup BEAM
         if: steps.creds.outputs.has_key == 'true'
@@ -71,19 +66,41 @@ jobs:
           otp-version: "27.2"
           elixir-version: "1.18.2"
 
-      - name: Build release
+      - name: Build Phoenix release
         if: steps.creds.outputs.has_key == 'true'
+        working-directory: server
         run: |
           mix deps.get --only prod
           MIX_ENV=prod mix compile
           MIX_ENV=prod mix release
-          tar -C _build/prod/rel -czf /tmp/eplatform-rel.tar.gz e_platform
 
-      - name: Deploy to CT115 via hermes-vps
+      - name: Setup Rust + Trunk
+        if: steps.creds.outputs.has_key == 'true'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install Trunk
+        if: steps.creds.outputs.has_key == 'true'
+        run: cargo install trunk --locked --version 0.21.14
+
+      - name: Build wasm client
+        if: steps.creds.outputs.has_key == 'true'
+        working-directory: client/crates/app
+        run: trunk build --release
+
+      - name: Build runtime images
+        if: steps.creds.outputs.has_key == 'true'
+        run: |
+          docker build -t eplatform-phoenix:latest -f server/Dockerfile.runtime ./server
+          docker build -t eplatform-web:latest -f deploy/Dockerfile.web .
+          docker save eplatform-phoenix:latest eplatform-web:latest | gzip > /tmp/eplatform-images.tgz
+          ls -lh /tmp/eplatform-images.tgz
+
+      - name: Deploy compose to CT115 via hermes-vps
         if: steps.creds.outputs.has_key == 'true'
         env:
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
-        working-directory: .
         run: |
           mkdir -p ~/.ssh
           printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519
@@ -104,23 +121,31 @@ jobs:
           SSHCFG
           chmod 600 ~/.ssh/config
 
-          scp /tmp/eplatform-rel.tar.gz deploy-app:/tmp/eplatform-rel.tgz
+          scp /tmp/eplatform-images.tgz deploy-app:/tmp/eplatform-images.tgz
+          scp docker-compose.yml deploy-app:/opt/eplatform/docker-compose.yml
           ssh deploy-app 'set -e
-            tar -C /opt/eplatform --strip-components=1 -xzf /tmp/eplatform-rel.tgz
-            rm -f /tmp/eplatform-rel.tgz /opt/eplatform/erl_crash.dump
-            systemctl restart eplatform
-            sleep 6
-            systemctl is-active eplatform | grep -q active
-            curl -sf -o /dev/null -H "X-Forwarded-Proto: https" http://127.0.0.1:4000/health
+            gunzip -c /tmp/eplatform-images.tgz | docker load
+            rm -f /tmp/eplatform-images.tgz
+            cd /opt/eplatform
+            test -f .env
+            docker compose up -d --remove-orphans
+            sleep 8
+            docker compose ps
+            curl -sf -o /dev/null http://127.0.0.1:4000/health
+            code=$(curl -s -o /dev/null -w "%{http_code}" -H "X-Forwarded-Proto: https" -H "Host: eplatform.olabix.com" http://127.0.0.1:4000/)
+            test "$code" = "302"
             echo SMOKE_OK'
 
       - name: Verify public endpoint
         if: steps.creds.outputs.has_key == 'true'
-        working-directory: .
         run: |
-          for i in $(seq 1 10); do
-            code=$(curl -s -o /dev/null -w "%{http_code}" -m 10 https://eplatform.olabix.com/health || true)
-            if [ "$code" = "200" ]; then echo "public /health -> 200"; exit 0; fi
+          for i in $(seq 1 12); do
+            health=$(curl -s -o /dev/null -w "%{http_code}" -m 10 https://eplatform.olabix.com/health || true)
+            land=$(curl -s -o /dev/null -w "%{http_code}" -m 10 -L https://eplatform.olabix.com/ || true)
+            if [ "$health" = "200" ] && [ "$land" = "200" ]; then
+              echo "public /health -> 200, / (follow) -> 200"
+              exit 0
+            fi
             sleep 5
           done
           echo "public endpoint check failed" >&2

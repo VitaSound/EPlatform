@@ -1,0 +1,6 @@
+# Lightweight web image when dist is already built (trunk build --release).
+# CI uses client/Dockerfile (full Trunk build). Context = repo root.
+FROM nginx:1.27-alpine
+COPY deploy/nginx.conf /etc/nginx/conf.d/default.conf
+COPY client/crates/app/dist/ /usr/share/nginx/html/
+EXPOSE 80

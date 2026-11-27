@@ -11,3 +11,7 @@
 # Python cache
 __pycache__/
 *.pyc
+
+.env
+.env.*
+!.env.example
