@@ -44,6 +44,10 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: test
     runs-on: ubuntu-24.04
+    # Override workflow default (server/) — docker/scp paths are repo-root.
+    defaults:
+      run:
+        working-directory: .
     steps:
       - uses: actions/checkout@v4
 
