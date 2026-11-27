@@ -32,6 +32,7 @@ defmodule EPlatform.DynamicFormsTest do
     assert ui_xml =~ ~s(name="DynDeclarative")
     assert ui_xml =~ ~s(name="nameEdit")
     assert ui_xml =~ ~s(name="ok")
+
     refute File.exists?(
              Path.join(:code.priv_dir(:e_platform), "qt_forms/test_dyn_declarative.ui")
            )

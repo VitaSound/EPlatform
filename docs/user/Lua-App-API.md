@@ -5,7 +5,7 @@
 Это не отдельный процесс, а операции над `application_id` / main-сессией.
 Часть window-менеджмента в браузере — no-op (задел под desktop-host).
 
-_Generated 2026-11-27 12:30 UTC from `server/priv/lua_modules/application.lua`._
+_Generated 2026-11-27 12:59 UTC from `server/priv/lua_modules/application.lua`._
 
 | Метод | Аргументы | Комментарий в коде |
 | --- | --- | --- |

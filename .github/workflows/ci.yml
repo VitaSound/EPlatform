@@ -1,0 +1,127 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: server
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    env:
+      MIX_ENV: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "27.2"
+          elixir-version: "1.18.2"
+
+      - name: Cache deps and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            server/deps
+            server/_build
+          key: ${{ runner.os }}-mix-${{ hashFiles('server/mix.lock') }}
+          restore-keys: ${{ runner.os }}-mix-
+
+      - run: mix deps.get
+      - run: mix compile --warnings-as-errors
+      - run: mix format --check-formatted
+      - run: mix test
+
+  # Авторедеплой main → CT115 (eplatform.olabix.com).
+  # Секрет DEPLOY_SSH_KEY — тот же ed25519, что у mandela/blocks
+  # (pubkey уже на hermes-vps и CT115 как mandela-gha-deploy).
+  # Цепочка: runner → VPS 31.76.42.242 → hop → CT115 10.0.0.14 → /opt/eplatform.
+  deploy:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: test
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check deploy credentials
+        id: creds
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          if [ -n "$DEPLOY_SSH_KEY" ]; then
+            echo "has_key=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_key=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Секрет DEPLOY_SSH_KEY не задан — деплой пропущен (Settings → Secrets and variables → Actions)"
+          fi
+        working-directory: .
+
+      - name: Setup BEAM
+        if: steps.creds.outputs.has_key == 'true'
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: "27.2"
+          elixir-version: "1.18.2"
+
+      - name: Build release
+        if: steps.creds.outputs.has_key == 'true'
+        run: |
+          mix deps.get --only prod
+          MIX_ENV=prod mix compile
+          MIX_ENV=prod mix release
+          tar -C _build/prod/rel -czf /tmp/eplatform-rel.tar.gz e_platform
+
+      - name: Deploy to CT115 via hermes-vps
+        if: steps.creds.outputs.has_key == 'true'
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        working-directory: .
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          cat > ~/.ssh/config <<'SSHCFG'
+          Host deploy-vps
+            HostName 31.76.42.242
+            User root
+            IdentityFile ~/.ssh/id_ed25519
+            StrictHostKeyChecking accept-new
+
+          Host deploy-app
+            HostName 10.0.0.14
+            User root
+            IdentityFile ~/.ssh/id_ed25519
+            ProxyJump deploy-vps
+            StrictHostKeyChecking accept-new
+          SSHCFG
+          chmod 600 ~/.ssh/config
+
+          scp /tmp/eplatform-rel.tar.gz deploy-app:/tmp/eplatform-rel.tgz
+          ssh deploy-app 'set -e
+            tar -C /opt/eplatform --strip-components=1 -xzf /tmp/eplatform-rel.tgz
+            rm -f /tmp/eplatform-rel.tgz /opt/eplatform/erl_crash.dump
+            systemctl restart eplatform
+            sleep 6
+            systemctl is-active eplatform | grep -q active
+            curl -sf -o /dev/null -H "X-Forwarded-Proto: https" http://127.0.0.1:4000/health
+            echo SMOKE_OK'
+
+      - name: Verify public endpoint
+        if: steps.creds.outputs.has_key == 'true'
+        working-directory: .
+        run: |
+          for i in $(seq 1 10); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" -m 10 https://eplatform.olabix.com/health || true)
+            if [ "$code" = "200" ]; then echo "public /health -> 200"; exit 0; fi
+            sleep 5
+          done
+          echo "public endpoint check failed" >&2
+          exit 1

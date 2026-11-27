@@ -374,6 +374,7 @@ defmodule EPlatform.Lua.Api do
   defp split_widget_opts(opts) when is_map(opts) do
     cell_keys = ~w(row column col row_span rowspan column_span colspan alignment parent)
     cell = Map.take(opts, cell_keys)
+
     properties =
       opts
       |> Map.drop(cell_keys ++ ["parent"])

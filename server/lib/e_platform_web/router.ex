@@ -5,6 +5,10 @@ defmodule EPlatformWeb.Router do
     plug :accepts, ["json"]
   end
 
+  scope "/", EPlatformWeb do
+    get "/health", HealthController, :show
+  end
+
   scope "/api", EPlatformWeb do
     pipe_through :api
   end
