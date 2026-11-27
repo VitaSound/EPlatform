@@ -70,6 +70,16 @@ jobs:
           otp-version: "27.2"
           elixir-version: "1.18.2"
 
+      - name: Cache Mix deps/build
+        if: steps.creds.outputs.has_key == 'true'
+        uses: actions/cache@v4
+        with:
+          path: |
+            server/deps
+            server/_build
+          key: ${{ runner.os }}-mix-${{ hashFiles('server/mix.lock') }}
+          restore-keys: ${{ runner.os }}-mix-
+
       - name: Build Phoenix release
         if: steps.creds.outputs.has_key == 'true'
         working-directory: server
@@ -78,15 +88,31 @@ jobs:
           MIX_ENV=prod mix compile
           MIX_ENV=prod mix release
 
-      - name: Setup Rust + Trunk
+      - name: Setup Rust
         if: steps.creds.outputs.has_key == 'true'
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
 
-      - name: Install Trunk
+      - name: Cache Rust (client)
         if: steps.creds.outputs.has_key == 'true'
-        run: cargo install trunk --locked --version 0.21.14
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: client
+          cache-on-failure: true
+
+      - name: Install Trunk (prebuilt)
+        if: steps.creds.outputs.has_key == 'true'
+        run: |
+          set -euo pipefail
+          VER=0.21.14
+          curl -fsSL -o /tmp/trunk.tgz \
+            "https://github.com/trunk-rs/trunk/releases/download/v${VER}/trunk-x86_64-unknown-linux-gnu.tar.gz"
+          mkdir -p "$HOME/.local/bin"
+          tar -xzf /tmp/trunk.tgz -C "$HOME/.local/bin" trunk
+          chmod +x "$HOME/.local/bin/trunk"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/trunk" --version
 
       - name: Build wasm client
         if: steps.creds.outputs.has_key == 'true'
