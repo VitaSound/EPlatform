@@ -5,23 +5,27 @@ use crate::style::{QControlElement, QPrimitiveElement, QStyle, QStyleOption, QSt
 use crate::widgets::{wrap_text_lines, QWidget, QWidgetId, QWidgetTree, QCOMBO_POPUP_ROW_H};
 
 mod focus;
+mod plain_text;
+mod progress;
 mod scroll;
+mod slider;
 mod spin;
 mod table;
 mod tabs;
+// mod toolbox; // needs widgets.toolbox — parent wires QToolBox
 
 pub use scroll::paint_scroll_bar;
 
 use focus::paint_focus_indicators;
+use plain_text::paint_plain_text_edit;
+use progress::paint_progress_bar;
 use scroll::paint_item_views;
+use slider::paint_slider;
 use spin::paint_spin_box;
 use table::paint_table;
 use tabs::paint_tab_widget;
 
 
-/// Paint a form and its open combo popups. Popups are a top-level layer in
-/// Qt, so they are replayed after the whole widget tree instead of being
-/// clipped by the combo's own geometry.
 pub fn paint_widget_tree(
     tree: &QWidgetTree,
     root: QWidgetId,
@@ -110,11 +114,21 @@ fn paint_widget(
     if widget.class_name == "QTabWidget" {
         paint_tab_widget(widget, style, painter);
     }
+    // QToolBox paint deferred until widgets.toolbox lands (parent strips/wires).
     if matches!(
         widget.class_name.as_str(),
         "QSpinBox" | "QDoubleSpinBox"
     ) {
         paint_spin_box(widget, style, &option, painter);
+    }
+    if widget.class_name == "QProgressBar" {
+        paint_progress_bar(widget, painter);
+    }
+    if widget.class_name == "QSlider" {
+        paint_slider(widget, style, &option, painter);
+    }
+    if widget.class_name == "QPlainTextEdit" {
+        paint_plain_text_edit(widget, style, &option, painter, &qss);
     }
     paint_table(widget, painter, style, &item_qss, &header_qss);
     paint_item_views(widget, painter, style, &item_qss, &header_qss);
@@ -280,8 +294,18 @@ fn paint_widget_background(
         "QTabWidget" => {
             // Chrome is drawn in `paint_tab_widget` after the background pass.
         }
+        "QToolBox" => {
+            // Headers drawn in `paint_toolbox`; body is Window/Button fill.
+            painter.fill_rect(frame, widget.palette.color(QPaletteRole::Button));
+        }
         "QSpinBox" | "QDoubleSpinBox" => {
             // Frame/text/buttons drawn in `paint_spin_box`.
+        }
+        "QProgressBar" => {
+            // Groove/chunk/label drawn in `paint_progress_bar`.
+        }
+        "QPlainTextEdit" => {
+            // Frame/text/caret/scroll drawn in `paint_plain_text_edit`.
         }
         _ => {}
     }
@@ -638,6 +662,14 @@ fn paint_widget_text(
     option: &QStyleOption,
     qss: &QStyleDeclarations,
 ) {
+    if widget.class_name == "QProgressBar" {
+        // Label is painted with dual-color clipping in `paint_progress_bar`.
+        return;
+    }
+    if widget.class_name == "QPlainTextEdit" {
+        // Text/selection/caret painted in `paint_plain_text_edit`.
+        return;
+    }
     if widget.class_name == "QLineEdit" {
         paint_line_edit_text(widget, painter, qss);
         return;
@@ -982,12 +1014,21 @@ mod tests {
             ]
         );
 
+        // Dialog panel + controls may use FillRect, FillRoundedRect, or
+        // FillLinearGradientRect (Fusion line-edit / button chrome).
         let fills = painter
             .commands()
             .iter()
-            .filter(|command| matches!(command, QPaintCommand::FillRect { .. }))
+            .filter(|command| {
+                matches!(
+                    command,
+                    QPaintCommand::FillRect { .. }
+                        | QPaintCommand::FillRoundedRect { .. }
+                        | QPaintCommand::FillLinearGradientRect { .. }
+                )
+            })
             .count();
-        assert!(fills >= 4);
+        assert!(fills >= 4, "expected painted fills, got {fills}");
         assert!(painter
             .commands()
             .iter()

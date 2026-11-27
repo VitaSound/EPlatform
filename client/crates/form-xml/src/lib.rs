@@ -100,7 +100,8 @@ pub struct Widget {
     pub class: String,
     pub name: String,
     pub properties: Vec<(String, PropValue)>,
-    /// `<attribute name="…">` values (e.g. QTabWidget page `title`).
+    /// `<attribute name="…">` values (e.g. QTabWidget page `title`,
+    /// QToolBox page `label`).
     pub attributes: Vec<(String, PropValue)>,
     /// Direct child widgets placed by explicit geometry (no layout).
     pub children: Vec<Widget>,
@@ -1152,6 +1153,39 @@ mod tests {
         );
         assert_eq!(
             tabs.children[1].attribute("title"),
+            Some(&PropValue::Str("Вторая".into()))
+        );
+    }
+
+    #[test]
+    fn parses_toolbox_page_label_attributes() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0"><class>Dialog</class>
+ <widget class="QDialog" name="Dialog">
+  <widget class="QToolBox" name="toolbox">
+   <property name="currentIndex"><number>1</number></property>
+   <widget class="QWidget" name="pageA">
+    <attribute name="label"><string>Первая</string></attribute>
+   </widget>
+   <widget class="QWidget" name="pageB">
+    <attribute name="label"><string>Вторая</string></attribute>
+   </widget>
+  </widget>
+ </widget>
+</ui>"#;
+        let form = parse(xml).expect("parses");
+        let toolbox = &form.root.children[0];
+        assert_eq!(toolbox.class, "QToolBox");
+        assert_eq!(
+            toolbox.property("currentIndex"),
+            Some(&PropValue::Int(1))
+        );
+        assert_eq!(
+            toolbox.children[0].attribute("label"),
+            Some(&PropValue::Str("Первая".into()))
+        );
+        assert_eq!(
+            toolbox.children[1].attribute("label"),
             Some(&PropValue::Str("Вторая".into()))
         );
     }

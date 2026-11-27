@@ -1626,19 +1626,91 @@
     "number": 128
   },
   {
-    "id": "gallery/spin/214_int_suffix",
-    "category": "gallery/spin",
-    "title": "#129 spin/214_int_suffix",
-    "description": "QSpinBox with suffix",
-    "path": "review/forms/gallery/spin/214_int_suffix.ui",
+    "id": "gallery/toolbox/214_basic_two",
+    "category": "gallery/toolbox",
+    "title": "#129 toolbox/214_basic_two",
+    "description": "QToolBox with two pages and cyrillic labels",
+    "path": "review/forms/gallery/toolbox/214_basic_two.ui",
     "number": 129
   },
   {
-    "id": "gallery/spin/215_double_prefix",
-    "category": "gallery/spin",
-    "title": "#130 spin/215_double_prefix",
-    "description": "QDoubleSpinBox with prefix",
-    "path": "review/forms/gallery/spin/215_double_prefix.ui",
+    "id": "gallery/toolbox/215_fields_three",
+    "category": "gallery/toolbox",
+    "title": "#130 toolbox/215_fields_three",
+    "description": "three toolbox pages; middle page selected",
+    "path": "review/forms/gallery/toolbox/215_fields_three.ui",
     "number": 130
+  },
+  {
+    "id": "gallery/spin/216_int_suffix",
+    "category": "gallery/spin",
+    "title": "#131 spin/216_int_suffix",
+    "description": "QSpinBox with suffix",
+    "path": "review/forms/gallery/spin/216_int_suffix.ui",
+    "number": 131
+  },
+  {
+    "id": "gallery/spin/217_double_prefix",
+    "category": "gallery/spin",
+    "title": "#132 spin/217_double_prefix",
+    "description": "QDoubleSpinBox with prefix",
+    "path": "review/forms/gallery/spin/217_double_prefix.ui",
+    "number": 132
+  },
+  {
+    "id": "gallery/slider/218_horizontal",
+    "category": "gallery/slider",
+    "title": "#133 slider/218_horizontal",
+    "description": "horizontal QSlider",
+    "path": "review/forms/gallery/slider/218_horizontal.ui",
+    "number": 133
+  },
+  {
+    "id": "gallery/slider/219_vertical",
+    "category": "gallery/slider",
+    "title": "#134 slider/219_vertical",
+    "description": "vertical QSlider",
+    "path": "review/forms/gallery/slider/219_vertical.ui",
+    "number": 134
+  },
+  {
+    "id": "gallery/progress/220_value_0",
+    "category": "gallery/progress",
+    "title": "#135 progress/220_value_0",
+    "description": "QProgressBar value 0",
+    "path": "review/forms/gallery/progress/220_value_0.ui",
+    "number": 135
+  },
+  {
+    "id": "gallery/progress/221_value_50",
+    "category": "gallery/progress",
+    "title": "#136 progress/221_value_50",
+    "description": "QProgressBar value 50",
+    "path": "review/forms/gallery/progress/221_value_50.ui",
+    "number": 136
+  },
+  {
+    "id": "gallery/progress/222_value_100",
+    "category": "gallery/progress",
+    "title": "#137 progress/222_value_100",
+    "description": "QProgressBar value 100",
+    "path": "review/forms/gallery/progress/222_value_100.ui",
+    "number": 137
+  },
+  {
+    "id": "gallery/textedit/223_multiline_static",
+    "category": "gallery/textedit",
+    "title": "#138 textedit/223_multiline_static",
+    "description": "QPlainTextEdit with wrapped static text",
+    "path": "review/forms/gallery/textedit/223_multiline_static.ui",
+    "number": 138
+  },
+  {
+    "id": "gallery/textedit/224_empty_focus_sized",
+    "category": "gallery/textedit",
+    "title": "#139 textedit/224_empty_focus_sized",
+    "description": "empty QPlainTextEdit at default size hint",
+    "path": "review/forms/gallery/textedit/224_empty_focus_sized.ui",
+    "number": 139
   }
 ]

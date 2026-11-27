@@ -4,7 +4,7 @@ use crate::gui::{
 use crate::item_view::{QVIEW_BRANCH_W, QVIEW_HEADER_H, QVIEW_ROW_H};
 use crate::qss::QStyleDeclarations;
 use crate::scroll::QScrollBar;
-use crate::style::{QComplexControl, QStyle, QStyleOption, QStyleState};
+use crate::style::{QComplexControl, QComplexControlData, QStyle, QStyleOption, QStyleState};
 use crate::widgets::QWidget;
 
 use super::focus::paint_dotted_rect;
@@ -138,7 +138,7 @@ pub fn paint_scroll_bar(
     painter.draw_commands(&style.draw_complex_control(
         QComplexControl::ScrollBar,
         &option,
-        bar,
+        QComplexControlData::ScrollBar(bar),
     ));
 }
 

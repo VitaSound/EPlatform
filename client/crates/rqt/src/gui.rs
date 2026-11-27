@@ -5,6 +5,7 @@ use std::sync::Arc;
 /// and `include_bytes!` here and in `app::gfx` used to embed it twice
 /// (+1.5 MB of wasm data).
 pub static DEJA_VU_SANS: &[u8] = include_bytes!("../../../assets/DejaVuSans.ttf");
+pub static DEJA_VU_SANS_BOLD: &[u8] = include_bytes!("../../../assets/DejaVuSans-Bold.ttf");
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct QPointF {
@@ -507,6 +508,7 @@ thread_local! {
     static FONT_SYSTEM: RefCell<cosmic_text::FontSystem> = RefCell::new(
         cosmic_text::FontSystem::new_with_fonts([
             cosmic_text::fontdb::Source::Binary(Arc::new(DEJA_VU_SANS)),
+            cosmic_text::fontdb::Source::Binary(Arc::new(DEJA_VU_SANS_BOLD)),
         ]),
     );
 }

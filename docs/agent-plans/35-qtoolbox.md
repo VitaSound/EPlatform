@@ -1,6 +1,6 @@
 # 35 — QToolBox
 
-Status: ready
+Status: done
 Priority: P2
 Depends-on: [30-qtabwidget.md]
 Blocks: []
@@ -41,8 +41,8 @@ Estimate: M
 
 ## Tests / acceptance
 
-- [ ] Page switch works
-- [ ] `cargo test`
+- [x] Page switch works
+- [x] `cargo test`
 
 ## Agent handoff prompt (copy-paste)
 

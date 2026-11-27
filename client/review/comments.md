@@ -1556,3 +1556,123 @@
 
 Комментарий:
 
+## gallery/tabs/212_basic_two
+
+<!-- id: gallery/tabs/212_basic_two -->
+
+Комментарий:
+
+## gallery/tabs/213_fields_three
+
+<!-- id: gallery/tabs/213_fields_three -->
+
+Комментарий:
+
+## gallery/spin/214_int_suffix
+
+<!-- id: gallery/spin/214_int_suffix -->
+
+Комментарий:
+
+## gallery/spin/215_double_prefix
+
+<!-- id: gallery/spin/215_double_prefix -->
+
+Комментарий:
+
+## gallery/slider/216_horizontal
+
+<!-- id: gallery/slider/216_horizontal -->
+
+Комментарий:
+
+## gallery/slider/217_vertical
+
+<!-- id: gallery/slider/217_vertical -->
+
+Комментарий:
+
+## gallery/progress/218_value_0
+
+<!-- id: gallery/progress/218_value_0 -->
+
+Комментарий:
+
+## gallery/progress/219_value_50
+
+<!-- id: gallery/progress/219_value_50 -->
+
+Комментарий:
+
+## gallery/progress/220_value_100
+
+<!-- id: gallery/progress/220_value_100 -->
+
+Комментарий:
+
+## gallery/toolbox/214_basic_two
+
+<!-- id: gallery/toolbox/214_basic_two -->
+
+Комментарий:
+
+## gallery/toolbox/215_fields_three
+
+<!-- id: gallery/toolbox/215_fields_three -->
+
+Комментарий:
+
+## gallery/spin/216_int_suffix
+
+<!-- id: gallery/spin/216_int_suffix -->
+
+Комментарий:
+
+## gallery/spin/217_double_prefix
+
+<!-- id: gallery/spin/217_double_prefix -->
+
+Комментарий:
+
+## gallery/slider/218_horizontal
+
+<!-- id: gallery/slider/218_horizontal -->
+
+Комментарий:
+
+## gallery/slider/219_vertical
+
+<!-- id: gallery/slider/219_vertical -->
+
+Комментарий:
+
+## gallery/progress/220_value_0
+
+<!-- id: gallery/progress/220_value_0 -->
+
+Комментарий:
+
+## gallery/progress/221_value_50
+
+<!-- id: gallery/progress/221_value_50 -->
+
+Комментарий:
+
+## gallery/progress/222_value_100
+
+<!-- id: gallery/progress/222_value_100 -->
+
+Комментарий:
+
+## gallery/textedit/223_multiline_static
+
+<!-- id: gallery/textedit/223_multiline_static -->
+
+Комментарий:
+
+## gallery/textedit/224_empty_focus_sized
+
+<!-- id: gallery/textedit/224_empty_focus_sized -->
+
+Комментарий:
+

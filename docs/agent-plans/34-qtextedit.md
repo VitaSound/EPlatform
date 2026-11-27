@@ -1,6 +1,6 @@
 # 34 — QTextEdit / QPlainTextEdit
 
-Status: ready
+Status: done
 Priority: P2
 Depends-on: [01-canvas-geometry-pointer.md]
 Blocks: []
@@ -31,7 +31,7 @@ Multi-line text edit with selection, caret, scroll, basic bindings — enough fo
 
 ## Implementation steps
 
-1. Decide Plain vs Rich from `.ui` inventory.
+1. Decide Plain vs Rich from `.ui` inventory. — no product `.ui` hits; ship `QPlainTextEdit` only.
 2. Buffer + layout lines + paint.
 3. Input events; selection.
 4. Gallery + tests; budget XL carefully.
@@ -40,13 +40,13 @@ Multi-line text edit with selection, caret, scroll, basic bindings — enough fo
 
 | Path | Change |
 |------|--------|
-| widgets, paint, app input, gfx text | Large |
+| `rqt/plain_text_edit.rs`, `paint/plain_text.rs`, widgets, app input | Large |
 
 ## Tests / acceptance
 
-- [ ] Type, select, scroll work on wasm
-- [ ] Golden for static content
-- [ ] `cargo test`
+- [x] Type, select, scroll work on wasm (app IME/focus/keys/wheel; unit test covers scroll/select)
+- [x] Golden for static content (`gallery/textedit` ≤ ~2% over30 vs Qt)
+- [x] `cargo test`
 
 ## Agent handoff prompt (copy-paste)
 

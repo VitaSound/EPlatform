@@ -1,5 +1,6 @@
 use crate::gui::{QColor, QFont, QPalette, QPaletteRole, QPointF, QRectF, QSizeF};
 use crate::scroll::{QOrientation, QScrollBar, QScrollBarSubControl};
+use crate::slider::QSlider;
 
 pub use crate::gui::QPaintCommand;
 
@@ -42,8 +43,17 @@ pub enum QPixelMetric {
     FocusFrameWidth,
     ScrollBarExtent,
     ScrollBarSliderMin,
+    SliderThickness,
+    SliderLength,
     TabBarHeight,
     MenuItemHeight,
+}
+
+/// Payload for `QStyle::drawComplexControl`.
+#[derive(Clone, Copy, Debug)]
+pub enum QComplexControlData<'a> {
+    ScrollBar(&'a QScrollBar),
+    Slider(&'a QSlider),
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -115,13 +125,13 @@ pub trait QStyle {
         option: &QStyleOption,
     ) -> Vec<QPaintCommand>;
     fn draw_control(&self, element: QControlElement, option: &QStyleOption) -> Vec<QPaintCommand>;
-    /// Qt `QStyle::drawComplexControl`. `bar` supplies sub-control geometry
+    /// Qt `QStyle::drawComplexControl`. `data` supplies sub-control geometry
     /// and hover/press state (like `QStyleOptionSlider` + activeSubControls).
     fn draw_complex_control(
         &self,
         control: QComplexControl,
         option: &QStyleOption,
-        bar: &QScrollBar,
+        data: QComplexControlData<'_>,
     ) -> Vec<QPaintCommand>;
 }
 
@@ -602,6 +612,141 @@ fn draw_scroll_bar(option: &QStyleOption, bar: &QScrollBar) -> Vec<QPaintCommand
     out
 }
 
+fn rect_adjusted(rect: QRectF, left: f32, top: f32, right: f32, bottom: f32) -> QRectF {
+    QRectF::new(
+        rect.x + left,
+        rect.y + top,
+        (rect.width - left + right).max(0.0),
+        (rect.height - top + bottom).max(0.0),
+    )
+}
+
+/// Fusion `CC_Slider`: groove + blue active span + rounded handle.
+fn draw_slider(option: &QStyleOption, slider: &QSlider) -> Vec<QPaintCommand> {
+    let rect = option.rect;
+    if rect.width <= 0.0 || rect.height <= 0.0 {
+        return Vec::new();
+    }
+    let palette = &option.palette;
+    let enabled = option.state.contains(QStyleState::ENABLED);
+    let window = palette.color(QPaletteRole::Window);
+    let button = palette.color(QPaletteRole::Button);
+    let mut outline = window.darker(140);
+    let highlight = palette.color(QPaletteRole::Highlight);
+    let groove = slider.groove_rect(rect);
+    let handle = slider.handle_rect(rect);
+    let horizontal = matches!(slider.orientation, QOrientation::Horizontal);
+    let mut out = Vec::new();
+
+    if groove.width > 0.0 && groove.height > 0.0 {
+        // Fusion grooveColor: Button HSV with value * 0.9.
+        let groove_color =
+            button.with_value(((button.value() as f32) * 0.9).round().clamp(0.0, 255.0) as u8);
+        let inner = rect_adjusted(groove, 1.0, 1.0, -2.0, -2.0);
+        if inner.width > 0.0 && inner.height > 0.0 {
+            // Inactive groove: darker(110) → lighter(110), rounded.
+            out.push(QPaintCommand::FillLinearGradientRect {
+                rect: inner,
+                radius: 1.0,
+                start: groove_color.darker(110),
+                end: groove_color.lighter(110),
+                horizontal: !horizontal,
+            });
+            out.push(QPaintCommand::StrokeRoundedRect {
+                rect: inner,
+                radius: 1.0,
+                width: 1.0,
+                color: outline,
+            });
+
+            // Active (blue) span clipped to the minimum→handle side.
+            let clip = slider.active_groove_clip(rect);
+            if let Some(clipped) = clip.intersected(&groove) {
+                if clipped.width > 0.5 && clipped.height > 0.5 {
+                    let mut highlighted_outline = highlight.darker(140);
+                    if outline.q_gray() > highlighted_outline.q_gray() {
+                        std::mem::swap(&mut outline, &mut highlighted_outline);
+                    }
+                    out.push(QPaintCommand::Save);
+                    out.push(QPaintCommand::SetClip {
+                        rect: Some(rect_adjusted(clipped, 0.0, 0.0, 1.0, 1.0)),
+                    });
+                    out.push(QPaintCommand::FillLinearGradientRect {
+                        rect: inner,
+                        radius: 1.0,
+                        start: highlight,
+                        end: highlight.lighter(130),
+                        horizontal: !horizontal,
+                    });
+                    out.push(QPaintCommand::StrokeRoundedRect {
+                        rect: inner,
+                        radius: 1.0,
+                        width: 1.0,
+                        color: outline,
+                    });
+                    // Inner contrast line (Fusion).
+                    let contrast = rect_adjusted(inner, 1.0, 1.0, -1.0, -1.0);
+                    if contrast.width > 0.0 && contrast.height > 0.0 {
+                        out.push(QPaintCommand::StrokeRoundedRect {
+                            rect: contrast,
+                            radius: 1.0,
+                            width: 1.0,
+                            color: QColor::rgba8(255, 255, 255, 30),
+                        });
+                    }
+                    out.push(QPaintCommand::Restore);
+                }
+            }
+        }
+    }
+
+    if handle.width > 0.0 && handle.height > 0.0 {
+        let r = rect_adjusted(handle, 1.0, 1.0, -2.0, -2.0);
+        if r.width > 0.0 && r.height > 0.0 {
+            let fill = if !enabled {
+                window
+            } else if slider.pressed {
+                button.darker(110)
+            } else {
+                button.lighter(104)
+            };
+            let grad_end = if enabled {
+                button.darker(108)
+            } else {
+                window.darker(105)
+            };
+            out.push(QPaintCommand::FillLinearGradientRect {
+                rect: r,
+                radius: 2.0,
+                start: fill.lighter(106),
+                end: grad_end,
+                horizontal: !horizontal,
+            });
+            let pen = if option.state.contains(QStyleState::FOCUSED) {
+                highlight.darker(120)
+            } else {
+                window.darker(140)
+            };
+            out.push(QPaintCommand::StrokeRoundedRect {
+                rect: r,
+                radius: 2.0,
+                width: 1.0,
+                color: pen,
+            });
+            let inner = rect_adjusted(r, 1.0, 1.0, -1.0, -1.0);
+            if inner.width > 0.0 && inner.height > 0.0 {
+                out.push(QPaintCommand::StrokeRoundedRect {
+                    rect: inner,
+                    radius: 2.0,
+                    width: 1.0,
+                    color: QColor::rgba8(255, 255, 255, 30),
+                });
+            }
+        }
+    }
+    out
+}
+
 impl QStyle for QFusionStyle {
     fn pixel_metric(&self, metric: QPixelMetric) -> f32 {
         match metric {
@@ -611,6 +756,7 @@ impl QStyle for QFusionStyle {
             QPixelMetric::FocusFrameWidth => 1.0,
             QPixelMetric::ScrollBarExtent => 14.0,
             QPixelMetric::ScrollBarSliderMin => 26.0,
+            QPixelMetric::SliderThickness | QPixelMetric::SliderLength => 15.0,
             // Fusion: font (~16) + PM_TabBarTabVSpace (12) → ~28 (Qt probe).
             QPixelMetric::TabBarHeight => 28.0,
             QPixelMetric::MenuItemHeight => 20.0,
@@ -883,14 +1029,18 @@ impl QStyle for QFusionStyle {
         &self,
         control: QComplexControl,
         option: &QStyleOption,
-        bar: &QScrollBar,
+        data: QComplexControlData<'_>,
     ) -> Vec<QPaintCommand> {
-        match control {
-            QComplexControl::ScrollBar => draw_scroll_bar(option, bar),
-            // Slider/ComboBox/SpinBox complex paint lands in later plans.
-            QComplexControl::Slider
-            | QComplexControl::ComboBox
-            | QComplexControl::SpinBox => Vec::new(),
+        match (control, data) {
+            (QComplexControl::ScrollBar, QComplexControlData::ScrollBar(bar)) => {
+                draw_scroll_bar(option, bar)
+            }
+            (QComplexControl::Slider, QComplexControlData::Slider(slider)) => {
+                draw_slider(option, slider)
+            }
+            // ComboBox/SpinBox complex paint lands in later plans.
+            (QComplexControl::ComboBox, _) | (QComplexControl::SpinBox, _) => Vec::new(),
+            _ => Vec::new(),
         }
     }
 }
@@ -1018,8 +1168,11 @@ mod tests {
         let mut bar = QScrollBar::new(QOrientation::Vertical);
         bar.set_range(0.0, 100.0, 20.0);
         bar.set_value(40.0);
-        let commands =
-            style.draw_complex_control(QComplexControl::ScrollBar, &option, &bar);
+        let commands = style.draw_complex_control(
+            QComplexControl::ScrollBar,
+            &option,
+            QComplexControlData::ScrollBar(&bar),
+        );
         assert!(
             commands
                 .iter()

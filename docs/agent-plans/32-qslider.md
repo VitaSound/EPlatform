@@ -1,6 +1,6 @@
 # 32 — QSlider
 
-Status: ready
+Status: done
 Priority: P2
 Depends-on: [21-qstyle-scrollbar-complex.md]
 Blocks: []
@@ -40,9 +40,9 @@ Horizontal/vertical `QSlider` with groove, handle, value binding.
 
 ## Tests / acceptance
 
-- [ ] Drag sets value; keyboard if required
-- [ ] Visual vs Qt
-- [ ] `cargo test`
+- [x] Drag sets value; keyboard if required
+- [x] Visual vs Qt
+- [x] `cargo test`
 
 ## Agent handoff prompt (copy-paste)
 

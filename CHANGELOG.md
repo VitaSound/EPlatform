@@ -2,6 +2,23 @@
 
 ## 2026-11-27
 
+### Волна: agent-plans 32–35 — Slider / ProgressBar / PlainTextEdit / ToolBox
+
+- **32 — QSlider.** Модель + drag/step/page; Fusion `CC_Slider` (groove,
+  active span, handle); Expanding×Fixed / Fixed×Expanding; gallery
+  `gallery/slider` horizontal/vertical.
+- **33 — QProgressBar.** min/max/value/textVisible/format/orientation;
+  groove + Highlight chunk gradient + dual-color `%p%`; Fixed height ≈24;
+  gallery `gallery/progress` 0/50/100 (review >30 ~0.8–0.9%); без inner
+  topShadow — на GPU давал «двойную» верхнюю кромку.
+- **34 — QPlainTextEdit.** Буфер, wrap, caret/selection, вертикальный
+  scroll; paint frame + multiline; gallery `gallery/textedit`.
+- **35 — QToolBox.** Accordion pages (не путать с QToolBar); переключение
+  кликом / `currentIndex`; gallery `gallery/toolbox`.
+- **Планы.** `docs/agent-plans/32`…`35` → Status: done.
+- **Тесты / review.** Unit на value/layout; `review.py` + qt/rust PNG +
+  `gallery_index.lua`.
+
 ### Волна: agent-plan 31 — QSpinBox / QDoubleSpinBox
 
 - **Model.** `QSpinBox` / `QDoubleSpinBox`: min/max/step/value, prefix/suffix,

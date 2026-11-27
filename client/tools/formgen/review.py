@@ -65,6 +65,30 @@ def tab_widget(name, pages, current=0):
     return widget("QTabWidget", name, prop_int("currentIndex", current), body)
 
 
+def toolbox_page(name, label, items, spacing=6, margins=9):
+    """QToolBox page: child QWidget with label attribute + layout."""
+    return widget(
+        "QWidget",
+        name,
+        attr_text("label", label),
+        layout("QVBoxLayout", name + "Layout", items, spacing, margins),
+    )
+
+
+def toolbox_widget(name, pages, current=0):
+    body = "".join(pages)
+    return widget("QToolBox", name, prop_int("currentIndex", current), body)
+
+
+
+def plain_text_edit(name, plain="", wrap="QPlainTextEdit::WidgetWidth"):
+    props = ""
+    if plain:
+        props += prop_text("plainText", plain)
+    if wrap:
+        props += prop_enum("lineWrapMode", wrap)
+    return widget("QPlainTextEdit", name, props)
+
 def spin_box(name, value=0, minimum=0, maximum=99, suffix=""):
     props = (
         prop_int("minimum", minimum)
@@ -75,6 +99,30 @@ def spin_box(name, value=0, minimum=0, maximum=99, suffix=""):
     if suffix:
         props += prop_text("suffix", suffix)
     return widget("QSpinBox", name, props)
+
+
+def slider(name, value=0, minimum=0, maximum=100, orientation="Qt::Horizontal"):
+    return widget(
+        "QSlider",
+        name,
+        prop_enum("orientation", orientation)
+        + prop_int("minimum", minimum)
+        + prop_int("maximum", maximum)
+        + prop_int("value", value)
+        + prop_int("singleStep", 1)
+        + prop_int("pageStep", 10),
+    )
+
+
+def progress_bar(name, value=0, minimum=0, maximum=100, text_visible=True, orientation="Qt::Horizontal"):
+    props = (
+        prop_enum("orientation", orientation)
+        + prop_int("minimum", minimum)
+        + prop_int("maximum", maximum)
+        + prop_int("value", value)
+        + prop_bool("textVisible", text_visible)
+    )
+    return widget("QProgressBar", name, props)
 
 
 def prop_double(name, value):
@@ -1797,6 +1845,28 @@ def build_gallery_cases():
            ]),
        ], current=1)], width=500, height=320)
 
+    category = "gallery/toolbox"
+    vg(category, "basic_two", "QToolBox with two pages and cyrillic labels",
+       [toolbox_widget("toolbox", [
+           toolbox_page("pageA", "Первая", [label("l1", "Содержимое первой страницы")]),
+           toolbox_page("pageB", "Вторая", [label("l2", "Содержимое второй страницы")]),
+       ])], width=460, height=280)
+    vg(category, "fields_three", "three toolbox pages; middle page selected",
+       [toolbox_widget("toolbox", [
+           toolbox_page("pageGeneral", "Общие", [
+               label("l1", "Содержимое общих настроек"),
+               spacer(False),
+           ]),
+           toolbox_page("pageExtra", "Дополнительно", [
+               label("l2", "Содержимое дополнительных настроек"),
+               spacer(False),
+           ]),
+           toolbox_page("pageNotes", "Заметки", [
+               label("l3", "Содержимое заметок"),
+               spacer(False),
+           ]),
+       ], current=1)], width=500, height=320)
+
     category = "gallery/spin"
     vg(category, "int_suffix", "QSpinBox with suffix",
        [label("l1", "Количество:"), spin_box("spin", 3, 0, 20, " шт")],
@@ -1804,6 +1874,35 @@ def build_gallery_cases():
     vg(category, "double_prefix", "QDoubleSpinBox with prefix",
        [label("l1", "Сумма:"), double_spin_box("dspin", "12.5", "0", "100", 2, "₽ ")],
        width=360, height=140)
+
+    category = "gallery/slider"
+    vg(category, "horizontal", "horizontal QSlider",
+       [label("l1", "Volume:"), slider("slider", 40, 0, 100, "Qt::Horizontal")],
+       width=360, height=140)
+    vg(category, "vertical", "vertical QSlider",
+       [label("l1", "Level:"), slider("slider", 70, 0, 100, "Qt::Vertical")],
+       width=200, height=280)
+
+    category = "gallery/progress"
+    vg(category, "value_0", "QProgressBar value 0",
+       [label("l1", "Прогресс:"), progress_bar("bar", 0, 0, 100)],
+       width=360, height=140)
+    vg(category, "value_50", "QProgressBar value 50",
+       [label("l1", "Прогресс:"), progress_bar("bar", 50, 0, 100)],
+       width=360, height=140)
+    vg(category, "value_100", "QProgressBar value 100",
+       [label("l1", "Прогресс:"), progress_bar("bar", 100, 0, 100)],
+       width=360, height=140)
+
+
+    category = "gallery/textedit"
+    vg(category, "multiline_static", "QPlainTextEdit with wrapped static text",
+       [label("l1", "Заметки:"),
+        plain_text_edit("edit", "Первая строка\nВторая строка с длинным текстом для переноса.\nТретья.")],
+       width=420, height=240)
+    vg(category, "empty_focus_sized", "empty QPlainTextEdit at default size hint",
+       [label("l1", "Комментарий:"), plain_text_edit("edit", "")],
+       width=420, height=240)
 
     assert len(cases) >= 100, f"gallery too small: {len(cases)}"
     return cases

@@ -1,6 +1,6 @@
 # 33 — QProgressBar
 
-Status: ready
+Status: done
 Priority: P2
 Depends-on: [02-gpu-linear-gradient-radius.md]
 Blocks: []
@@ -40,8 +40,8 @@ Estimate: S
 
 ## Tests / acceptance
 
-- [ ] Value 0/50/100 layouts correct
-- [ ] `cargo test`
+- [x] Value 0/50/100 layouts correct
+- [x] `cargo test`
 
 ## Agent handoff prompt (copy-paste)
 

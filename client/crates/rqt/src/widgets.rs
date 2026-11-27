@@ -2,10 +2,15 @@ use crate::core::{QEventType, QVariant};
 use crate::gui::{QFont, QFontMetrics, QMargins, QPalette, QPixmap, QPointF, QRectF, QSizeF};
 use crate::item_model::{QEditTrigger, QSelectionMode, QTableWidget};
 use crate::item_view::{QListWidget, QTreeWidget, QVIEW_HEADER_H};
+use crate::plain_text_edit::{
+    cursor_at_document_pos, move_cursor_vertical, QLineWrapMode, QPlainTextEdit, QPLAIN_HINT_H,
+    QPLAIN_HINT_W,
+};
 use crate::qss::QStyleSheet;
 use crate::scroll::{
     QOrientation, QScrollAreaLayout, QScrollBar, QScrollBarPolicy, QScrollBarSubControl,
 };
+use crate::slider::{QSlider, QSLIDER_HINT_LENGTH, QSLIDER_THICKNESS};
 
 pub type QWidgetId = usize;
 
@@ -225,6 +230,28 @@ impl QTabWidget {
 /// Horizontal padding around a tab label (Fusion `PM_TabBarTabHSpace`).
 pub const QTAB_H_SPACE: f32 = 24.0;
 
+/// Extra height `QToolBoxButton::sizeHint` adds on top of font metrics
+/// (`fontMetrics().size(...) + QSize(0, 8)`).
+pub const QTOOLBOX_TAB_V_PAD: f32 = 8.0;
+
+/// Spacing between toolbox headers / content — Qt `QVBoxLayout` default
+/// (Fusion `PM_LayoutVerticalSpacing`).
+pub const QTOOLBOX_SPACING: f32 = 6.0;
+
+/// `QToolBox` accordion state. Pages are direct children; labels come from
+/// each page's `<attribute name="label">`. Only one page is open (Qt default).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct QToolBox {
+    pub current_index: usize,
+    pub labels: Vec<String>,
+}
+
+impl QToolBox {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
 /// Width of the up/down button column on a Fusion spin box.
 /// Qt probe (gallery/spin): divider at `geometry.right() - 15`.
 pub const QSPIN_BUTTON_W: f32 = 15.0;
@@ -349,6 +376,72 @@ impl QSpinBox {
     }
 }
 
+/// Fusion `PM_ProgressBarChunkWidth` (used by `QProgressBar::sizeHint`).
+pub const QPROGRESS_CHUNK_W: f32 = 9.0;
+
+/// Determinate progress state for `QProgressBar`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct QProgressBar {
+    pub minimum: i32,
+    pub maximum: i32,
+    pub value: i32,
+    pub text_visible: bool,
+    pub orientation: QOrientation,
+    /// Qt format string; `%p` percent, `%v` value, `%m` maximum. Default `%p%`.
+    pub format: String,
+}
+
+impl QProgressBar {
+    pub fn default_bar() -> Self {
+        Self {
+            minimum: 0,
+            maximum: 100,
+            value: 0,
+            text_visible: true,
+            orientation: QOrientation::Horizontal,
+            format: "%p%".into(),
+        }
+    }
+
+    pub fn is_indeterminate(&self) -> bool {
+        self.minimum == 0 && self.maximum == 0
+    }
+
+    pub fn clamp_value(&mut self) {
+        if self.is_indeterminate() {
+            return;
+        }
+        if self.maximum < self.minimum {
+            self.maximum = self.minimum;
+        }
+        self.value = self.value.clamp(self.minimum, self.maximum);
+    }
+
+    /// 0.0..=1.0 fraction of the groove filled; `None` when indeterminate.
+    pub fn fraction(&self) -> Option<f32> {
+        if self.is_indeterminate() {
+            return None;
+        }
+        let total = (self.maximum as i64 - self.minimum as i64).max(1) as f32;
+        let steps = (self.value as i64 - self.minimum as i64).max(0) as f32;
+        Some((steps / total).clamp(0.0, 1.0))
+    }
+
+    pub fn percent(&self) -> i32 {
+        match self.fraction() {
+            Some(f) => (f * 100.0).round() as i32,
+            None => 0,
+        }
+    }
+
+    pub fn display_text(&self) -> String {
+        self.format
+            .replace("%p", &self.percent().to_string())
+            .replace("%v", &self.value.to_string())
+            .replace("%m", &self.maximum.to_string())
+    }
+}
+
 /// `QComboBox` popup view state. Item strings live in the `items` property
 /// (the same source the closed combo paints); only the transient open state
 /// is kept here, like `QComboBoxPrivateContainer` in Qt.
@@ -410,7 +503,11 @@ pub struct QWidget {
     pub tree: Option<Box<QTreeWidget>>,
     pub splitter: Option<Box<QSplitter>>,
     pub tabs: Option<Box<QTabWidget>>,
+    pub toolbox: Option<Box<QToolBox>>,
     pub spin: Option<Box<QSpinBox>>,
+    pub slider: Option<Box<QSlider>>,
+    pub progress: Option<Box<QProgressBar>>,
+    pub plain_text: Option<Box<QPlainTextEdit>>,
     pub combo_popup: Option<QComboBoxPopup>,
 }
 
@@ -441,15 +538,37 @@ impl QWidget {
         } else {
             None
         };
+        let toolbox = if class_name == "QToolBox" {
+            Some(Box::new(QToolBox::new()))
+        } else {
+            None
+        };
         let spin = match class_name.as_str() {
             "QSpinBox" => Some(Box::new(QSpinBox::int_default())),
             "QDoubleSpinBox" => Some(Box::new(QSpinBox::double_default())),
             _ => None,
         };
+        let slider = if class_name == "QSlider" {
+            Some(Box::new(QSlider::new(QOrientation::Horizontal)))
+        } else {
+            None
+        };
+        let progress = if class_name == "QProgressBar" {
+            Some(Box::new(QProgressBar::default_bar()))
+        } else {
+            None
+        };
+        let plain_text = if class_name == "QPlainTextEdit" {
+            Some(Box::new(QPlainTextEdit::new()))
+        } else {
+            None
+        };
         let focus_policy = match class_name.as_str() {
             "QLineEdit" | "QPushButton" | "QTableWidget" | "QListWidget" | "QTreeWidget"
-            | "QComboBox" | "QCheckBox" | "QRadioButton" | "QTabWidget" | "QSpinBox"
-            | "QDoubleSpinBox" => QFocusPolicy::StrongFocus,
+            | "QComboBox" | "QCheckBox" | "QRadioButton" | "QTabWidget" | "QToolBox"
+            | "QSpinBox" | "QDoubleSpinBox" | "QSlider" | "QPlainTextEdit" => {
+                QFocusPolicy::StrongFocus
+            }
             "QAbstractButton" | "QToolButton" => QFocusPolicy::StrongFocus,
             _ => QFocusPolicy::NoFocus,
         };
@@ -489,7 +608,11 @@ impl QWidget {
             tree,
             splitter,
             tabs,
+            toolbox,
             spin,
+            slider,
+            progress,
+            plain_text,
             combo_popup: None,
         }
     }
@@ -573,8 +696,9 @@ impl QWidget {
             ),
             "QTableWidget" => QSizeF::new(256.0, 192.0),
             "QListWidget" | "QTreeWidget" => QSizeF::new(256.0, 192.0),
+            "QPlainTextEdit" => QSizeF::new(QPLAIN_HINT_W, QPLAIN_HINT_H),
             "QSplitter" => QSizeF::new(256.0, 192.0),
-            "QTabWidget" => QSizeF::new(256.0, 192.0),
+            "QTabWidget" | "QToolBox" => QSizeF::new(256.0, 192.0),
             "QSpinBox" | "QDoubleSpinBox" => {
                 // Qt Fusion probe: hint height 25, width from contents + buttons.
                 let text = self
@@ -584,6 +708,39 @@ impl QWidget {
                     .unwrap_or_else(|| "0".into());
                 let width = metrics.horizontal_advance(&text) + QSPIN_BUTTON_W + 16.0;
                 QSizeF::new(width.max(60.0), 25.0)
+            }
+            "QSlider" => {
+                // Qt Fusion probe: 84×15 horizontal, 15×84 vertical; Fixed on
+                // the cross axis (policy_v=0 / policy_h=0).
+                match self
+                    .slider
+                    .as_deref()
+                    .map(|slider| slider.orientation)
+                    .unwrap_or(QOrientation::Horizontal)
+                {
+                    QOrientation::Horizontal => {
+                        QSizeF::new(QSLIDER_HINT_LENGTH, QSLIDER_THICKNESS)
+                    }
+                    QOrientation::Vertical => {
+                        QSizeF::new(QSLIDER_THICKNESS, QSLIDER_HINT_LENGTH)
+                    }
+                }
+            }
+            "QProgressBar" => {
+                // Qt: `qMax(9, cw)*7 + advance('0')*4` × `fm.height()+8`
+                // (Fusion probe: 99×24 with DejaVu Sans 14).
+                let digit = metrics.horizontal_advance("0");
+                let width = (QPROGRESS_CHUNK_W * 7.0 + digit * 4.0).round();
+                let height = (font_height + 8.0).round();
+                match self
+                    .progress
+                    .as_deref()
+                    .map(|bar| bar.orientation)
+                    .unwrap_or(QOrientation::Horizontal)
+                {
+                    QOrientation::Horizontal => QSizeF::new(width, height),
+                    QOrientation::Vertical => QSizeF::new(height, width),
+                }
             }
             "QGroupBox" => {
                 // QGroupBox stores its caption in `title`, not `text`.
@@ -661,6 +818,137 @@ fn value_as_f64(value: &QVariant) -> Option<f64> {
         QVariant::Int(value) => Some(*value as f64),
         QVariant::String(text) | QVariant::Enum(text) => text.parse().ok(),
         _ => None,
+    }
+}
+
+fn parse_line_wrap_mode(value: &QVariant) -> Option<QLineWrapMode> {
+    let name = match value {
+        QVariant::Int(value) => {
+            return Some(match value {
+                0 => QLineWrapMode::NoWrap,
+                _ => QLineWrapMode::WidgetWidth,
+            });
+        }
+        QVariant::String(text) | QVariant::Enum(text) => text.as_str(),
+        _ => return None,
+    };
+    let tail = name.rsplit("::").next().unwrap_or(name);
+    Some(match tail {
+        "NoWrap" => QLineWrapMode::NoWrap,
+        "WidgetWidth" | "WidgetWidthWrap" => QLineWrapMode::WidgetWidth,
+        _ => return None,
+    })
+}
+
+fn apply_plain_text_property(edit: &mut QPlainTextEdit, name: &str, value: &QVariant) {
+    match name {
+        "plainText" | "text" => {
+            if let Some(text) = variant_text(value) {
+                edit.set_plain_text(text);
+            }
+        }
+        "lineWrapMode" => {
+            if let Some(mode) = parse_line_wrap_mode(value) {
+                edit.wrap_mode = mode;
+            }
+        }
+        "verticalScrollBarPolicy" => {
+            set_scroll_policy(true, &mut edit.vbar, value);
+        }
+        "horizontalScrollBarPolicy" => {
+            set_scroll_policy(false, &mut edit.hbar, value);
+        }
+        _ => {}
+    }
+}
+
+fn apply_progress_property(bar: &mut QProgressBar, name: &str, value: &QVariant) {
+    match name {
+        "orientation" => {
+            let text = match value {
+                QVariant::Enum(text) | QVariant::String(text) => text.as_str(),
+                _ => return,
+            };
+            bar.orientation = if text.to_ascii_lowercase().contains("vertical") {
+                QOrientation::Vertical
+            } else {
+                QOrientation::Horizontal
+            };
+        }
+        "minimum" => {
+            if let Some(minimum) = value_as_i64(value) {
+                bar.minimum = minimum as i32;
+                bar.clamp_value();
+            }
+        }
+        "maximum" => {
+            if let Some(maximum) = value_as_i64(value) {
+                bar.maximum = maximum as i32;
+                bar.clamp_value();
+            }
+        }
+        "value" => {
+            if let Some(v) = value_as_i64(value) {
+                bar.value = v as i32;
+                bar.clamp_value();
+            }
+        }
+        "textVisible" => {
+            if let Some(visible) = value.as_bool() {
+                bar.text_visible = visible;
+            }
+        }
+        "format" => {
+            if let Some(text) = variant_text(value) {
+                bar.format = text;
+            }
+        }
+        _ => {}
+    }
+}
+
+fn apply_slider_property(slider: &mut QSlider, name: &str, value: &QVariant) {
+    match name {
+        "orientation" => {
+            let text = match value {
+                QVariant::Enum(text) | QVariant::String(text) => text.as_str(),
+                _ => return,
+            };
+            let orientation = if text.to_ascii_lowercase().contains("vertical") {
+                QOrientation::Vertical
+            } else {
+                QOrientation::Horizontal
+            };
+            slider.set_orientation(orientation);
+        }
+        "minimum" => {
+            if let Some(minimum) = value_as_i64(value) {
+                slider.minimum = minimum as i32;
+                slider.clamp_value();
+            }
+        }
+        "maximum" => {
+            if let Some(maximum) = value_as_i64(value) {
+                slider.maximum = maximum as i32;
+                slider.clamp_value();
+            }
+        }
+        "value" => {
+            if let Some(v) = value_as_i64(value) {
+                slider.set_value(v as i32);
+            }
+        }
+        "singleStep" => {
+            if let Some(step) = value_as_i64(value) {
+                slider.single_step = step.max(1) as i32;
+            }
+        }
+        "pageStep" => {
+            if let Some(step) = value_as_i64(value) {
+                slider.page_step = step.max(1) as i32;
+            }
+        }
+        _ => {}
     }
 }
 
@@ -792,11 +1080,19 @@ struct QScrollDrag {
     offset: f32,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct QSliderDrag {
+    widget: QWidgetId,
+    /// Pointer offset from the handle's leading edge along the track axis.
+    offset: f32,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct QWidgetTree {
     widgets: Vec<QWidget>,
     mouse_grab: Option<QWidgetId>,
     scroll_drag: Option<QScrollDrag>,
+    slider_drag: Option<QSliderDrag>,
     splitter_drag: Option<QSplitterDrag>,
 }
 
@@ -920,7 +1216,7 @@ impl QWidgetTree {
             class.as_str(),
             "QTableWidget" | "QListWidget" | "QTreeWidget"
         );
-        let (ok, tab_geometry) = {
+        let (ok, stack_relayout) = {
         let Some(widget) = self.widgets.get_mut(id) else {
             return false;
         };
@@ -928,7 +1224,7 @@ impl QWidgetTree {
             if let Some(enabled) = value.as_bool() {
                 widget.enabled = enabled;
                 if !enabled {
-                    if widget.class_name == "QLineEdit" {
+                    if matches!(widget.class_name.as_str(), "QLineEdit" | "QPlainTextEdit") {
                         widget.selection_anchor = None;
                     }
                     widget.has_focus = false;
@@ -1016,8 +1312,25 @@ impl QWidgetTree {
                 }
             }
         }
+        let toolbox_index_changed = widget.class_name == "QToolBox" && name == "currentIndex";
+        if toolbox_index_changed {
+            if let Some(toolbox) = widget.toolbox.as_mut() {
+                if let Some(index) = value_as_i64(&value) {
+                    toolbox.current_index = index.max(0) as usize;
+                }
+            }
+        }
         if widget.spin.is_some() {
             apply_spin_property(widget.spin.as_mut().unwrap(), &name, &value);
+        }
+        if widget.slider.is_some() {
+            apply_slider_property(widget.slider.as_mut().unwrap(), &name, &value);
+        }
+        if widget.progress.is_some() {
+            apply_progress_property(widget.progress.as_mut().unwrap(), &name, &value);
+        }
+        if widget.plain_text.is_some() {
+            apply_plain_text_property(widget.plain_text.as_mut().unwrap(), &name, &value);
         }
         if widget.class_name == "QComboBox" && name == "text" {
             // `setCurrentText` style updates are represented by `text`; keep
@@ -1039,9 +1352,23 @@ impl QWidgetTree {
             widget.selection_anchor = None;
             widget.cursor_visible = true;
         }
+        if widget.class_name == "QPlainTextEdit"
+            && matches!(name.as_str(), "plainText" | "text")
+        {
+            let length = match &value {
+                QVariant::String(text) | QVariant::Enum(text) => text.chars().count(),
+                QVariant::Int(value) => value.to_string().chars().count(),
+                _ => 0,
+            };
+            widget.cursor_position = length;
+            widget.selection_anchor = None;
+            widget.cursor_visible = true;
+        }
         let property_name = name.clone();
-        let tab_geometry = if tab_index_changed {
-            Some(widget.geometry)
+        let stack_relayout = if tab_index_changed {
+            Some(("tab", widget.geometry))
+        } else if toolbox_index_changed {
+            Some(("toolbox", widget.geometry))
         } else {
             None
         };
@@ -1072,11 +1399,20 @@ impl QWidgetTree {
                 }
             }
         }
-        (!is_item_view || handled, tab_geometry)
+        (!is_item_view || handled, stack_relayout)
         };
-        if let Some(geometry) = tab_geometry {
-            self.sync_tab_pages(id);
-            self.layout_tab_widget(id, geometry);
+        if let Some((kind, geometry)) = stack_relayout {
+            match kind {
+                "tab" => {
+                    self.sync_tab_pages(id);
+                    self.layout_tab_widget(id, geometry);
+                }
+                "toolbox" => {
+                    self.sync_toolbox_pages(id);
+                    self.layout_toolbox(id, geometry);
+                }
+                _ => {}
+            }
         }
         ok
     }
@@ -1108,6 +1444,15 @@ impl QWidgetTree {
 
     pub fn text(&self, widget: QWidgetId) -> Option<String> {
         let widget = self.widgets.get(widget)?;
+        if widget.class_name == "QPlainTextEdit" {
+            if let Some(edit) = widget.plain_text.as_deref() {
+                return Some(edit.plain_text.clone());
+            }
+            return match widget.property("plainText") {
+                Some(QVariant::String(text)) | Some(QVariant::Enum(text)) => Some(text.clone()),
+                _ => Some(String::new()),
+            };
+        }
         match widget.property("text") {
             Some(QVariant::String(text)) | Some(QVariant::Enum(text)) => Some(text.clone()),
             Some(QVariant::Int(value)) => Some(value.to_string()),
@@ -1116,12 +1461,23 @@ impl QWidgetTree {
         }
     }
 
+    fn write_document_text(node: &mut QWidget, text: String) {
+        if node.class_name == "QPlainTextEdit" {
+            if let Some(edit) = node.plain_text.as_mut() {
+                edit.set_plain_text(text.clone());
+            }
+            node.set_property("plainText", QVariant::String(text));
+        } else {
+            node.set_property("text", QVariant::String(text));
+        }
+    }
+
     pub fn set_text(&mut self, widget: QWidgetId, text: String) -> bool {
         let length = text.chars().count();
         let Some(widget) = self.widgets.get_mut(widget) else {
             return false;
         };
-        widget.set_property("text", QVariant::String(text));
+        Self::write_document_text(widget, text);
         widget.cursor_position = length;
         widget.selection_anchor = None;
         widget.cursor_visible = true;
@@ -1144,7 +1500,7 @@ impl QWidgetTree {
         }
         chars.insert(start, ch);
         let text: String = chars.into_iter().collect();
-        node.set_property("text", QVariant::String(text));
+        Self::write_document_text(node, text);
         node.cursor_position = start + 1;
         node.selection_anchor = None;
         node.cursor_visible = true;
@@ -1166,7 +1522,7 @@ impl QWidgetTree {
         };
         chars.drain(start..end);
         let text: String = chars.into_iter().collect();
-        node.set_property("text", QVariant::String(text));
+        Self::write_document_text(node, text);
         node.cursor_position = start;
         node.selection_anchor = None;
         node.cursor_visible = true;
@@ -1188,7 +1544,7 @@ impl QWidgetTree {
         };
         chars.drain(start..end);
         let text: String = chars.into_iter().collect();
-        node.set_property("text", QVariant::String(text));
+        Self::write_document_text(node, text);
         node.cursor_position = start;
         node.selection_anchor = None;
         node.cursor_visible = true;
@@ -1250,6 +1606,90 @@ impl QWidgetTree {
             return false;
         };
         self.set_cursor_position_ext(widget, position, true)
+    }
+
+    pub fn is_plain_text_edit(&self, widget: QWidgetId) -> bool {
+        self.widgets
+            .get(widget)
+            .is_some_and(|node| node.class_name == "QPlainTextEdit")
+    }
+
+    pub fn scroll_plain_text(&mut self, widget: QWidgetId, delta_y: f32) -> bool {
+        let Some(node) = self.widgets.get_mut(widget) else {
+            return false;
+        };
+        let Some(edit) = node.plain_text.as_mut() else {
+            return false;
+        };
+        let before = edit.scroll_y;
+        let viewport = edit.framed_viewport(node.geometry, &node.font);
+        edit.sync_bars(&node.font, viewport);
+        edit.scroll_by(delta_y);
+        edit.scroll_y != before || delta_y == 0.0
+    }
+
+    pub fn ensure_plain_text_cursor_visible(&mut self, widget: QWidgetId) -> bool {
+        let Some(node) = self.widgets.get_mut(widget) else {
+            return false;
+        };
+        let cursor = node.cursor_position;
+        let geometry = node.geometry;
+        let font = node.font.clone();
+        let Some(edit) = node.plain_text.as_mut() else {
+            return false;
+        };
+        let viewport = edit.framed_viewport(geometry, &font);
+        edit.ensure_cursor_visible(cursor, &font, viewport);
+        true
+    }
+
+    pub fn move_plain_text_cursor_vertical(
+        &mut self,
+        widget: QWidgetId,
+        up: bool,
+        extend_selection: bool,
+    ) -> bool {
+        let Some(node) = self.widgets.get(widget) else {
+            return false;
+        };
+        if node.class_name != "QPlainTextEdit" {
+            return false;
+        }
+        let Some(edit) = node.plain_text.as_deref() else {
+            return false;
+        };
+        let viewport = edit.framed_viewport(node.geometry, &node.font);
+        let metrics = QFontMetrics::new(&node.font);
+        let lines = edit.visual_lines(&node.font, viewport.width + 2.0);
+        let cursor = node.cursor_position;
+        let next = move_cursor_vertical(&edit.plain_text, &lines, &metrics, cursor, up);
+        if !self.set_cursor_position_ext(widget, next, extend_selection) {
+            return false;
+        }
+        self.ensure_plain_text_cursor_visible(widget);
+        true
+    }
+
+    pub fn select_plain_text_to(&mut self, widget: QWidgetId, point: QPointF) -> bool {
+        let Some(position) = self.plain_text_cursor_at(widget, point) else {
+            return false;
+        };
+        self.set_cursor_position_ext(widget, position, true)
+    }
+
+    fn plain_text_cursor_at(&self, widget: QWidgetId, point: QPointF) -> Option<usize> {
+        let node = self.widgets.get(widget)?;
+        if node.class_name != "QPlainTextEdit" {
+            return None;
+        }
+        let edit = node.plain_text.as_deref()?;
+        let viewport = edit.framed_viewport(node.geometry, &node.font);
+        let doc = edit.document_rect(viewport);
+        let metrics = QFontMetrics::new(&node.font);
+        let lines = edit.visual_lines(&node.font, viewport.width + 2.0);
+        let x = point.x - doc.x + edit.hbar.value;
+        let y = point.y - doc.y + edit.scroll_y;
+        Some(cursor_at_document_pos(&lines, &metrics, x, y))
     }
 
     pub fn checked(&self, widget: QWidgetId) -> bool {
@@ -1933,6 +2373,167 @@ impl QWidgetTree {
         true
     }
 
+    pub fn slider_at(&self, point: QPointF) -> Option<QWidgetId> {
+        for (id, widget) in self.widgets.iter().enumerate().rev() {
+            if widget.slider.is_none() || !widget.visible || !widget.enabled {
+                continue;
+            }
+            if widget.geometry.contains(point) {
+                return Some(id);
+            }
+        }
+        None
+    }
+
+    fn press_slider(&mut self, widget: QWidgetId, point: QPointF) {
+        let (geometry, on_handle) = {
+            let Some(node) = self.widgets.get(widget) else {
+                return;
+            };
+            let Some(slider) = node.slider.as_deref() else {
+                return;
+            };
+            let geometry = node.geometry;
+            let handle = slider.handle_rect(geometry);
+            (geometry, handle.contains(point))
+        };
+        if !on_handle {
+            if let Some(node) = self.widgets.get_mut(widget) {
+                if let Some(slider) = node.slider.as_mut() {
+                    slider.set_value_from_pos(geometry, point);
+                    let value = slider.value;
+                    node.set_property("value", QVariant::Int(value as i64));
+                }
+            }
+        }
+        let handle = {
+            let Some(node) = self.widgets.get_mut(widget) else {
+                return;
+            };
+            let Some(slider) = node.slider.as_mut() else {
+                return;
+            };
+            slider.pressed = true;
+            slider.handle_rect(node.geometry)
+        };
+        let vertical = self
+            .widgets
+            .get(widget)
+            .and_then(|node| node.slider.as_deref())
+            .is_some_and(|slider| slider.orientation == QOrientation::Vertical);
+        let axis = if vertical { point.y } else { point.x };
+        let handle_start = if vertical { handle.y } else { handle.x };
+        self.slider_drag = Some(QSliderDrag {
+            widget,
+            offset: axis - handle_start,
+        });
+    }
+
+    fn move_slider_drag(&mut self, drag: QSliderDrag, point: QPointF) -> bool {
+        let Some(node) = self.widgets.get_mut(drag.widget) else {
+            self.slider_drag = None;
+            return false;
+        };
+        let Some(slider) = node.slider.as_mut() else {
+            self.slider_drag = None;
+            return false;
+        };
+        let geometry = node.geometry;
+        let len = slider.handle_length();
+        let track = match slider.orientation {
+            QOrientation::Horizontal => geometry.width,
+            QOrientation::Vertical => geometry.height,
+        };
+        let movable = (track - len).max(0.0);
+        let span = slider.maximum - slider.minimum;
+        if movable <= 0.0 || span <= 0 {
+            return false;
+        }
+        let axis = match slider.orientation {
+            QOrientation::Horizontal => point.x,
+            QOrientation::Vertical => point.y,
+        };
+        let groove_start = match slider.orientation {
+            QOrientation::Horizontal => geometry.x,
+            QOrientation::Vertical => geometry.y,
+        };
+        let start = axis - drag.offset;
+        let mut fraction = ((start - groove_start) / movable).clamp(0.0, 1.0);
+        if slider.upside_down {
+            fraction = 1.0 - fraction;
+        }
+        let value =
+            (slider.minimum as f32 + fraction * span as f32).round() as i32;
+        if !slider.set_value(value) {
+            return true;
+        }
+        let value = slider.value;
+        node.set_property("value", QVariant::Int(value as i64));
+        true
+    }
+
+    pub fn slider_step(&mut self, widget: QWidgetId, delta_steps: i32) -> bool {
+        let value = {
+            let Some(node) = self.widgets.get_mut(widget) else {
+                return false;
+            };
+            let Some(slider) = node.slider.as_mut() else {
+                return false;
+            };
+            if !slider.step_by(delta_steps) {
+                return false;
+            }
+            slider.value
+        };
+        if let Some(node) = self.widgets.get_mut(widget) {
+            node.set_property("value", QVariant::Int(value as i64));
+        }
+        true
+    }
+
+    pub fn slider_page(&mut self, widget: QWidgetId, delta_pages: i32) -> bool {
+        let value = {
+            let Some(node) = self.widgets.get_mut(widget) else {
+                return false;
+            };
+            let Some(slider) = node.slider.as_mut() else {
+                return false;
+            };
+            if !slider.page_by(delta_pages) {
+                return false;
+            }
+            slider.value
+        };
+        if let Some(node) = self.widgets.get_mut(widget) {
+            node.set_property("value", QVariant::Int(value as i64));
+        }
+        true
+    }
+
+    pub fn slider_set_bound(&mut self, widget: QWidgetId, to_maximum: bool) -> bool {
+        let value = {
+            let Some(node) = self.widgets.get_mut(widget) else {
+                return false;
+            };
+            let Some(slider) = node.slider.as_mut() else {
+                return false;
+            };
+            let target = if to_maximum {
+                slider.maximum
+            } else {
+                slider.minimum
+            };
+            if !slider.set_value(target) {
+                return false;
+            }
+            slider.value
+        };
+        if let Some(node) = self.widgets.get_mut(widget) {
+            node.set_property("value", QVariant::Int(value as i64));
+        }
+        true
+    }
+
     fn measure_tab_widget(&mut self, widget: QWidgetId) -> QSizeF {
         let Some(node) = self.widgets.get(widget) else {
             return QSizeF::default();
@@ -1992,6 +2593,170 @@ impl QWidgetTree {
             self.layout_widget(child, page);
         }
         self.sync_tab_pages(widget);
+    }
+
+    fn toolbox_header_height(font: &QFont) -> f32 {
+        QFontMetrics::new(font).height() + QTOOLBOX_TAB_V_PAD
+    }
+
+    /// Sync page visibility to `toolbox.current_index` (Qt opens one page).
+    fn sync_toolbox_pages(&mut self, widget: QWidgetId) {
+        let Some(node) = self.widgets.get(widget) else {
+            return;
+        };
+        let Some(toolbox) = node.toolbox.as_deref() else {
+            return;
+        };
+        let current = toolbox.current_index;
+        let children = node.children.clone();
+        for (index, child) in children.into_iter().enumerate() {
+            if let Some(page) = self.widgets.get_mut(child) {
+                page.visible = index == current;
+            }
+        }
+    }
+
+    /// Absolute header rectangles top-to-bottom (Fusion `QToolBoxButton`s).
+    pub fn toolbox_header_rects(&self, widget: QWidgetId) -> Vec<QRectF> {
+        let Some(node) = self.widgets.get(widget) else {
+            return Vec::new();
+        };
+        let Some(toolbox) = node.toolbox.as_deref() else {
+            return Vec::new();
+        };
+        let frame = node.geometry;
+        let header_h = Self::toolbox_header_height(&node.font);
+        let page_count = node.children.len().max(toolbox.labels.len());
+        if page_count == 0 {
+            return Vec::new();
+        }
+        let current = toolbox.current_index.min(page_count.saturating_sub(1));
+        let remaining_after = |index: usize| page_count.saturating_sub(index + 1);
+        let mut y = frame.y;
+        let mut rects = Vec::with_capacity(page_count);
+        for index in 0..page_count {
+            rects.push(QRectF::new(frame.x, y, frame.width, header_h));
+            y += header_h + QTOOLBOX_SPACING;
+            if index == current {
+                let after = remaining_after(index);
+                let content_h = (frame.y + frame.height
+                    - y
+                    - after as f32 * (header_h + QTOOLBOX_SPACING))
+                    .max(0.0);
+                y += content_h + if after > 0 { QTOOLBOX_SPACING } else { 0.0 };
+            }
+        }
+        rects
+    }
+
+    pub fn toolbox_at(&self, point: QPointF) -> Option<(QWidgetId, usize)> {
+        for (id, widget) in self.widgets.iter().enumerate().rev() {
+            if widget.toolbox.is_none() || !widget.visible || !widget.enabled {
+                continue;
+            }
+            if !widget.geometry.contains(point) {
+                continue;
+            }
+            for (index, rect) in self.toolbox_header_rects(id).into_iter().enumerate() {
+                if rect.contains(point) {
+                    return Some((id, index));
+                }
+            }
+        }
+        None
+    }
+
+    pub fn set_toolbox_current_index(&mut self, widget: QWidgetId, index: usize) -> bool {
+        let geometry = {
+            let Some(node) = self.widgets.get_mut(widget) else {
+                return false;
+            };
+            let page_count = node.children.len();
+            let Some(toolbox) = node.toolbox.as_mut() else {
+                return false;
+            };
+            if index >= toolbox.labels.len().max(page_count) {
+                return false;
+            }
+            if toolbox.current_index == index {
+                return false;
+            }
+            toolbox.current_index = index;
+            node.set_property("currentIndex", QVariant::Int(index as i64));
+            node.geometry
+        };
+        self.sync_toolbox_pages(widget);
+        self.layout_toolbox(widget, geometry);
+        true
+    }
+
+    fn measure_toolbox(&mut self, widget: QWidgetId) -> QSizeF {
+        let Some(node) = self.widgets.get(widget) else {
+            return QSizeF::default();
+        };
+        let children = node.children.clone();
+        let font = node.font.clone();
+        let page_count = children.len();
+        let mut page_w = 0.0_f32;
+        let mut page_h = 0.0_f32;
+        for child in &children {
+            let hint = self.measure(*child);
+            page_w = page_w.max(hint.width);
+            page_h = page_h.max(hint.height);
+        }
+        let header_h = Self::toolbox_header_height(&font);
+        let headers = page_count as f32 * header_h;
+        let spacings = if page_count == 0 {
+            0.0
+        } else {
+            page_count as f32 * QTOOLBOX_SPACING
+        };
+        let hint = QSizeF::new(page_w.max(64.0), headers + spacings + page_h);
+        if let Some(node) = self.widgets.get_mut(widget) {
+            node.size_hint = hint;
+        }
+        hint
+    }
+
+    fn layout_toolbox(&mut self, widget: QWidgetId, rect: QRectF) {
+        if let Some(node) = self.widgets.get_mut(widget) {
+            node.geometry = rect;
+        }
+        let (children, font, current) = {
+            let Some(node) = self.widgets.get(widget) else {
+                return;
+            };
+            let current = node
+                .toolbox
+                .as_deref()
+                .map(|box_| box_.current_index)
+                .unwrap_or(0);
+            (node.children.clone(), node.font.clone(), current)
+        };
+        let page_count = children.len();
+        if page_count == 0 {
+            self.sync_toolbox_pages(widget);
+            return;
+        }
+        let header_h = Self::toolbox_header_height(&font);
+        let current = current.min(page_count.saturating_sub(1));
+        let mut y = rect.y;
+        for (index, child) in children.iter().enumerate() {
+            y += header_h + QTOOLBOX_SPACING;
+            if index == current {
+                let after = page_count.saturating_sub(index + 1);
+                let content_h = (rect.y + rect.height
+                    - y
+                    - after as f32 * (header_h + QTOOLBOX_SPACING))
+                    .max(0.0);
+                let page = QRectF::new(rect.x, y, rect.width, content_h);
+                self.layout_widget(*child, page);
+                y += content_h + if after > 0 { QTOOLBOX_SPACING } else { 0.0 };
+            } else {
+                self.layout_widget(*child, QRectF::new(rect.x, y, rect.width, 0.0));
+            }
+        }
+        self.sync_toolbox_pages(widget);
     }
 
     fn measure_splitter(&mut self, widget: QWidgetId) -> QSizeF {
@@ -2202,6 +2967,10 @@ impl QWidgetTree {
                     (layout.viewport.height - QVIEW_HEADER_H).max(0.0),
                 ));
             }
+            if let Some(edit) = widget.plain_text.as_mut() {
+                let viewport = edit.framed_viewport(rect, &font);
+                edit.sync_bars(&font, viewport);
+            }
         }
     }
 
@@ -2241,7 +3010,7 @@ impl QWidgetTree {
         };
         widget.enabled = enabled;
         if !enabled && widget.has_focus {
-            if widget.class_name == "QLineEdit" {
+            if matches!(widget.class_name.as_str(), "QLineEdit" | "QPlainTextEdit") {
                 widget.selection_anchor = None;
             }
             widget.has_focus = false;
@@ -2282,7 +3051,9 @@ impl QWidgetTree {
 
     pub fn clear_focus(&mut self) {
         for widget in &mut self.widgets {
-            if widget.has_focus && widget.class_name == "QLineEdit" {
+            if widget.has_focus
+                && matches!(widget.class_name.as_str(), "QLineEdit" | "QPlainTextEdit")
+            {
                 widget.selection_anchor = None;
             }
             widget.has_focus = false;
@@ -2445,12 +3216,32 @@ impl QWidgetTree {
                 clicked: false,
             });
         }
+        if let Some((toolbox, index)) = self.toolbox_at(point) {
+            self.set_focus(toolbox);
+            self.set_toolbox_current_index(toolbox, index);
+            self.mouse_grab = Some(toolbox);
+            return Some(QWidgetEvent {
+                widget: toolbox,
+                event_type: QEventType::MouseButtonPress,
+                clicked: false,
+            });
+        }
         if let Some((spin, up)) = self.spin_button_at(point) {
             self.set_focus(spin);
             self.spin_step(spin, up);
             self.mouse_grab = Some(spin);
             return Some(QWidgetEvent {
                 widget: spin,
+                event_type: QEventType::MouseButtonPress,
+                clicked: false,
+            });
+        }
+        if let Some(slider) = self.slider_at(point) {
+            self.set_focus(slider);
+            self.press_slider(slider, point);
+            self.mouse_grab = Some(slider);
+            return Some(QWidgetEvent {
+                widget: slider,
                 event_type: QEventType::MouseButtonPress,
                 clicked: false,
             });
@@ -2474,6 +3265,11 @@ impl QWidgetTree {
         if self.widgets[widget].class_name == "QLineEdit" {
             let geometry = self.widgets[widget].geometry;
             if let Some(position) = self.cursor_at_x(widget, point.x - geometry.x) {
+                self.set_cursor_position_ext(widget, position, shift);
+            }
+        }
+        if self.widgets[widget].class_name == "QPlainTextEdit" {
+            if let Some(position) = self.plain_text_cursor_at(widget, point) {
                 self.set_cursor_position_ext(widget, position, shift);
             }
         }
@@ -2583,6 +3379,9 @@ impl QWidgetTree {
                 drag.last = axis;
             }
             return self.drag_splitter(delta);
+        }
+        if let Some(drag) = self.slider_drag {
+            return self.move_slider_drag(drag, point);
         }
         let Some(drag) = self.scroll_drag else {
             return false;
@@ -2706,8 +3505,11 @@ impl QWidgetTree {
         if let Some(list) = node.list.as_deref() {
             return Some(list.scroll_area(rect));
         }
-        let tree = node.tree.as_deref()?;
-        Some(tree.scroll_area(rect))
+        if let Some(tree) = node.tree.as_deref() {
+            return Some(tree.scroll_area(rect));
+        }
+        let edit = node.plain_text.as_deref()?;
+        Some(edit.scroll_area(rect, font))
     }
 
     fn bar(&self, widget: QWidgetId, vertical: bool) -> Option<&QScrollBar> {
@@ -2718,8 +3520,11 @@ impl QWidgetTree {
         if let Some(list) = node.list.as_deref() {
             return Some(if vertical { &list.vbar } else { &list.hbar });
         }
-        let tree = node.tree.as_deref()?;
-        Some(if vertical { &tree.vbar } else { &tree.hbar })
+        if let Some(tree) = node.tree.as_deref() {
+            return Some(if vertical { &tree.vbar } else { &tree.hbar });
+        }
+        let edit = node.plain_text.as_deref()?;
+        Some(if vertical { &edit.vbar } else { &edit.hbar })
     }
 
     fn bar_mut(&mut self, widget: QWidgetId, vertical: bool) -> Option<&mut QScrollBar> {
@@ -2738,11 +3543,18 @@ impl QWidgetTree {
                 &mut list.hbar
             });
         }
-        let tree = node.tree.as_mut()?;
+        if let Some(tree) = node.tree.as_mut() {
+            return Some(if vertical {
+                &mut tree.vbar
+            } else {
+                &mut tree.hbar
+            });
+        }
+        let edit = node.plain_text.as_mut()?;
         Some(if vertical {
-            &mut tree.vbar
+            &mut edit.vbar
         } else {
-            &mut tree.hbar
+            &mut edit.hbar
         })
     }
 
@@ -2778,15 +3590,27 @@ impl QWidgetTree {
                 tree.horizontal = value;
                 tree.hbar.set_value(value);
             }
+            return;
+        }
+        if let Some(edit) = node.plain_text.as_mut() {
+            if vertical {
+                edit.set_scroll_y(value);
+            } else {
+                edit.hbar.set_value(value);
+            }
         }
     }
 
     pub fn cancel_mouse_grab(&mut self) {
         self.mouse_grab = None;
         self.scroll_drag = None;
+        self.slider_drag = None;
         self.splitter_drag = None;
         for widget in &mut self.widgets {
             widget.pressed = false;
+            if let Some(slider) = widget.slider.as_mut() {
+                slider.pressed = false;
+            }
             if let Some(table) = widget.table.as_mut() {
                 table.vbar.pressed = None;
                 table.hbar.pressed = None;
@@ -2799,15 +3623,23 @@ impl QWidgetTree {
                 tree.vbar.pressed = None;
                 tree.hbar.pressed = None;
             }
+            if let Some(edit) = widget.plain_text.as_mut() {
+                edit.vbar.pressed = None;
+                edit.hbar.pressed = None;
+            }
         }
     }
 
     pub fn mouse_release(&mut self, root: QWidgetId, point: QPointF) -> Option<QWidgetEvent> {
         let grabbed = self.mouse_grab.take();
         self.scroll_drag = None;
+        self.slider_drag = None;
         let splitter_drag = self.splitter_drag.take();
         if let Some(widget) = grabbed {
             if let Some(node) = self.widgets.get_mut(widget) {
+                if let Some(slider) = node.slider.as_mut() {
+                    slider.pressed = false;
+                }
                 if let Some(table) = node.table.as_mut() {
                     table.vbar.pressed = None;
                     table.hbar.pressed = None;
@@ -2819,6 +3651,10 @@ impl QWidgetTree {
                 if let Some(tree) = node.tree.as_mut() {
                     tree.vbar.pressed = None;
                     tree.hbar.pressed = None;
+                }
+                if let Some(edit) = node.plain_text.as_mut() {
+                    edit.vbar.pressed = None;
+                    edit.hbar.pressed = None;
                 }
             }
         }
@@ -2895,6 +3731,13 @@ impl QWidgetTree {
             .is_some_and(|node| node.tabs.is_some())
         {
             return self.measure_tab_widget(widget);
+        }
+        if self
+            .widgets
+            .get(widget)
+            .is_some_and(|node| node.toolbox.is_some())
+        {
+            return self.measure_toolbox(widget);
         }
         let Some(node) = self.widgets.get_mut(widget) else {
             return QSizeF::default();
@@ -3023,7 +3866,7 @@ impl QWidgetTree {
         // override the owner layout.
         let owned_parent = matches!(
             parent.class_name.as_str(),
-            "QSplitter" | "QTabWidget"
+            "QSplitter" | "QTabWidget" | "QToolBox"
         );
         for child in children {
             if !owned_parent {
@@ -3054,6 +3897,14 @@ impl QWidgetTree {
             .is_some_and(|node| node.tabs.is_some());
         if tabs {
             self.layout_tab_widget(widget, rect);
+            return;
+        }
+        let toolbox = self
+            .widgets
+            .get(widget)
+            .is_some_and(|node| node.toolbox.is_some());
+        if toolbox {
+            self.layout_toolbox(widget, rect);
             return;
         }
         let Some(node) = self.widgets.get_mut(widget) else {
@@ -4160,6 +5011,42 @@ impl QWidgetTree {
                     QSizePolicy::Fixed
                 }
             }
+            "QSlider" => {
+                // Qt probe: horizontal Expanding/Fixed; vertical Fixed/Expanding.
+                let vertical = node
+                    .slider
+                    .as_deref()
+                    .is_some_and(|slider| slider.orientation == QOrientation::Vertical);
+                if vertical {
+                    if horizontal {
+                        QSizePolicy::Fixed
+                    } else {
+                        QSizePolicy::Expanding
+                    }
+                } else if horizontal {
+                    QSizePolicy::Expanding
+                } else {
+                    QSizePolicy::Fixed
+                }
+            }
+            "QProgressBar" => {
+                // Qt probe: Expanding × Fixed (horizontal); Fixed × Expanding (vertical).
+                let vertical = node
+                    .progress
+                    .as_deref()
+                    .is_some_and(|bar| bar.orientation == QOrientation::Vertical);
+                if vertical {
+                    if horizontal {
+                        QSizePolicy::Fixed
+                    } else {
+                        QSizePolicy::Expanding
+                    }
+                } else if horizontal {
+                    QSizePolicy::Expanding
+                } else {
+                    QSizePolicy::Fixed
+                }
+            }
             "QComboBox" => {
                 if horizontal {
                     QSizePolicy::Preferred
@@ -4167,7 +5054,9 @@ impl QWidgetTree {
                     QSizePolicy::Fixed
                 }
             }
-            "QTableWidget" | "QListWidget" | "QTreeWidget" => QSizePolicy::Expanding,
+            "QTableWidget" | "QListWidget" | "QTreeWidget" | "QPlainTextEdit" => {
+                QSizePolicy::Expanding
+            }
             "QPushButton" | "QCheckBox" | "QRadioButton" => {
                 if horizontal {
                     QSizePolicy::Minimum
@@ -4212,7 +5101,7 @@ impl QWidgetTree {
         }
         match node.class_name.as_str() {
             "QLineEdit" => (32, fallback.1.max(24)),
-            "QTableWidget" | "QListWidget" | "QTreeWidget" => (70, 70),
+            "QTableWidget" | "QListWidget" | "QTreeWidget" | "QPlainTextEdit" => (70, 70),
             // The title is part of the minimum: a long group caption makes
             // Qt grow the whole window (gallery/text/group_long_title).
             "QGroupBox" => (fallback.0.max(73), fallback.1.max(35)),
@@ -4302,21 +5191,29 @@ impl QWidgetTree {
         let Some(widget) = self.widgets.get(widget) else {
             return false;
         };
+        let progress_vertical = widget
+            .progress
+            .as_deref()
+            .is_some_and(|bar| bar.orientation == QOrientation::Vertical);
         if horizontal {
             widget.size_policy == QSizePolicy::Expanding
                 || widget.size_policy == QSizePolicy::MinimumExpanding
                 || widget.class_name == "QLineEdit"
                 || widget.class_name == "QSpinBox"
                 || widget.class_name == "QDoubleSpinBox"
+                || (widget.class_name == "QProgressBar" && !progress_vertical)
                 || widget.class_name == "QTableWidget"
                 || widget.class_name == "QListWidget"
                 || widget.class_name == "QTreeWidget"
+                || widget.class_name == "QPlainTextEdit"
         } else {
             widget.size_policy_v == QSizePolicy::Expanding
                 || widget.size_policy_v == QSizePolicy::MinimumExpanding
+                || (widget.class_name == "QProgressBar" && progress_vertical)
                 || widget.class_name == "QTableWidget"
                 || widget.class_name == "QListWidget"
                 || widget.class_name == "QTreeWidget"
+                || widget.class_name == "QPlainTextEdit"
         }
     }
 }
@@ -5219,16 +6116,7 @@ fn load_widget(
         let titles: Vec<String> = spec
             .children
             .iter()
-            .map(|page| {
-                page.attribute("title")
-                    .and_then(|value| match value {
-                        form_xml::PropValue::Str(text) | form_xml::PropValue::Enum(text) => {
-                            Some(text.clone())
-                        }
-                        _ => value.as_str().map(str::to_string),
-                    })
-                    .unwrap_or_else(|| page.name.clone())
-            })
+            .map(|page| page_attribute_label(page, "title"))
             .collect();
         let current = tree
             .widgets
@@ -5245,7 +6133,37 @@ fn load_widget(
         }
         tree.sync_tab_pages(id);
     }
+    if spec.class == "QToolBox" {
+        let labels: Vec<String> = spec
+            .children
+            .iter()
+            .map(|page| page_attribute_label(page, "label"))
+            .collect();
+        let current = tree
+            .widgets
+            .get(id)
+            .and_then(|node| node.property("currentIndex"))
+            .and_then(value_as_i64)
+            .unwrap_or(0)
+            .max(0) as usize;
+        if let Some(node) = tree.widgets.get_mut(id) {
+            if let Some(toolbox) = node.toolbox.as_mut() {
+                toolbox.labels = labels;
+                toolbox.current_index = current.min(node.children.len().saturating_sub(1));
+            }
+        }
+        tree.sync_toolbox_pages(id);
+    }
     id
+}
+
+fn page_attribute_label(page: &form_xml::Widget, attr: &str) -> String {
+    page.attribute(attr)
+        .and_then(|value| match value {
+            form_xml::PropValue::Str(text) | form_xml::PropValue::Enum(text) => Some(text.clone()),
+            _ => value.as_str().map(str::to_string),
+        })
+        .unwrap_or_else(|| page.name.clone())
 }
 
 fn load_pixmap(path: &str) -> Option<QPixmap> {
@@ -6511,6 +7429,78 @@ mod tests {
     }
 
     #[test]
+    fn toolbox_switches_pages_on_click() {
+        const UI: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0"><class>Dialog</class>
+ <widget class="QDialog" name="Dialog">
+  <property name="geometry"><rect><x>0</x><y>0</y><width>420</width><height>280</height></rect></property>
+  <layout class="QVBoxLayout" name="verticalLayout">
+   <item>
+    <widget class="QToolBox" name="toolbox">
+     <property name="currentIndex"><number>0</number></property>
+     <widget class="QWidget" name="pageA">
+      <attribute name="label"><string>Первая</string></attribute>
+      <layout class="QVBoxLayout" name="layA">
+       <item><widget class="QLabel" name="labelA">
+        <property name="text"><string>Page A</string></property>
+       </widget></item>
+      </layout>
+     </widget>
+     <widget class="QWidget" name="pageB">
+      <attribute name="label"><string>Вторая</string></attribute>
+      <layout class="QVBoxLayout" name="layB">
+       <item><widget class="QLabel" name="labelB">
+        <property name="text"><string>Page B</string></property>
+       </widget></item>
+      </layout>
+     </widget>
+    </widget>
+   </item>
+  </layout>
+ </widget>
+</ui>"#;
+        let (mut tree, root) = load_ui(UI).expect("loads ui");
+        tree.layout(root, tree.widget(root).unwrap().geometry);
+        let toolbox = tree.find_widget("toolbox").expect("toolbox");
+        let page_a = tree.find_widget("pageA").expect("pageA");
+        let page_b = tree.find_widget("pageB").expect("pageB");
+        assert!(tree.widget(page_a).unwrap().visible);
+        assert!(!tree.widget(page_b).unwrap().visible);
+        assert_eq!(
+            tree.widget(toolbox)
+                .unwrap()
+                .toolbox
+                .as_ref()
+                .unwrap()
+                .labels,
+            vec!["Первая".to_string(), "Вторая".to_string()]
+        );
+
+        let rects = tree.toolbox_header_rects(toolbox);
+        assert_eq!(rects.len(), 2);
+        assert!(
+            rects[1].y > rects[0].y + rects[0].height,
+            "headers must stack vertically"
+        );
+        let click = crate::gui::QPointF::new(
+            rects[1].x + rects[1].width / 2.0,
+            rects[1].y + rects[1].height / 2.0,
+        );
+        tree.mouse_press(root, click);
+        tree.mouse_release(root, click);
+        assert!(!tree.widget(page_a).unwrap().visible);
+        assert!(tree.widget(page_b).unwrap().visible);
+        assert_eq!(
+            tree.property(toolbox, "currentIndex"),
+            Some(&QVariant::Int(1))
+        );
+
+        tree.set_property(toolbox, "currentIndex", QVariant::Int(0));
+        assert!(tree.widget(page_a).unwrap().visible);
+        assert!(!tree.widget(page_b).unwrap().visible);
+    }
+
+    #[test]
     fn spin_box_steps_value_on_button_click() {
         const UI: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <ui version="4.0"><class>Dialog</class>
@@ -6652,6 +7642,124 @@ mod tests {
                 .display_text(),
             "₽ 12.50"
         );
+    }
+
+
+    #[test]
+    fn progress_bar_values_layout_and_properties() {
+        const UI: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0"><class>Dialog</class>
+ <widget class="QDialog" name="Dialog">
+  <property name="geometry"><rect><x>0</x><y>0</y><width>360</width><height>140</height></rect></property>
+  <layout class="QVBoxLayout" name="verticalLayout">
+   <property name="spacing"><number>6</number></property>
+   <property name="leftMargin"><number>11</number></property>
+   <property name="topMargin"><number>11</number></property>
+   <property name="rightMargin"><number>11</number></property>
+   <property name="bottomMargin"><number>11</number></property>
+   <item>
+    <widget class="QProgressBar" name="bar">
+     <property name="minimum"><number>0</number></property>
+     <property name="maximum"><number>100</number></property>
+     <property name="value"><number>50</number></property>
+     <property name="textVisible"><bool>true</bool></property>
+    </widget>
+   </item>
+  </layout>
+ </widget>
+</ui>"#;
+        let (mut tree, root) = load_ui(UI).expect("loads ui");
+        tree.layout(root, tree.widget(root).unwrap().geometry);
+        let bar = tree.find_widget("bar").expect("bar");
+        let geom = tree.widget(bar).unwrap().geometry;
+        assert!(
+            (geom.height - 24.0).abs() < 1.5,
+            "QProgressBar height should stay Fixed at ~24 like Qt Fusion, got {}",
+            geom.height
+        );
+        let progress = tree.widget(bar).unwrap().progress.as_ref().unwrap();
+        assert_eq!(progress.value, 50);
+        assert_eq!(progress.display_text(), "50%");
+        assert!((progress.fraction().unwrap() - 0.5).abs() < f32::EPSILON);
+
+        tree.set_property(bar, "value", QVariant::Int(0));
+        assert_eq!(
+            tree.widget(bar).unwrap().progress.as_ref().unwrap().display_text(),
+            "0%"
+        );
+        tree.set_property(bar, "value", QVariant::Int(100));
+        assert_eq!(
+            tree.widget(bar).unwrap().progress.as_ref().unwrap().display_text(),
+            "100%"
+        );
+        tree.set_property(bar, "value", QVariant::Int(150));
+        assert_eq!(tree.widget(bar).unwrap().progress.as_ref().unwrap().value, 100);
+        tree.set_property(bar, "textVisible", QVariant::Bool(false));
+        assert!(!tree.widget(bar).unwrap().progress.as_ref().unwrap().text_visible);
+    }
+
+
+
+    #[test]
+    fn plain_text_edit_types_selects_and_scrolls() {
+        const UI: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0"><class>Dialog</class>
+ <widget class="QDialog" name="Dialog">
+  <property name="geometry"><rect><x>0</x><y>0</y><width>280</width><height>120</height></rect></property>
+  <layout class="QVBoxLayout" name="verticalLayout">
+   <item>
+    <widget class="QPlainTextEdit" name="edit"/>
+   </item>
+  </layout>
+ </widget>
+</ui>"#;
+        let (mut tree, root) = load_ui(UI).expect("loads ui");
+        let edit = tree.find_widget("edit").expect("edit");
+        assert!(tree.is_plain_text_edit(edit));
+        assert!(tree.widget(edit).unwrap().plain_text.is_some());
+        tree.layout(root, tree.widget(root).unwrap().geometry);
+        assert!(
+            tree.widget(edit).unwrap().geometry.height < 120.0,
+            "short dialog should keep the editor compact"
+        );
+
+        for line in 0..12 {
+            if line > 0 {
+                assert!(tree.insert_text(edit, '\n'));
+            }
+            for ch in format!("line{line}").chars() {
+                assert!(tree.insert_text(edit, ch));
+            }
+        }
+        let text = tree.text(edit).unwrap_or_default();
+        assert_eq!(text.lines().count(), 12);
+        assert_eq!(
+            tree.property(edit, "plainText"),
+            Some(&QVariant::String(text.clone()))
+        );
+
+        tree.select_all(edit);
+        assert_eq!(tree.line_edit_selection(edit), Some((0, text.chars().count())));
+
+        tree.set_cursor_position(edit, text.chars().count());
+        tree.sync_views();
+        let before = tree.widget(edit).unwrap().plain_text.as_ref().unwrap().scroll_y;
+        assert!(tree.scroll_plain_text(edit, 40.0));
+        let after = tree.widget(edit).unwrap().plain_text.as_ref().unwrap().scroll_y;
+        assert!(after > before, "expected scroll_y to advance, {before} -> {after}");
+
+        assert!(tree.insert_text(edit, '\n'));
+        assert!(tree.ensure_plain_text_cursor_visible(edit));
+        assert!(tree.move_plain_text_cursor_vertical(edit, true, false));
+
+        tree.set_property(
+            edit,
+            "plainText",
+            QVariant::String("reset\nvalue".into()),
+        );
+        assert_eq!(tree.text(edit).as_deref(), Some("reset\nvalue"));
+        assert_eq!(tree.cursor_position(edit), "reset\nvalue".chars().count());
+        assert_eq!(tree.line_edit_selection(edit), None);
     }
 
 }
