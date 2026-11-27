@@ -113,6 +113,8 @@ pub struct Widget {
     pub add_actions: Vec<String>,
     /// `<column>` captions (QTableWidget/QTreeWidget header sections).
     pub columns: Vec<String>,
+    /// Designer `<item><property name="text">` entries (QComboBox / QListWidget).
+    pub item_texts: Vec<String>,
 }
 
 impl Widget {
@@ -308,6 +310,7 @@ fn parse_widget(node: Node<'_, '_>) -> Result<Widget, ParseError> {
     let mut actions = Vec::new();
     let mut add_actions = Vec::new();
     let mut columns = Vec::new();
+    let mut item_texts = Vec::new();
     for child in node.children().filter(|n| n.is_element()) {
         match child.tag_name().name() {
             "property" => {
@@ -321,6 +324,12 @@ fn parse_widget(node: Node<'_, '_>) -> Result<Widget, ParseError> {
                 }
             }
             "column" => columns.push(parse_column(child)),
+            // QComboBox / QListWidget item rows written by Qt Designer.
+            "item" => {
+                if let Some(text) = parse_item_text(child) {
+                    item_texts.push(text);
+                }
+            }
             "widget" => {
                 children.push(parse_widget(child)?);
             }
@@ -347,7 +356,26 @@ fn parse_widget(node: Node<'_, '_>) -> Result<Widget, ParseError> {
         actions,
         add_actions,
         columns,
+        item_texts,
     })
+}
+
+/// QComboBox/QListWidget `<item><property name="text"><string>…`.
+fn parse_item_text(node: Node<'_, '_>) -> Option<String> {
+    for child in node.children().filter(|n| n.is_element()) {
+        if child.tag_name().name() != "property" {
+            continue;
+        }
+        if let Some((name, value)) = parse_property(child) {
+            if name == "text" {
+                return match value {
+                    PropValue::Str(text) | PropValue::Enum(text) => Some(text),
+                    _ => Some(String::new()),
+                };
+            }
+        }
+    }
+    None
 }
 
 /// `<column>` caption: `<column><property name="text"><string>…`.
@@ -1224,5 +1252,32 @@ mod tests {
             toolbox.children[1].attribute("label"),
             Some(&PropValue::Str("Вторая".into()))
         );
+    }
+
+    #[test]
+    fn parses_combobox_item_texts() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>Dialog</class>
+ <widget class="QDialog" name="Dialog">
+  <layout class="QVBoxLayout" name="l">
+   <item>
+    <widget class="QComboBox" name="editable">
+     <property name="editable"><bool>true</bool></property>
+     <item><property name="text"><string>Alpha</string></property></item>
+     <item><property name="text"><string>Banana</string></property></item>
+    </widget>
+   </item>
+  </layout>
+ </widget>
+</ui>"#;
+        let form = parse(xml).expect("parses");
+        let combo = match &form.root.layout.as_ref().unwrap().items[0] {
+            LayoutItem::Widget(widget, _) => widget,
+            other => panic!("expected combo widget, got {other:?}"),
+        };
+        assert_eq!(combo.class, "QComboBox");
+        assert_eq!(combo.item_texts, vec!["Alpha".to_string(), "Banana".to_string()]);
+        assert_eq!(combo.property("editable"), Some(&PropValue::Bool(true)));
     }
 }

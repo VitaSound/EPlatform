@@ -485,6 +485,9 @@ struct App {
     paint_cache: Vec<gfx::PaintBatch>,
     /// Last caret blink phase that was painted (`true` = caret visible).
     last_caret_visible: bool,
+    /// Non-editable `QComboBox` keyboard-search buffer: form, object name,
+    /// accumulated prefix, and epoch ms (Qt ~1s timeout).
+    combo_search: Option<(String, String, String, f64)>,
 }
 
 impl App {
@@ -544,6 +547,7 @@ impl App {
             paint_dirty: true,
             paint_cache: Vec::new(),
             last_caret_visible: false,
+            combo_search: None,
         }
     }
 
@@ -1711,6 +1715,9 @@ impl App {
 
     /// Topmost window under a point. Top-level windows sit above MDI, like
     /// separate Qt windows; modal filtering is applied separately.
+    ///
+    /// Open combo popups are top-level overlays and may extend past the
+    /// subwindow frame — treat a hit there as `Body` of that form.
     fn window_hit(&self, point: (f32, f32)) -> Option<(WindowLayer, usize, QMdiSubWindowHit)> {
         let point = rqt::gui::QPointF::new(point.0, point.1);
         let touch = self.primary_touch.is_some();
@@ -1718,6 +1725,11 @@ impl App {
             let Some(subwindow) = self.area(layer).subwindow(index) else {
                 continue;
             };
+            if let Some(form) = self.forms.get(&subwindow.payload) {
+                if form.tree.combo_popup_hit(point).is_some() {
+                    return Some((layer, index, QMdiSubWindowHit::Body));
+                }
+            }
             let hit = if touch {
                 subwindow.hit_test_touch(point)
             } else {
@@ -2186,17 +2198,24 @@ impl App {
                         continue;
                     }
                 }
-                if !subwindow.content_rect().contains(point) {
-                    continue;
-                }
                 let Some(form) = self.forms.get(&subwindow.payload) else {
                     continue;
                 };
-                let widget = if let Some((popup, _)) = form.tree.combo_popup_hit(point) {
-                    Some(popup)
-                } else {
-                    form.tree.widget_at(form.root, point)
-                };
+                // Combo popup may extend outside the form content rect.
+                if let Some((popup, _)) = form.tree.combo_popup_hit(point) {
+                    let Some(widget) = form.tree.widget(popup) else {
+                        continue;
+                    };
+                    return Some((
+                        subwindow.payload.clone(),
+                        widget.object_name.clone(),
+                        widget.class_name.clone(),
+                    ));
+                }
+                if !subwindow.content_rect().contains(point) {
+                    continue;
+                }
+                let widget = form.tree.widget_at(form.root, point);
                 let Some(widget) = widget else {
                     continue;
                 };
@@ -3017,93 +3036,219 @@ impl App {
         let Some(form_id) = self.active_form_id() else {
             return false;
         };
-        let Some((widget, name, open)) = self.forms.get(&form_id).and_then(|form| {
+        let Some((widget, name, open, editable)) = self.forms.get(&form_id).and_then(|form| {
             let widget = form.tree.focus_widget()?;
             let node = form.tree.widget(widget)?;
-            (node.class_name == "QComboBox")
-                .then(|| (widget, node.object_name.clone(), node.combo_popup.is_some()))
+            (node.class_name == "QComboBox").then(|| {
+                (
+                    widget,
+                    node.object_name.clone(),
+                    node.combo_popup.is_some(),
+                    form.tree.combo_is_editable(widget),
+                )
+            })
         }) else {
             return false;
         };
-        let Some(form) = self.forms.get_mut(&form_id) else {
+
+        // Editable + closed: caret keys go to the line-edit path.
+        if editable
+            && !open
+            && matches!(
+                action,
+                KeyEdit::Left | KeyEdit::Right | KeyEdit::Home | KeyEdit::End
+            )
+        {
             return false;
-        };
-        let mut changed = None;
-        match action {
-            KeyEdit::ClearFocus if open => {
-                form.tree.close_combo_popup(widget);
-                return true;
-            }
-            KeyEdit::Commit => {
-                if open {
-                    let before = form.tree.combo_current_index(widget);
-                    form.tree.commit_combo_popup(widget);
-                    let after = form.tree.combo_current_index(widget);
-                    if after != before {
-                        changed = after;
+        }
+
+        let now = now_ms();
+        let typeahead_prefix = match action {
+            KeyEdit::Insert(text) if !editable && !text.is_empty() && !text.trim().is_empty() => {
+                let mut prefix = String::new();
+                if let Some((f, n, buf, epoch)) = self.combo_search.as_ref() {
+                    if f == &form_id && n == &name && now - epoch < 1000.0 {
+                        prefix = buf.clone();
                     }
-                } else {
+                }
+                for ch in text.chars() {
+                    if !ch.is_control() {
+                        prefix.push(ch);
+                    }
+                }
+                (!prefix.is_empty()).then_some(prefix)
+            }
+            _ => None,
+        };
+
+        let mut changed = None;
+        let mut edit_changed = false;
+        let mut clear_search = false;
+        let mut set_search: Option<String> = None;
+        let mut handled = true;
+
+        {
+            let Some(form) = self.forms.get_mut(&form_id) else {
+                return false;
+            };
+            match action {
+                KeyEdit::ClearFocus if open => {
+                    form.tree.close_combo_popup(widget);
+                    clear_search = true;
+                }
+                KeyEdit::Commit => {
+                    clear_search = true;
+                    if open {
+                        let before = form.tree.combo_current_index(widget);
+                        form.tree.commit_combo_popup(widget);
+                        let after = form.tree.combo_current_index(widget);
+                        if after != before {
+                            changed = after;
+                        }
+                    } else {
+                        form.tree.open_combo_popup(widget);
+                    }
+                }
+                KeyEdit::Insert(text) if editable => {
+                    form.tree.ensure_combo_edit_text(widget);
+                    let mut applied = String::new();
+                    for ch in text.chars() {
+                        if form.tree.insert_text(widget, ch) {
+                            applied.push(ch);
+                        }
+                    }
+                    if !applied.is_empty() {
+                        edit_changed = true;
+                        if !open {
+                            form.tree.open_combo_popup(widget);
+                        }
+                        form.tree.filter_combo_popup(widget);
+                    }
+                    clear_search = true;
+                }
+                KeyEdit::Backspace if editable => {
+                    form.tree.ensure_combo_edit_text(widget);
+                    if form.tree.backspace_text(widget) {
+                        edit_changed = true;
+                        if !open {
+                            form.tree.open_combo_popup(widget);
+                        }
+                        form.tree.filter_combo_popup(widget);
+                    }
+                    clear_search = true;
+                }
+                KeyEdit::Delete if editable => {
+                    form.tree.ensure_combo_edit_text(widget);
+                    if form.tree.delete_text(widget) {
+                        edit_changed = true;
+                        if !open {
+                            form.tree.open_combo_popup(widget);
+                        }
+                        form.tree.filter_combo_popup(widget);
+                    }
+                    clear_search = true;
+                }
+                KeyEdit::Insert(text)
+                    if !editable && !text.is_empty() && text.trim().is_empty() && !open =>
+                {
                     form.tree.open_combo_popup(widget);
+                    clear_search = true;
                 }
+                KeyEdit::Insert(_) if typeahead_prefix.is_some() => {
+                    let prefix = typeahead_prefix.clone().unwrap();
+                    set_search = Some(prefix.clone());
+                    if let Some(index) = form.tree.combo_keyboard_search(widget, &prefix) {
+                        if !open {
+                            changed = Some(index);
+                        }
+                    }
+                }
+                KeyEdit::Up
+                | KeyEdit::Down
+                | KeyEdit::PageUp
+                | KeyEdit::PageDown
+                | KeyEdit::Home
+                | KeyEdit::End => {
+                    clear_search = true;
+                    if open {
+                        let count = form
+                            .tree
+                            .widget(widget)
+                            .and_then(|node| node.combo_popup.as_ref())
+                            .map(|popup| popup.filtered.len())
+                            .unwrap_or(0);
+                        let delta = match action {
+                            KeyEdit::Up => -1,
+                            KeyEdit::Down => 1,
+                            KeyEdit::PageUp => -10,
+                            KeyEdit::PageDown => 10,
+                            KeyEdit::Home => -(count as i64),
+                            KeyEdit::End => count as i64,
+                            _ => 0,
+                        };
+                        form.tree.move_combo_highlight(widget, delta);
+                    } else {
+                        let count = form
+                            .tree
+                            .property(widget, "items")
+                            .and_then(|value| match value {
+                                rqt::core::QVariant::List(items) => Some(items.len()),
+                                _ => None,
+                            })
+                            .unwrap_or(0);
+                        if count > 0 {
+                            let current = form.tree.combo_current_index(widget).unwrap_or(0);
+                            let next = match action {
+                                KeyEdit::Up => current.saturating_sub(1),
+                                KeyEdit::Down => (current + 1).min(count - 1),
+                                KeyEdit::PageUp => current.saturating_sub(10),
+                                KeyEdit::PageDown => (current + 10).min(count - 1),
+                                KeyEdit::Home => 0,
+                                KeyEdit::End => count - 1,
+                                _ => current,
+                            };
+                            if next != current {
+                                form.tree.select_combo_index(widget, next);
+                                changed = Some(next);
+                            }
+                        }
+                    }
+                }
+                _ => handled = false,
             }
-            KeyEdit::Insert(text) if !text.is_empty() && text.trim().is_empty() && !open => {
-                form.tree.open_combo_popup(widget);
-                return true;
+        }
+
+        if !handled {
+            return false;
+        }
+        if clear_search {
+            self.combo_search = None;
+        } else if let Some(prefix) = set_search {
+            self.combo_search = Some((form_id.clone(), name.clone(), prefix, now));
+        }
+        if edit_changed {
+            let text = self
+                .forms
+                .get(&form_id)
+                .and_then(|form| {
+                    let widget = form.tree.find_widget(&name)?;
+                    Some(form.tree.combo_edit_text(widget))
+                })
+                .unwrap_or_default();
+            if let Some(socket) = &self.socket {
+                socket.send(
+                    "send_event",
+                    serde_json::json!({
+                        "command": "formEvent",
+                        "form_id": form_id,
+                        "widget_name": name,
+                        "event": "EditTextChanged",
+                        "text": text,
+                    }),
+                );
             }
-            KeyEdit::Up
-            | KeyEdit::Down
-            | KeyEdit::PageUp
-            | KeyEdit::PageDown
-            | KeyEdit::Home
-            | KeyEdit::End => {
-                if open {
-                    let items = form
-                        .tree
-                        .property(widget, "items")
-                        .and_then(|value| match value {
-                            rqt::core::QVariant::List(items) => Some(items.len()),
-                            _ => None,
-                        })
-                        .unwrap_or(0);
-                    let delta = match action {
-                        KeyEdit::Up => -1,
-                        KeyEdit::Down => 1,
-                        KeyEdit::PageUp => -10,
-                        KeyEdit::PageDown => 10,
-                        KeyEdit::Home => -(items as i64),
-                        KeyEdit::End => items as i64,
-                        _ => 0,
-                    };
-                    form.tree.move_combo_highlight(widget, delta);
-                    return true;
-                }
-                let count = form
-                    .tree
-                    .property(widget, "items")
-                    .and_then(|value| match value {
-                        rqt::core::QVariant::List(items) => Some(items.len()),
-                        _ => None,
-                    })
-                    .unwrap_or(0);
-                if count == 0 {
-                    return true;
-                }
-                let current = form.tree.combo_current_index(widget).unwrap_or(0);
-                let next = match action {
-                    KeyEdit::Up => current.saturating_sub(1),
-                    KeyEdit::Down => (current + 1).min(count - 1),
-                    KeyEdit::PageUp => current.saturating_sub(10),
-                    KeyEdit::PageDown => (current + 10).min(count - 1),
-                    KeyEdit::Home => 0,
-                    KeyEdit::End => count - 1,
-                    _ => current,
-                };
-                if next != current {
-                    form.tree.select_combo_index(widget, next);
-                    changed = Some(next);
-                }
-            }
-            _ => return false,
+            Self::log(format!("event EditTextChanged -> {name}: {text:?}"));
+            self.mark_paint_dirty();
         }
         if let Some(index) = changed {
             if let Some(socket) = &self.socket {
@@ -3119,6 +3264,7 @@ impl App {
                 );
             }
             Self::log(format!("event CurrentIndexChanged -> {name}: {index}"));
+            self.mark_paint_dirty();
         }
         true
     }
@@ -3374,7 +3520,32 @@ impl App {
                 self.focused = Some((form_id.to_string(), name.clone()));
                 self.table_focus = None;
             }
-            "QTableWidget" | "QListWidget" | "QTreeWidget" | "QComboBox" => {
+            "QComboBox" => {
+                let editable = self
+                    .forms
+                    .get(form_id)
+                    .and_then(|form| form.tree.find_widget(&name))
+                    .is_some_and(|widget| {
+                        self.forms
+                            .get(form_id)
+                            .is_some_and(|form| form.tree.combo_is_editable(widget))
+                    });
+                if editable {
+                    if let Some(form) = self.forms.get_mut(form_id) {
+                        if let Some(widget) = form.tree.find_widget(&name) {
+                            form.tree.ensure_combo_edit_text(widget);
+                            if select_text {
+                                form.tree.select_all(widget);
+                            }
+                        }
+                    }
+                    self.focused = Some((form_id.to_string(), name.clone()));
+                } else {
+                    self.focused = None;
+                }
+                self.table_focus = Some((form_id.to_string(), name.clone()));
+            }
+            "QTableWidget" | "QListWidget" | "QTreeWidget" => {
                 self.focused = None;
                 self.table_focus = Some((form_id.to_string(), name.clone()));
             }
@@ -6878,6 +7049,79 @@ mod tests {
         assert!(app.forms["f"].tree.combo_popup_open(combo));
         assert!(app.combo_key(&KeyEdit::ClearFocus));
         assert!(!app.forms["f"].tree.combo_popup_open(combo));
+    }
+
+    #[test]
+    fn combo_typeahead_jumps_to_matching_item() {
+        let mut app = App::new(Params::default());
+        app.on_create_form(&serde_json::json!({
+            "form_id": "f",
+            "ui_xml": COMBO_UI,
+        }));
+        app.on_command(&serde_json::json!({
+            "command": "setProperty",
+            "form_id": "f",
+            "object_name": "combo",
+            "property": "items",
+            "value": ["Alpha", "Beta", "Gamma"],
+        }));
+        let form = app.forms.get_mut("f").unwrap();
+        let combo = form.tree.find_widget("combo").unwrap();
+        form.tree.set_focus(combo);
+        app.sync_focus("f", combo, false);
+        assert!(app.combo_key(&KeyEdit::Insert("b".into())));
+        assert_eq!(app.forms["f"].tree.combo_current_index(combo), Some(1));
+        assert!(app.combo_key(&KeyEdit::Insert("g".into())));
+        // Prefix "bg" matches nothing; index stays.
+        assert_eq!(app.forms["f"].tree.combo_current_index(combo), Some(1));
+        app.combo_search = None;
+        assert!(app.combo_key(&KeyEdit::Insert("g".into())));
+        assert_eq!(app.forms["f"].tree.combo_current_index(combo), Some(2));
+    }
+
+    #[test]
+    fn combo_editable_types_filters_and_commits() {
+        let mut app = App::new(Params::default());
+        app.on_create_form(&serde_json::json!({
+            "form_id": "f",
+            "ui_xml": COMBO_UI,
+        }));
+        app.on_command(&serde_json::json!({
+            "command": "setProperty",
+            "form_id": "f",
+            "object_name": "combo",
+            "property": "items",
+            "value": ["Apple", "Apricot", "Banana"],
+        }));
+        app.on_command(&serde_json::json!({
+            "command": "setProperty",
+            "form_id": "f",
+            "object_name": "combo",
+            "property": "editable",
+            "value": true,
+        }));
+        let form = app.forms.get_mut("f").unwrap();
+        let combo = form.tree.find_widget("combo").unwrap();
+        form.tree.set_focus(combo);
+        // Tab-style focus selects all so the first typed char replaces.
+        app.sync_focus("f", combo, true);
+        assert_eq!(app.focused, Some(("f".into(), "combo".into())));
+        assert!(app.combo_key(&KeyEdit::Insert("Apr".into())));
+        assert!(app.forms["f"].tree.combo_popup_open(combo));
+        let filtered = app.forms["f"]
+            .tree
+            .widget(combo)
+            .unwrap()
+            .combo_popup
+            .as_ref()
+            .unwrap()
+            .filtered
+            .clone();
+        assert_eq!(filtered, vec![1]);
+        assert_eq!(app.forms["f"].tree.combo_edit_text(combo), "Apr");
+        assert!(app.combo_key(&KeyEdit::Commit));
+        assert_eq!(app.forms["f"].tree.combo_current_index(combo), Some(1));
+        assert_eq!(app.forms["f"].tree.combo_edit_text(combo), "Apricot");
     }
 
     #[test]

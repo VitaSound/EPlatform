@@ -2,6 +2,19 @@
 
 ## 2026-11-27
 
+### QComboBox: type-ahead, editable filter, popup overlay
+
+- **Non-editable type-ahead.** Prefix search (~1s window) jumps
+  `currentIndex` like Qt `keyboardSearch`.
+- **Editable combo.** Free-text edit + caret; popup filters by substring
+  as you type; arrow opens the list, text click places caret only.
+- **Popup chrome.** Overlay is not clipped to the parent form; release on
+  the combo body/arrow does not commit a row (keeps the list open).
+- **Designer `<item>`.** `form-xml` + `load_ui` read QComboBox/QListWidget
+  item texts into the `items` property.
+- **Gallery.** `#155` `combo/240_editable_search` (plain + editable);
+  `gallery_form.lua` seeds fruit demo items on every gallery combo.
+
 ### Nested box layout: expand like Qt `QBoxLayout`
 
 - **`item_expands` for nested HBox/VBox.** Nested box expands on an axis

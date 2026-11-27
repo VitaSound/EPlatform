@@ -56,6 +56,9 @@ pub fn paint_widget_tree_content(
 }
 
 pub fn paint_combo_popups(tree: &QWidgetTree, _style: &dyn QStyle, painter: &mut QPainter) {
+    // Clear any leftover form/widget scissor so the overlay can draw past
+    // the parent dialog (Qt top-level popup container).
+    painter.set_clip_rect(None);
     for (id, widget) in tree.iter_widgets() {
         if widget.combo_popup.is_none() {
             continue;
@@ -787,6 +790,7 @@ fn paint_combo_popup(
         .or(view_qss.color)
         .unwrap_or_else(|| palette.color(QPaletteRole::Text));
     let visible = ((rect.height - 2.0) / QCOMBO_POPUP_ROW_H).floor().max(1.0) as usize;
+    let filtered_len = popup.filtered.len();
 
     painter.fill_rect(
         rect,
@@ -801,7 +805,13 @@ fn paint_combo_popup(
         (rect.width - 2.0).max(0.0),
         (rect.height - 2.0).max(0.0),
     )));
-    for row in popup.scroll..(popup.scroll + visible).min(items.len()) {
+    for row in popup.scroll..(popup.scroll + visible).min(filtered_len) {
+        let Some(item_index) = popup.filtered.get(row).copied() else {
+            continue;
+        };
+        let Some(label) = items.get(item_index) else {
+            continue;
+        };
         let y = rect.y + 1.0 + (row - popup.scroll) as f32 * QCOMBO_POPUP_ROW_H;
         let selected = row == popup.highlight;
         let row_rect = QRectF::new(
@@ -829,7 +839,7 @@ fn paint_combo_popup(
                 (rect.width - 10.0).max(1.0),
                 line_height,
             ),
-            &items[row],
+            label,
             if selected {
                 highlighted_text
             } else {
@@ -987,6 +997,11 @@ pub(crate) fn property_texts(widget: &QWidget, key: &str) -> Vec<String> {
 }
 
 pub(crate) fn combo_text(widget: &QWidget) -> Option<String> {
+    if property_bool(widget, "editable") {
+        if let Some(text) = widget_text(widget) {
+            return Some(text);
+        }
+    }
     let items = property_texts(widget, "items");
     if !items.is_empty() {
         let index = property_int(widget, "currentIndex").unwrap_or(0).max(0) as usize;
@@ -995,14 +1010,34 @@ pub(crate) fn combo_text(widget: &QWidget) -> Option<String> {
     widget_text(widget)
 }
 
+fn edit_content_insets(widget: &QWidget) -> (f32, f32, f32, f32) {
+    if widget.class_name == "QComboBox" {
+        // Leave room for the drop arrow on the right.
+        (3.0, 4.0, crate::widgets::QCOMBO_ARROW_W + 3.0, 4.0)
+    } else {
+        // Fusion: SE_LineEditContents (+1) + QLineEditPrivate horizontalMargin 2 /
+        // verticalMargin-derived caret band → (3,4,3,4) from geometry.
+        (3.0, 4.0, 3.0, 4.0)
+    }
+}
+
+fn is_editable_text_field(widget: &QWidget) -> bool {
+    widget.class_name == "QLineEdit"
+        || (widget.class_name == "QComboBox" && property_bool(widget, "editable"))
+}
+
 fn paint_line_edit_selection(widget: &QWidget, painter: &mut QPainter, qss: &QStyleDeclarations) {
-    if widget.class_name != "QLineEdit" {
+    if !is_editable_text_field(widget) {
         return;
     }
     let Some(anchor) = widget.selection_anchor else {
         return;
     };
-    let text = widget_text(widget).unwrap_or_default();
+    let text = if widget.class_name == "QComboBox" {
+        combo_text(widget).unwrap_or_default()
+    } else {
+        widget_text(widget).unwrap_or_default()
+    };
     let length = text.chars().count();
     let start = anchor.min(widget.cursor_position).min(length);
     let end = anchor.max(widget.cursor_position).min(length);
@@ -1013,9 +1048,7 @@ fn paint_line_edit_selection(widget: &QWidget, painter: &mut QPainter, qss: &QSt
     let metrics = QFontMetrics::new(&font);
     let prefix: String = text.chars().take(start).collect();
     let selected: String = text.chars().take(end).skip(start).collect();
-    // Fusion: SE_LineEditContents (+1) + QLineEditPrivate horizontalMargin 2 /
-    // verticalMargin-derived caret band → (3,4,3,4) from geometry.
-    let content = qss_content_rect(widget, qss, (3.0, 4.0, 3.0, 4.0));
+    let content = qss_content_rect(widget, qss, edit_content_insets(widget));
     let x = content.x + metrics.horizontal_advance(&prefix);
     let width = metrics.horizontal_advance(&selected);
     let y = content.y;
@@ -1030,18 +1063,22 @@ fn paint_line_edit_selection(widget: &QWidget, painter: &mut QPainter, qss: &QSt
 }
 
 fn paint_line_edit_caret(widget: &QWidget, painter: &mut QPainter, qss: &QStyleDeclarations) {
-    if widget.class_name != "QLineEdit"
+    if !is_editable_text_field(widget)
         || !widget.has_focus
         || !widget.enabled
         || !widget.cursor_visible
     {
         return;
     }
-    let text = widget_text(widget).unwrap_or_default();
+    let text = if widget.class_name == "QComboBox" {
+        combo_text(widget).unwrap_or_default()
+    } else {
+        widget_text(widget).unwrap_or_default()
+    };
     let prefix: String = text.chars().take(widget.cursor_position).collect();
     let font = qss_font(widget, qss);
     let metrics = QFontMetrics::new(&font);
-    let content = qss_content_rect(widget, qss, (3.0, 4.0, 3.0, 4.0));
+    let content = qss_content_rect(widget, qss, edit_content_insets(widget));
     // Qt puts the 1 px caret exactly at the glyph advance; no extra gap.
     let caret_x = (content.x + metrics.horizontal_advance(&prefix)).min(content.right());
     let caret_y = content.y;

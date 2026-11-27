@@ -155,4 +155,5 @@ return {
     { number = 152, id = "gallery/textedit/237_multiline_static", category = "gallery/textedit", ui = "gallery/textedit/237_multiline_static.ui" },
     { number = 153, id = "gallery/textedit/238_empty_focus_sized", category = "gallery/textedit", ui = "gallery/textedit/238_empty_focus_sized.ui" },
     { number = 154, id = "gallery/qss/239_border_image", category = "gallery/qss", ui = "gallery/qss/239_border_image.ui" },
+    { number = 155, id = "gallery/combo/240_editable_search", category = "gallery/combo", ui = "gallery/combo/240_editable_search.ui" },
 }

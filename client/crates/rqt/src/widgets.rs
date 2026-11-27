@@ -466,15 +466,23 @@ impl QProgressBar {
 /// `QComboBox` popup view state. Item strings live in the `items` property
 /// (the same source the closed combo paints); only the transient open state
 /// is kept here, like `QComboBoxPrivateContainer` in Qt.
+///
+/// `highlight` / `scroll` index into `filtered` (positions in the visible
+/// list). `filtered` holds indices into the full `items` list so editable
+/// combos can narrow the popup without mutating the model.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct QComboBoxPopup {
     pub highlight: usize,
     pub scroll: usize,
+    pub filtered: Vec<usize>,
 }
 
 /// Height of one popup row in Fusion. Qt's `QComboBox` view returns 24 px for
 /// the default 14 px DejaVu Sans font (`QListView::sizeHintForRow`).
 pub const QCOMBO_POPUP_ROW_H: f32 = 24.0;
+
+/// Width reserved for the combo arrow / drop button (Fusion ≈ 19–20 px).
+pub const QCOMBO_ARROW_W: f32 = 20.0;
 
 #[derive(Clone, Debug)]
 struct QSplitterDrag {
@@ -1085,6 +1093,10 @@ fn combo_items(widget: &QWidget) -> Vec<String> {
     }
 }
 
+fn combo_is_editable(widget: &QWidget) -> bool {
+    matches!(widget.property("editable"), Some(QVariant::Bool(true)))
+}
+
 fn combo_visible_rows(widget: &QWidget, count: usize) -> usize {
     let max_visible = widget
         .property("maxVisibleItems")
@@ -1092,6 +1104,53 @@ fn combo_visible_rows(widget: &QWidget, count: usize) -> usize {
         .unwrap_or(10)
         .max(1) as usize;
     count.min(max_visible).max(1)
+}
+
+fn combo_filter_indices(items: &[String], needle: &str) -> Vec<usize> {
+    if needle.is_empty() {
+        return (0..items.len()).collect();
+    }
+    let needle = needle.to_lowercase();
+    items
+        .iter()
+        .enumerate()
+        .filter(|(_, text)| text.to_lowercase().contains(&needle))
+        .map(|(index, _)| index)
+        .collect()
+}
+
+/// Qt-style keyboard search: case-insensitive prefix match, wrapping from
+/// `start_after + 1` (or from 0 when wrapping).
+fn combo_prefix_match(items: &[String], prefix: &str, start_after: usize) -> Option<usize> {
+    if items.is_empty() || prefix.is_empty() {
+        return None;
+    }
+    let prefix = prefix.to_lowercase();
+    let len = items.len();
+    for offset in 1..=len {
+        let index = (start_after + offset) % len;
+        if items[index].to_lowercase().starts_with(&prefix) {
+            return Some(index);
+        }
+    }
+    None
+}
+
+fn combo_popup_clamp(popup: &mut QComboBoxPopup, visible: usize) {
+    if popup.filtered.is_empty() {
+        popup.highlight = 0;
+        popup.scroll = 0;
+        return;
+    }
+    let last = popup.filtered.len() - 1;
+    popup.highlight = popup.highlight.min(last);
+    let max_scroll = last.saturating_sub(visible.saturating_sub(1));
+    popup.scroll = popup.scroll.min(max_scroll);
+    if popup.highlight < popup.scroll {
+        popup.scroll = popup.highlight;
+    } else if popup.highlight >= popup.scroll + visible {
+        popup.scroll = popup.highlight + 1 - visible;
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1362,6 +1421,14 @@ impl QWidgetTree {
                     widget.set_property("currentIndex", QVariant::Int(index as i64));
                 }
             }
+            let length = match &value {
+                QVariant::String(text) | QVariant::Enum(text) => text.chars().count(),
+                QVariant::Int(value) => value.to_string().chars().count(),
+                _ => 0,
+            };
+            widget.cursor_position = length;
+            widget.selection_anchor = None;
+            widget.cursor_visible = true;
         }
         if widget.class_name == "QLineEdit" && name == "text" {
             let length = match &value {
@@ -1397,25 +1464,26 @@ impl QWidgetTree {
         if widget.class_name == "QComboBox" {
             if matches!(
                 property_name.as_str(),
-                "items" | "currentIndex" | "maxVisibleItems" | "enabled" | "visible"
+                "items" | "currentIndex" | "maxVisibleItems" | "enabled" | "visible" | "editable"
             ) {
                 let items = combo_items(widget);
                 if items.is_empty() || !widget.visible || !widget.enabled {
                     widget.combo_popup = None;
-                } else {
-                    let current = widget
-                        .property("currentIndex")
-                        .and_then(|value| value_as_i64(value))
-                        .unwrap_or(0)
-                        .max(0) as usize;
-                    let visible = combo_visible_rows(widget, items.len());
+                } else if widget.combo_popup.is_some() {
+                    let editable = combo_is_editable(widget);
+                    let needle = if editable {
+                        widget
+                            .property("text")
+                            .and_then(variant_text)
+                            .unwrap_or_default()
+                    } else {
+                        String::new()
+                    };
+                    let filtered = combo_filter_indices(&items, &needle);
+                    let visible = combo_visible_rows(widget, filtered.len().max(1));
                     if let Some(popup) = widget.combo_popup.as_mut() {
-                        popup.highlight = popup.highlight.min(items.len() - 1);
-                        popup.scroll = popup
-                            .scroll
-                            .min(current.saturating_sub(visible.saturating_sub(1)))
-                            .min(items.len() - visible);
-                        popup.highlight = popup.highlight.max(popup.scroll);
+                        popup.filtered = filtered;
+                        combo_popup_clamp(popup, visible);
                     }
                 }
             }
@@ -1630,9 +1698,31 @@ impl QWidgetTree {
     }
 
     pub fn is_line_edit(&self, widget: QWidgetId) -> bool {
+        self.widgets.get(widget).is_some_and(|node| {
+            node.class_name == "QLineEdit"
+                || (node.class_name == "QComboBox" && combo_is_editable(node))
+        })
+    }
+
+    pub fn combo_is_editable(&self, widget: QWidgetId) -> bool {
         self.widgets
             .get(widget)
-            .is_some_and(|node| node.class_name == "QLineEdit")
+            .is_some_and(combo_is_editable)
+    }
+
+    /// Drop-arrow / button rect in form coordinates (right edge of the combo).
+    pub fn combo_arrow_rect(&self, widget: QWidgetId) -> Option<QRectF> {
+        let node = self.widgets.get(widget)?;
+        if node.class_name != "QComboBox" {
+            return None;
+        }
+        let geo = node.geometry;
+        Some(QRectF::new(
+            geo.right() - QCOMBO_ARROW_W,
+            geo.y,
+            QCOMBO_ARROW_W,
+            geo.height,
+        ))
     }
 
     pub fn is_plain_text_edit(&self, widget: QWidgetId) -> bool {
@@ -1869,16 +1959,22 @@ impl QWidgetTree {
 
     fn cursor_at_x(&self, widget: QWidgetId, local_x: f32) -> Option<usize> {
         let node = self.widgets.get(widget)?;
-        if node.class_name != "QLineEdit" {
+        let editable_combo = node.class_name == "QComboBox" && combo_is_editable(node);
+        if node.class_name != "QLineEdit" && !editable_combo {
             return None;
         }
-        let text = self.text(widget).unwrap_or_default();
+        let text = if editable_combo {
+            self.combo_edit_text(widget)
+        } else {
+            self.text(widget).unwrap_or_default()
+        };
         let metrics = QFontMetrics::new(&node.font);
+        let origin = 3.0;
         let mut best = 0;
         let mut best_distance = f32::MAX;
         for index in 0..=text.chars().count() {
             let prefix: String = text.chars().take(index).collect();
-            let width = 3.0 + metrics.horizontal_advance(&prefix);
+            let width = origin + metrics.horizontal_advance(&prefix);
             let distance = (local_x - width).abs();
             if distance < best_distance {
                 best = index;
@@ -1965,6 +2061,24 @@ impl QWidgetTree {
         root
     }
 
+    /// Display / edit text for a combo: explicit `text` when set (editable),
+    /// otherwise the current item string.
+    pub fn combo_edit_text(&self, widget: QWidgetId) -> String {
+        let Some(node) = self.widgets.get(widget) else {
+            return String::new();
+        };
+        if let Some(text) = node.property("text").and_then(variant_text) {
+            return text;
+        }
+        let items = combo_items(node);
+        let index = node
+            .property("currentIndex")
+            .and_then(value_as_i64)
+            .unwrap_or(0)
+            .max(0) as usize;
+        items.get(index).cloned().unwrap_or_default()
+    }
+
     /// Popup rectangle in form coordinates, mirroring the way Qt places the
     /// combo container: at least as wide as the combo, below it when there is
     /// room, otherwise above, and clamped inside the form.
@@ -1977,32 +2091,34 @@ impl QWidgetTree {
         if items.is_empty() {
             return None;
         }
+        let popup = node.combo_popup.as_ref()?;
+        let filtered_count = popup.filtered.len().max(1);
         let metrics = QFontMetrics::new(&node.font);
-        let visible = combo_visible_rows(node, items.len());
-        let content_width = items
+        let visible = combo_visible_rows(node, filtered_count);
+        let content_width = popup
+            .filtered
             .iter()
+            .filter_map(|index| items.get(*index))
             .map(|item| metrics.horizontal_advance(item))
             .fold(0.0_f32, f32::max)
             + 10.0;
+        // Popup is a top-level overlay (Qt `QComboBoxPrivateContainer`): it
+        // must not be shrunk or clipped to the parent form. Prefer below the
+        // combo; flip above when the form has more room there — still allow
+        // the list to extend past the form edges.
         let root = self.root_of(widget)?;
         let root_rect = self.widgets.get(root)?.geometry;
-        let width = node
-            .geometry
-            .width
-            .max(content_width)
-            .min(root_rect.width.max(node.geometry.width));
-        let height = (visible as f32 * QCOMBO_POPUP_ROW_H + 2.0).min(root_rect.height.max(1.0));
-        let mut x = node.geometry.x;
-        let mut y = node.geometry.bottom();
-        if y + height > root_rect.bottom() {
-            let above = node.geometry.y - height;
-            y = if above >= root_rect.y {
-                above
-            } else {
-                (root_rect.bottom() - height).max(root_rect.y)
-            };
-        }
-        x = x.min(root_rect.right() - width).max(root_rect.x);
+        let width = node.geometry.width.max(content_width);
+        let height = visible as f32 * QCOMBO_POPUP_ROW_H + 2.0;
+        let x = node.geometry.x;
+        let below = node.geometry.bottom();
+        let space_below = root_rect.bottom() - below;
+        let space_above = node.geometry.y - root_rect.y;
+        let y = if space_below < height && space_above > space_below {
+            node.geometry.y - height
+        } else {
+            below
+        };
         Some(QRectF::new(x, y, width, height))
     }
 
@@ -2012,9 +2128,10 @@ impl QWidgetTree {
             .position(|widget| widget.combo_popup.is_some())
     }
 
-    /// Hit-test an open popup. `Some((combo, Some(row)))` is an item hit;
-    /// `Some((combo, None))` is the popup frame (a click that only dismisses
-    /// the popup must not fall through to the widget below).
+    /// Hit-test an open popup. `Some((combo, Some(item_index)))` is an item
+    /// hit (`item_index` is absolute in `items`); `Some((combo, None))` is the
+    /// popup frame (a click that only dismisses the popup must not fall
+    /// through to the widget below).
     pub fn combo_popup_hit(&self, point: QPointF) -> Option<(QWidgetId, Option<usize>)> {
         for (id, widget) in self.widgets.iter().enumerate().rev() {
             if widget.combo_popup.is_none() {
@@ -2025,13 +2142,12 @@ impl QWidgetTree {
                 continue;
             }
             let popup = widget.combo_popup.as_ref()?;
-            let items = combo_items(widget);
             let row = ((point.y - rect.y - 1.0) / QCOMBO_POPUP_ROW_H).floor();
             let row = if row < 0.0 {
                 None
             } else {
-                let index = popup.scroll + row as usize;
-                (index < items.len()).then_some(index)
+                let filtered_index = popup.scroll + row as usize;
+                popup.filtered.get(filtered_index).copied()
             };
             return Some((id, row));
         }
@@ -2045,7 +2161,7 @@ impl QWidgetTree {
     }
 
     pub fn open_combo_popup(&mut self, widget: QWidgetId) -> bool {
-        let Some(node) = self.widgets.get_mut(widget) else {
+        let Some(node) = self.widgets.get(widget) else {
             return false;
         };
         if node.class_name != "QComboBox" || !node.enabled || !node.visible {
@@ -2055,16 +2171,32 @@ impl QWidgetTree {
         if items.is_empty() {
             return false;
         }
+        let editable = combo_is_editable(node);
         let current = node
             .property("currentIndex")
             .and_then(value_as_i64)
             .unwrap_or(0)
             .clamp(0, items.len() as i64 - 1) as usize;
-        let visible = combo_visible_rows(node, items.len());
-        node.combo_popup = Some(QComboBoxPopup {
-            highlight: current,
-            scroll: current.saturating_sub(visible.saturating_sub(1)),
-        });
+        let needle = if editable {
+            node.property("text")
+                .and_then(variant_text)
+                .unwrap_or_else(|| items.get(current).cloned().unwrap_or_default())
+        } else {
+            String::new()
+        };
+        let filtered = combo_filter_indices(&items, &needle);
+        let highlight = filtered
+            .iter()
+            .position(|index| *index == current)
+            .unwrap_or(0);
+        let visible = combo_visible_rows(node, filtered.len().max(1));
+        let mut popup = QComboBoxPopup {
+            highlight,
+            scroll: highlight.saturating_sub(visible.saturating_sub(1)),
+            filtered,
+        };
+        combo_popup_clamp(&mut popup, visible);
+        self.widgets[widget].combo_popup = Some(popup);
         true
     }
 
@@ -2094,60 +2226,116 @@ impl QWidgetTree {
         )
     }
 
+    /// Ensure an editable combo has a `text` property (from current item).
+    pub fn ensure_combo_edit_text(&mut self, widget: QWidgetId) -> bool {
+        let Some(node) = self.widgets.get(widget) else {
+            return false;
+        };
+        if !combo_is_editable(node) {
+            return false;
+        }
+        if node.property("text").and_then(variant_text).is_some() {
+            return false;
+        }
+        let text = self.combo_edit_text(widget);
+        let length = text.chars().count();
+        let Some(node) = self.widgets.get_mut(widget) else {
+            return false;
+        };
+        node.set_property("text", QVariant::String(text));
+        node.cursor_position = length;
+        node.selection_anchor = None;
+        true
+    }
+
+    /// Recompute the open popup filter from the editable text. No-op when the
+    /// popup is closed or the combo is not editable.
+    pub fn filter_combo_popup(&mut self, widget: QWidgetId) -> bool {
+        let Some(node) = self.widgets.get(widget) else {
+            return false;
+        };
+        if node.class_name != "QComboBox" || !combo_is_editable(node) || node.combo_popup.is_none()
+        {
+            return false;
+        }
+        let items = combo_items(node);
+        let needle = node
+            .property("text")
+            .and_then(variant_text)
+            .unwrap_or_default();
+        let filtered = combo_filter_indices(&items, &needle);
+        let visible = combo_visible_rows(node, filtered.len().max(1));
+        let Some(popup) = self.widgets[widget].combo_popup.as_mut() else {
+            return false;
+        };
+        popup.filtered = filtered;
+        popup.highlight = 0;
+        popup.scroll = 0;
+        combo_popup_clamp(popup, visible);
+        true
+    }
+
     /// Set `currentIndex` and close the popup, like selecting an item in the
     /// QComboBox popup. Returns `true` when the index changed.
     pub fn select_combo_index(&mut self, widget: QWidgetId, index: usize) -> bool {
-        let Some(node) = self.widgets.get_mut(widget) else {
+        let Some(node) = self.widgets.get(widget) else {
             return false;
         };
         let items = combo_items(node);
         if index >= items.len() {
             return false;
         }
-        let changed = self
-            .widgets
-            .get(widget)
-            .and_then(|node| node.property("currentIndex"))
+        let text = items[index].clone();
+        let changed = node
+            .property("currentIndex")
             .and_then(value_as_i64)
             .unwrap_or(0)
             != index as i64;
-        self.widgets[widget].set_property("currentIndex", QVariant::Int(index as i64));
-        self.widgets[widget].combo_popup = None;
+        let length = text.chars().count();
+        {
+            let node = &mut self.widgets[widget];
+            node.set_property("currentIndex", QVariant::Int(index as i64));
+            node.set_property("text", QVariant::String(text));
+            node.cursor_position = length;
+            node.selection_anchor = None;
+            node.cursor_visible = true;
+            node.combo_popup = None;
+        }
         changed
     }
 
+    /// Absolute item index under the popup highlight, if any.
     pub fn combo_popup_highlight(&self, widget: QWidgetId) -> Option<usize> {
-        self.widgets
-            .get(widget)
-            .and_then(|node| node.combo_popup.as_ref())
-            .map(|popup| popup.highlight)
+        let popup = self.widgets.get(widget)?.combo_popup.as_ref()?;
+        popup.filtered.get(popup.highlight).copied()
     }
 
     pub fn move_combo_highlight(&mut self, widget: QWidgetId, delta: i64) -> bool {
         let Some(node) = self.widgets.get_mut(widget) else {
             return false;
         };
-        let items = combo_items(node);
-        if items.is_empty() {
-            return false;
-        }
         if node.combo_popup.is_none() {
             return false;
         }
-        let visible = combo_visible_rows(node, items.len());
+        let count = node
+            .combo_popup
+            .as_ref()
+            .map(|popup| popup.filtered.len())
+            .unwrap_or(0);
+        if count == 0 {
+            return false;
+        }
+        let visible = combo_visible_rows(node, count);
         let Some(popup) = node.combo_popup.as_mut() else {
             return false;
         };
-        let next = (popup.highlight as i64 + delta).clamp(0, items.len() as i64 - 1);
+        let next = (popup.highlight as i64 + delta).clamp(0, count as i64 - 1);
         popup.highlight = next as usize;
-        if popup.highlight < popup.scroll {
-            popup.scroll = popup.highlight;
-        } else if popup.highlight >= popup.scroll + visible {
-            popup.scroll = popup.highlight + 1 - visible;
-        }
+        combo_popup_clamp(popup, visible);
         true
     }
 
+    /// Highlight by absolute item index (maps into the filtered list).
     pub fn set_combo_highlight(&mut self, widget: QWidgetId, index: usize) -> bool {
         let Some(node) = self.widgets.get_mut(widget) else {
             return false;
@@ -2159,28 +2347,76 @@ impl QWidgetTree {
         if node.combo_popup.is_none() {
             return false;
         }
-        let visible = combo_visible_rows(node, items.len());
+        let Some(filtered_pos) = node
+            .combo_popup
+            .as_ref()
+            .and_then(|popup| popup.filtered.iter().position(|i| *i == index))
+        else {
+            return false;
+        };
+        let visible = combo_visible_rows(
+            node,
+            node.combo_popup
+                .as_ref()
+                .map(|popup| popup.filtered.len())
+                .unwrap_or(1)
+                .max(1),
+        );
         let Some(popup) = node.combo_popup.as_mut() else {
             return false;
         };
-        popup.highlight = index;
-        if index < popup.scroll {
-            popup.scroll = index;
-        } else if index >= popup.scroll + visible {
-            popup.scroll = index + 1 - visible;
-        }
+        popup.highlight = filtered_pos;
+        combo_popup_clamp(popup, visible);
         true
     }
 
     pub fn commit_combo_popup(&mut self, widget: QWidgetId) -> bool {
         let Some(index) = self.combo_popup_highlight(widget) else {
+            self.close_combo_popup(widget);
             return false;
         };
         if self.combo_current_index(widget) == Some(index) {
-            self.close_combo_popup(widget);
+            // Still sync text for editable combos when re-selecting.
+            let _ = self.select_combo_index(widget, index);
             return false;
         }
         self.select_combo_index(widget, index)
+    }
+
+    /// Non-editable type-ahead: jump to the next item whose text starts with
+    /// `prefix` (case-insensitive). When the popup is open, moves the
+    /// highlight; otherwise changes `currentIndex`. Returns the matched
+    /// absolute index.
+    pub fn combo_keyboard_search(&mut self, widget: QWidgetId, prefix: &str) -> Option<usize> {
+        let node = self.widgets.get(widget)?;
+        if node.class_name != "QComboBox" || !node.enabled {
+            return None;
+        }
+        let items = combo_items(node);
+        if items.is_empty() || prefix.is_empty() {
+            return None;
+        }
+        let open = node.combo_popup.is_some();
+        let start = if open {
+            self.combo_popup_highlight(widget).unwrap_or(0)
+        } else {
+            self.combo_current_index(widget).unwrap_or(0)
+        };
+        // Same-key repeat: Qt advances from the current match; start_after
+        // handles that via wrap. When the buffer grew, search from current-1
+        // so the same item can rematch.
+        let start_after = if prefix.chars().count() > 1 {
+            start.saturating_sub(1)
+        } else {
+            start
+        };
+        let matched = combo_prefix_match(&items, prefix, start_after)?;
+        if open {
+            self.set_combo_highlight(widget, matched);
+        } else {
+            let _ = self.select_combo_index(widget, matched);
+        }
+        Some(matched)
     }
 
     /// Splitter containing the point, plus the handle index (between panes
@@ -3555,7 +3791,24 @@ impl QWidgetTree {
         let geometry = self.widgets[widget].geometry;
         let font = self.widgets[widget].font.clone();
         if class == "QComboBox" {
-            if open_popup != Some(widget) {
+            let editable = combo_is_editable(&self.widgets[widget]);
+            let on_arrow = self
+                .combo_arrow_rect(widget)
+                .is_some_and(|rect| rect.contains(point));
+            if editable {
+                self.ensure_combo_edit_text(widget);
+                if on_arrow {
+                    // Popup was dismissed above when it was open; reopen only
+                    // when this click is a fresh open (was closed).
+                    if open_popup != Some(widget) {
+                        self.open_combo_popup(widget);
+                    }
+                } else if let Some(position) = self.cursor_at_x(widget, point.x - geometry.x)
+                {
+                    // Text area: place caret; do not toggle the popup.
+                    self.set_cursor_position_ext(widget, position, shift);
+                }
+            } else if open_popup != Some(widget) {
                 self.open_combo_popup(widget);
             }
             self.mouse_grab = Some(widget);
@@ -3949,6 +4202,16 @@ impl QWidgetTree {
         }
         if let Some(widget) = grabbed {
             if self.widgets[widget].class_name == "QComboBox" {
+                // Release on the combo chrome must not pick a popup row (the
+                // press that opened the list often ends over the button).
+                let inside_combo = self.widgets[widget].geometry.contains(point);
+                if inside_combo {
+                    return Some(QWidgetEvent {
+                        widget,
+                        event_type: QEventType::MouseButtonRelease,
+                        clicked: false,
+                    });
+                }
                 if let Some((popup, row)) = self.combo_popup_hit(point) {
                     if popup == widget {
                         if let Some(row) = row {
@@ -3958,10 +4221,7 @@ impl QWidgetTree {
                         }
                     }
                 } else {
-                    let inside_combo = self.widgets[widget].geometry.contains(point);
-                    if !inside_combo {
-                        self.close_combo_popup(widget);
-                    }
+                    self.close_combo_popup(widget);
                 }
                 return Some(QWidgetEvent {
                     widget,
@@ -6475,6 +6735,28 @@ fn load_widget(
             _ => {}
         }
     }
+    // Designer `<item>` rows on QComboBox/QListWidget → `items` property.
+    if !spec.item_texts.is_empty()
+        && matches!(spec.class.as_str(), "QComboBox" | "QListWidget")
+    {
+        let items = QVariant::List(
+            spec.item_texts
+                .iter()
+                .cloned()
+                .map(QVariant::String)
+                .collect(),
+        );
+        tree.set_property(id, "items", items);
+        if spec.class == "QComboBox"
+            && tree
+                .widgets
+                .get(id)
+                .and_then(|node| node.property("currentIndex"))
+                .is_none()
+        {
+            tree.set_property(id, "currentIndex", QVariant::Int(0));
+        }
+    }
     if let Some(parent) = parent {
         tree.add_child(parent, id);
     }
@@ -7351,6 +7633,38 @@ mod tests {
         );
     }
 
+    #[test]
+    fn load_ui_applies_combobox_designer_items() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0"><class>Dialog</class>
+<widget class="QDialog" name="Dialog">
+ <layout class="QVBoxLayout" name="l">
+  <item>
+   <widget class="QComboBox" name="editable">
+    <property name="editable"><bool>true</bool></property>
+    <item><property name="text"><string>Alpha</string></property></item>
+    <item><property name="text"><string>Banana</string></property></item>
+   </widget>
+  </item>
+ </layout>
+</widget></ui>"#;
+        let (tree, _) = load_ui(xml).expect("loads");
+        let combo = tree.find_widget("editable").expect("combo");
+        let items = QVariant::List(vec![
+            QVariant::String("Alpha".into()),
+            QVariant::String("Banana".into()),
+        ]);
+        assert_eq!(tree.property(combo, "items"), Some(&items));
+        assert_eq!(
+            tree.property(combo, "currentIndex"),
+            Some(&QVariant::Int(0))
+        );
+        assert_eq!(
+            tree.property(combo, "editable"),
+            Some(&QVariant::Bool(true))
+        );
+    }
+
     fn combos_form() -> (QWidgetTree, QWidgetId, QWidgetId) {
         let mut tree = QWidgetTree::new();
         let root = tree.create_widget("QDialog", "Dialog");
@@ -7415,8 +7729,109 @@ mod tests {
         tree.set_geometry(combo, QRectF::new(10.0, 170.0, 120.0, 25.0));
         tree.mouse_press(root, QPointF::new(15.0, 175.0));
         let popup = tree.combo_popup_rect(combo).expect("popup rect");
-        assert!(popup.bottom() <= 170.0);
-        assert!(popup.y >= 0.0);
+        assert!(popup.bottom() <= 170.0 + 0.01);
+    }
+
+    #[test]
+    fn combo_popup_may_extend_past_parent_form() {
+        let (mut tree, root, combo) = combos_form();
+        // Short form: full list is taller than the dialog.
+        tree.set_geometry(root, QRectF::new(0.0, 0.0, 300.0, 80.0));
+        tree.set_geometry(combo, QRectF::new(10.0, 10.0, 120.0, 25.0));
+        tree.set_property(
+            combo,
+            "items",
+            QVariant::List(
+                (0..12)
+                    .map(|i| QVariant::String(format!("item-{i}")))
+                    .collect(),
+            ),
+        );
+        tree.open_combo_popup(combo);
+        let popup = tree.combo_popup_rect(combo).expect("popup rect");
+        let root_rect = tree.widget(root).unwrap().geometry;
+        assert!(
+            popup.height > root_rect.height,
+            "popup {:.1} must exceed form {:.1}",
+            popup.height,
+            root_rect.height
+        );
+        assert!(popup.bottom() > root_rect.bottom());
+    }
+
+    #[test]
+    fn combo_press_release_on_chrome_keeps_popup_open() {
+        let (mut tree, root, combo) = combos_form();
+        tree.set_geometry(root, QRectF::new(0.0, 0.0, 300.0, 80.0));
+        tree.set_geometry(combo, QRectF::new(10.0, 10.0, 120.0, 25.0));
+        tree.set_property(
+            combo,
+            "items",
+            QVariant::List(
+                (0..12)
+                    .map(|i| QVariant::String(format!("item-{i}")))
+                    .collect(),
+            ),
+        );
+        let combo_rect = tree.widget(combo).unwrap().geometry;
+        let point = QPointF::new(combo_rect.x + 5.0, combo_rect.y + 5.0);
+        tree.mouse_press(root, point);
+        assert!(tree.combo_popup_open(combo));
+        tree.mouse_release(root, point);
+        assert!(
+            tree.combo_popup_open(combo),
+            "releasing on the combo chrome must not dismiss/select"
+        );
+        assert_eq!(tree.combo_current_index(combo), Some(0));
+    }
+
+    #[test]
+    fn combo_keyboard_search_selects_prefix_match() {
+        let (mut tree, _root, combo) = combos_form();
+        assert_eq!(tree.combo_keyboard_search(combo, "t"), Some(1));
+        assert_eq!(tree.combo_current_index(combo), Some(1));
+        assert_eq!(tree.combo_keyboard_search(combo, "t"), Some(2));
+        assert_eq!(tree.combo_current_index(combo), Some(2));
+        tree.open_combo_popup(combo);
+        assert_eq!(tree.combo_keyboard_search(combo, "o"), Some(0));
+        assert_eq!(tree.combo_popup_highlight(combo), Some(0));
+        assert_eq!(tree.combo_current_index(combo), Some(2));
+    }
+
+    #[test]
+    fn combo_editable_filters_popup_and_commits_match() {
+        let (mut tree, root, combo) = combos_form();
+        tree.set_property(combo, "editable", QVariant::Bool(true));
+        tree.ensure_combo_edit_text(combo);
+        assert_eq!(tree.combo_edit_text(combo), "one");
+        tree.set_focus(combo);
+        let combo_rect = tree.widget(combo).unwrap().geometry;
+        // Arrow opens the popup.
+        tree.mouse_press(
+            root,
+            QPointF::new(combo_rect.right() - 5.0, combo_rect.y + 5.0),
+        );
+        assert!(tree.combo_popup_open(combo));
+        tree.set_text(combo, "th".into());
+        tree.filter_combo_popup(combo);
+        let popup = tree.widget(combo).unwrap().combo_popup.as_ref().unwrap();
+        assert_eq!(popup.filtered, vec![2]);
+        assert_eq!(tree.combo_popup_highlight(combo), Some(2));
+        assert!(tree.commit_combo_popup(combo));
+        assert_eq!(tree.combo_current_index(combo), Some(2));
+        assert_eq!(tree.combo_edit_text(combo), "three");
+        assert!(!tree.combo_popup_open(combo));
+    }
+
+    #[test]
+    fn combo_editable_text_click_does_not_open_popup() {
+        let (mut tree, root, combo) = combos_form();
+        tree.set_property(combo, "editable", QVariant::Bool(true));
+        tree.ensure_combo_edit_text(combo);
+        let combo_rect = tree.widget(combo).unwrap().geometry;
+        tree.mouse_press(root, QPointF::new(combo_rect.x + 5.0, combo_rect.y + 5.0));
+        assert!(!tree.combo_popup_open(combo));
+        assert!(tree.widget(combo).unwrap().has_focus);
     }
 
     fn splitter_form(orientation: &str) -> (QWidgetTree, QWidgetId, QWidgetId, QWidgetId) {

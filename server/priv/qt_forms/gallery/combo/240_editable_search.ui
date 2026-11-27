@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>Dialog</class>
+ <widget class="QDialog" name="Dialog">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>420</width>
+    <height>220</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>#155 combo/240_editable_search</string>
+  </property>
+  <layout class="QVBoxLayout" name="verticalLayout">
+   <property name="leftMargin"><number>11</number></property>
+   <property name="topMargin"><number>11</number></property>
+   <property name="rightMargin"><number>11</number></property>
+   <property name="bottomMargin"><number>11</number></property>
+   <property name="spacing"><number>6</number></property>
+   <item>
+    <widget class="QLabel" name="l_plain">
+     <property name="text"><string>Non-editable (type-ahead):</string></property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QComboBox" name="plain">
+     <item><property name="text"><string>Alpha</string></property></item>
+     <item><property name="text"><string>Apricot</string></property></item>
+     <item><property name="text"><string>Banana</string></property></item>
+     <item><property name="text"><string>Blueberry</string></property></item>
+     <item><property name="text"><string>Cherry</string></property></item>
+     <item><property name="text"><string>Date</string></property></item>
+     <item><property name="text"><string>Elderberry</string></property></item>
+     <item><property name="text"><string>Fig</string></property></item>
+     <item><property name="text"><string>Grape</string></property></item>
+     <item><property name="text"><string>Honeydew</string></property></item>
+     <item><property name="text"><string>Kiwi</string></property></item>
+     <item><property name="text"><string>Lemon</string></property></item>
+     <item><property name="text"><string>Mango</string></property></item>
+     <item><property name="text"><string>Nectarine</string></property></item>
+     <item><property name="text"><string>Orange</string></property></item>
+     <item><property name="text"><string>Papaya</string></property></item>
+     <item><property name="text"><string>Quince</string></property></item>
+     <item><property name="text"><string>Raspberry</string></property></item>
+     <item><property name="text"><string>Strawberry</string></property></item>
+     <item><property name="text"><string>Watermelon</string></property></item>
+    </widget>
+   </item>
+   <item>
+    <widget class="QLabel" name="l_edit">
+     <property name="text"><string>Editable (filter as you type):</string></property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QComboBox" name="editable">
+     <property name="editable"><bool>true</bool></property>
+     <item><property name="text"><string>Alpha</string></property></item>
+     <item><property name="text"><string>Apricot</string></property></item>
+     <item><property name="text"><string>Banana</string></property></item>
+     <item><property name="text"><string>Blueberry</string></property></item>
+     <item><property name="text"><string>Cherry</string></property></item>
+     <item><property name="text"><string>Date</string></property></item>
+     <item><property name="text"><string>Elderberry</string></property></item>
+     <item><property name="text"><string>Fig</string></property></item>
+     <item><property name="text"><string>Grape</string></property></item>
+     <item><property name="text"><string>Honeydew</string></property></item>
+     <item><property name="text"><string>Kiwi</string></property></item>
+     <item><property name="text"><string>Lemon</string></property></item>
+     <item><property name="text"><string>Mango</string></property></item>
+     <item><property name="text"><string>Nectarine</string></property></item>
+     <item><property name="text"><string>Orange</string></property></item>
+     <item><property name="text"><string>Papaya</string></property></item>
+     <item><property name="text"><string>Quince</string></property></item>
+     <item><property name="text"><string>Raspberry</string></property></item>
+     <item><property name="text"><string>Strawberry</string></property></item>
+     <item><property name="text"><string>Watermelon</string></property></item>
+    </widget>
+   </item>
+  </layout>
+ </widget>
+</ui>

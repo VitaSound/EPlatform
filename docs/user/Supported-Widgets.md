@@ -4,9 +4,9 @@
 Каталог собран из упоминаний в `rqt` + частоты классов в `server/priv/qt_forms/**/*.ui`.
 Это подмножество Qt Widgets под продуктовые формы, не полный Qt.
 
-_Generated 2026-11-27 14:19 UTC._
+_Generated 2026-11-27 16:36 UTC._
 
-Классов в `.ui` дереве форм: **31** уникальных, всего вхождений: **1116**.
+Классов в `.ui` дереве форм: **31** уникальных, всего вхождений: **1122**.
 
 ## Layouts
 
@@ -15,7 +15,7 @@ _Generated 2026-11-27 14:19 UTC._
 | `QFormLayout` | rqt/app, .ui×13 |  |
 | `QGridLayout` | rqt/app, .ui×28 | spans/policies есть; row/col stretch из кода Qt — не поддерживаются (решение продукта). |
 | `QHBoxLayout` | rqt/app, .ui×79 |  |
-| `QVBoxLayout` | rqt/app, .ui×181 |  |
+| `QVBoxLayout` | rqt/app, .ui×182 |  |
 
 
 ## Controls
@@ -24,10 +24,10 @@ _Generated 2026-11-27 14:19 UTC._
 | --- | --- | --- |
 | `QAbstractButton` | rqt/app |  |
 | `QCheckBox` | rqt/app, .ui×41 |  |
-| `QComboBox` | rqt/app, .ui×23 |  |
+| `QComboBox` | rqt/app, .ui×25 |  |
 | `QDoubleSpinBox` | rqt/app, .ui×3 |  |
 | `QGroupBox` | rqt/app, .ui×27 |  |
-| `QLabel` | rqt/app, .ui×192 | word-wrap — зона внимания / известные хвосты. |
+| `QLabel` | rqt/app, .ui×194 | word-wrap — зона внимания / известные хвосты. |
 | `QLineEdit` | rqt/app, .ui×115 |  |
 | `QPlainTextEdit` | rqt/app, .ui×4 | plain text only; rich QTextEdit/HTML — нет. |
 | `QProgressBar` | rqt/app, .ui×3 |  |
@@ -60,7 +60,7 @@ _Generated 2026-11-27 14:19 UTC._
 
 | Класс | Где виден | Заметки |
 | --- | --- | --- |
-| `QDialog` | rqt/app, .ui×161 |  |
+| `QDialog` | rqt/app, .ui×162 |  |
 | `QDockWidget` | rqt/app | упоминается при разборе MainWindow; полноценный dock-рантайм не обещан. |
 | `QMainWindow` | rqt/app, .ui×1 |  |
 | `QMdiArea` | rqt/app, .ui×1 |  |
