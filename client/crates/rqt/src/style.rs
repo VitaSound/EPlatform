@@ -951,6 +951,9 @@ impl QStyle for QFusionStyle {
                     (outer.width - 2.0).max(1.0),
                     (outer.height - 2.0).max(1.0),
                 );
+                // Fusion: `drawRoundedRect(r.adjusted(0,0,-1,-1), 2, 2)` after
+                // `translate(0.5,0.5)`. Raster stroke uses the half-open
+                // geometry box; AA + path inset live in `fill_rounded_border`.
                 let frame = QRectF::new(
                     outer.x,
                     outer.y,
@@ -990,6 +993,7 @@ impl QStyle for QFusionStyle {
                     },
                 ];
                 if focused {
+                    // Fusion soft ring: `adjusted(1,1,-2,-2)`, radius 1.7, α=40.
                     let soft = QRectF::new(
                         outer.x + 1.0,
                         outer.y + 1.0,

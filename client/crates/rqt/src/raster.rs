@@ -258,30 +258,27 @@ fn fill_rounded_border(
     color: QColor,
     clip: Option<QRectF>,
 ) {
-    let left = rect.left().round() as i32;
-    let top = rect.top().round() as i32;
-    let right = rect.right().round() as i32;
-    let bottom = rect.bottom().round() as i32;
+    // `rect` is the half-open outer box. Fusion strokes a rounded path inset
+    // by 0.5 (`translate(0.5,0.5)`), pen centered on that path — so the
+    // extreme corner pixel stays Window and the arc reads as radius 2.
+    let left = rect.left();
+    let top = rect.top();
+    let right = rect.right();
+    let bottom = rect.bottom();
     if right <= left || bottom <= top {
         return;
     }
-    let stroke = width.round().max(1.0) as i32;
-    // Keep fractional radii (Fusion focus soft-ring uses ~1.7).
-    let radius = radius
+    let stroke = width.max(1.0);
+    let half = stroke * 0.5;
+    let path_left = left + half;
+    let path_top = top + half;
+    let path_right = right - half;
+    let path_bottom = bottom - half;
+    let path_radius = radius
         .max(0.0)
-        .min((right - left).min(bottom - top) as f32 / 2.0);
-    let inner_left = left + stroke;
-    let inner_top = top + stroke;
-    let inner_right = right - stroke;
-    let inner_bottom = bottom - stroke;
-    let inner_radius = (radius - stroke as f32).max(0.0);
+        .min((path_right - path_left).min(path_bottom - path_top) / 2.0);
     let bounds = intersect(
-        QRectF::new(
-            left as f32,
-            top as f32,
-            (right - left) as f32,
-            (bottom - top) as f32,
-        ),
+        QRectF::new(left - 1.0, top - 1.0, (right - left + 2.0).max(0.0), (bottom - top + 2.0).max(0.0)),
         clip,
     );
     let Some(bounds) = bounds else {
@@ -293,33 +290,61 @@ fn fill_rounded_border(
     let y1 = bounds.bottom().ceil() as i32;
     for y in y0..y1 {
         for x in x0..x1 {
-            // 4×4 supersampling so radius-2 corners match Fusion AA instead of
-            // a hard stairstep that reads as a square frame.
             let mut cover = 0.0_f32;
             for sy in [0.125_f32, 0.375, 0.625, 0.875] {
                 for sx in [0.125_f32, 0.375, 0.625, 0.875] {
                     let px = x as f32 + sx;
                     let py = y as f32 + sy;
-                    let outer = inside_rounded_rect(px, py, left, top, right, bottom, radius);
-                    let inner = inside_rounded_rect(
+                    let dist = sd_rounded_box(
                         px,
                         py,
-                        inner_left,
-                        inner_top,
-                        inner_right,
-                        inner_bottom,
-                        inner_radius,
-                    );
-                    if outer && !inner {
+                        path_left,
+                        path_top,
+                        path_right,
+                        path_bottom,
+                        path_radius,
+                    )
+                    .abs();
+                    // 1px pen: cover inside ±half, with a soft AA fringe.
+                    if dist <= half {
                         cover += 1.0 / 16.0;
+                    } else if dist < half + 0.5 {
+                        cover += ((half + 0.5 - dist) / 0.5) / 16.0;
                     }
                 }
             }
             if cover > 0.0 {
-                image.blend_pixel(x, y, color.with_alpha(color.alpha * cover), None);
+                image.blend_pixel(
+                    x,
+                    y,
+                    color.with_alpha(color.alpha * cover.clamp(0.0, 1.0)),
+                    None,
+                );
             }
         }
     }
+}
+
+/// Signed distance to a rounded rectangle (negative inside). Inigo Quilez.
+fn sd_rounded_box(
+    x: f32,
+    y: f32,
+    left: f32,
+    top: f32,
+    right: f32,
+    bottom: f32,
+    radius: f32,
+) -> f32 {
+    let cx = (left + right) * 0.5;
+    let cy = (top + bottom) * 0.5;
+    let hx = (right - left) * 0.5;
+    let hy = (bottom - top) * 0.5;
+    let radius = radius.min(hx).min(hy).max(0.0);
+    let px = (x - cx).abs() - (hx - radius);
+    let py = (y - cy).abs() - (hy - radius);
+    let ox = px.max(0.0);
+    let oy = py.max(0.0);
+    (ox * ox + oy * oy).sqrt() + px.min(0.0).max(py.min(0.0)) - radius
 }
 
 fn inside_rounded_rect(
@@ -331,14 +356,34 @@ fn inside_rounded_rect(
     bottom: i32,
     radius: f32,
 ) -> bool {
-    if x < left as f32 || x >= right as f32 || y < top as f32 || y >= bottom as f32 {
+    inside_rounded_rect_f(
+        x,
+        y,
+        left as f32,
+        top as f32,
+        right as f32,
+        bottom as f32,
+        radius,
+    )
+}
+
+fn inside_rounded_rect_f(
+    x: f32,
+    y: f32,
+    left: f32,
+    top: f32,
+    right: f32,
+    bottom: f32,
+    radius: f32,
+) -> bool {
+    if x < left || x >= right || y < top || y >= bottom {
         return false;
     }
     if radius <= 0.0 {
         return true;
     }
-    let cx = (left as f32 + radius).max((right as f32 - radius).min(x));
-    let cy = (top as f32 + radius).max((bottom as f32 - radius).min(y));
+    let cx = (left + radius).max((right - radius).min(x));
+    let cy = (top + radius).max((bottom - radius).min(y));
     let dx = x - cx;
     let dy = y - cy;
     dx * dx + dy * dy <= radius * radius

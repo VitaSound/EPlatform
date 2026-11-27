@@ -16,10 +16,14 @@
 
 - **`QLineEdit` Fusion frame.** Sharp Base fill + AA rounded outline;
   focus = `Highlight.darker(125)` (value ≤160), soft inner ring α=40,
-  top shadow `rgba(0,0,0,18)`. Rounded stroke supersampled in raster.
+  top shadow `rgba(0,0,0,18)`. Rounded stroke keeps sub-pixel origin
+  (Fusion `translate(0.5,0.5)`); no int-round of the geometry box.
 - **Focus opt-in.** `rqt_render` / live open focus widget named `focus`
   (gallery/focus/*); LineEdit/PlainTextEdit caret at end.
-- **Disabled table.** Header/cell text → palette `Mid` when disabled.
+- **Disabled table.** Header/cell text → palette `Mid` when disabled
+  (`#070` `states/155_disabled_table`: mean 0.29, >30 0.2%).
+- **Slider probe.** `vertical_gallery_ui_*` globs `*_vertical.ui` so
+  gallery renumbers don’t break the test.
 
 ### Docs: archive agent plans `00`–`44`
 

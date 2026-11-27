@@ -257,11 +257,21 @@ mod ui_load_tests {
 
     #[test]
     fn vertical_gallery_ui_expands_and_keeps_upside_down() {
-        let xml = std::fs::read_to_string(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../review/forms/gallery/slider/219_vertical.ui"
-        ))
-        .expect("ui");
+        // Filename prefix is the gallery ordinal from formgen — glob the
+        // stable `*_vertical.ui` so renumbers (e.g. focus fixtures) don't
+        // break the probe.
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../review/forms/gallery/slider");
+        let xml = std::fs::read_dir(dir)
+            .expect("slider gallery dir")
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.path())
+            .find(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.ends_with("_vertical.ui"))
+            })
+            .map(|path| std::fs::read_to_string(path).expect("ui"))
+            .expect("gallery/slider/*_vertical.ui");
         let (mut tree, root) = load_ui(&xml).expect("load");
         tree.layout(root, tree.widget(root).unwrap().geometry);
         let id = tree.find_widget("slider").expect("slider");
