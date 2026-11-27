@@ -1608,6 +1608,12 @@ impl QWidgetTree {
         self.set_cursor_position_ext(widget, position, true)
     }
 
+    pub fn is_line_edit(&self, widget: QWidgetId) -> bool {
+        self.widgets
+            .get(widget)
+            .is_some_and(|node| node.class_name == "QLineEdit")
+    }
+
     pub fn is_plain_text_edit(&self, widget: QWidgetId) -> bool {
         self.widgets
             .get(widget)

@@ -2,6 +2,15 @@
 
 ## 2026-11-27
 
+### Fix: Ctrl+A / shell cascade
+
+- **Ctrl+A (LineEdit / PlainTextEdit).** Select All по физической `KeyA`
+  (и Cmd/meta), чтобы работало на нелатинских раскладках (`key` = «ф»);
+  `selectAll` только для `QLineEdit` | `QPlainTextEdit`.
+- **Shell menu cascade.** Подменю выравнивается по верху пункта (как Qt
+  `QMenu`); hover на leaf-соседе закрывает глубже открытый cascade;
+  обновлён golden `shell_nested_menu.png`.
+
 ### Волна: agent-plans 32–35 — Slider / ProgressBar / PlainTextEdit / ToolBox
 
 - **32 — QSlider.** Модель + drag/step/page; Fusion `CC_Slider` (groove,
@@ -12,7 +21,10 @@
   gallery `gallery/progress` 0/50/100 (review >30 ~0.8–0.9%); без inner
   topShadow — на GPU давал «двойную» верхнюю кромку.
 - **34 — QPlainTextEdit.** Буфер, wrap, caret/selection, вертикальный
-  scroll; paint frame + multiline; gallery `gallery/textedit`.
+  scroll; paint frame + multiline; gallery `gallery/textedit`. Ввод с
+  десктопной клавиатуры: после клика по canvas снова фокусируется
+  `#ep-text-input` (`refocus_web_text_input` + synthesize insert, если
+  textarea без DOM-фокуса).
 - **35 — QToolBox.** Accordion pages (не путать с QToolBar); переключение
   кликом / `currentIndex`; gallery `gallery/toolbox`.
 - **Планы.** `docs/agent-plans/32`…`35` → Status: done.

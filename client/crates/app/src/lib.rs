@@ -441,6 +441,8 @@ struct App {
     shell_press: bool,
     shift: bool,
     ctrl: bool,
+    /// Cmd/Win (winit `super_key`); used with Ctrl for shortcuts like Select All.
+    meta: bool,
     caret_epoch: f64,
     table_press: Option<TablePress>,
     scroll_click: bool,
@@ -515,6 +517,7 @@ impl App {
             shell_press: false,
             shift: false,
             ctrl: false,
+            meta: false,
             caret_epoch: now_ms(),
             table_press: None,
             scroll_click: false,
@@ -2587,14 +2590,19 @@ impl App {
     fn drain_web_text_input(&mut self) {}
 
     /// Keyboard half of the event loop: an open cell edit first, then
-    /// typing into a selected table cell, then the focused line edit.
+    /// typing into a selected table cell, then the focused line/plain edit.
     fn dispatch_key(&mut self, event: &winit::event::KeyEvent) {
-        if self.ctrl {
-            if let winit::keyboard::Key::Character(text) = &event.logical_key {
-                if text.eq_ignore_ascii_case("a") {
-                    self.apply_key_action(KeyEdit::SelectAll);
-                    return;
-                }
+        if self.ctrl || self.meta {
+            let is_a = matches!(
+                event.physical_key,
+                winit::keyboard::PhysicalKey::Code(winit::keyboard::KeyCode::KeyA)
+            ) || matches!(
+                &event.logical_key,
+                winit::keyboard::Key::Character(text) if text.eq_ignore_ascii_case("a")
+            );
+            if is_a {
+                self.apply_key_action(KeyEdit::SelectAll);
+                return;
             }
         }
         let action = key_edit(event.text.as_deref(), &event.logical_key);
@@ -2740,8 +2748,13 @@ impl App {
                 if let Some((form_id, name)) = self.focused.clone() {
                     if let Some(form) = self.forms.get_mut(&form_id) {
                         if let Some(widget) = form.tree.find_widget(&name) {
-                            form.tree.select_all(widget);
-                            selected = true;
+                            if form.tree.is_line_edit(widget)
+                                || form.tree.is_plain_text_edit(widget)
+                            {
+                                form.tree.select_all(widget);
+                                selected = true;
+                                Self::log(format!("selectAll {name}"));
+                            }
                         }
                     }
                 }
@@ -4637,6 +4650,7 @@ impl ApplicationHandler for App {
                 let state = modifiers.state();
                 self.shift = state.shift_key();
                 self.ctrl = state.control_key();
+                self.meta = state.super_key();
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 #[cfg(target_arch = "wasm32")]

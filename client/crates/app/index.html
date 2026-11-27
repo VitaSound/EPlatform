@@ -356,7 +356,12 @@
 
             var shift = event.shiftKey ? "1" : "";
             if (event.ctrlKey || event.metaKey) {
-              if (event.key === "a" || event.key === "A") {
+              // Use `code` so Ctrl+A works on non-Latin layouts (e.g. key "ф").
+              if (
+                event.code === "KeyA" ||
+                event.key === "a" ||
+                event.key === "A"
+              ) {
                 event.preventDefault();
                 send("selectAll", "");
               }

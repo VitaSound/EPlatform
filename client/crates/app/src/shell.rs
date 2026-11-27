@@ -548,7 +548,13 @@ impl Shell {
         let mut item = root;
         let mut anchor = top;
         for depth in 0..path.len() {
-            let mut y = anchor.bottom();
+            // Root popup drops below the menubar item; cascading submenus
+            // align with the parent item's top edge (Qt `QMenu` tear-off).
+            let mut y = if depth == 0 {
+                anchor.bottom()
+            } else {
+                anchor.y
+            };
             let mut last: Option<QRectF> = None;
             for (child_index, child) in item.children.iter().enumerate() {
                 let height = if child.separator { SEPARATOR_H } else { ITEM_H };
@@ -713,7 +719,12 @@ impl Shell {
                 if self.menu_open() {
                     if let Some(item) = self.item_at(&path) {
                         if !item.children.is_empty() && item.enabled {
+                            // Cascade: keep this item's submenu open.
                             self.open_path = Some(path.clone());
+                        } else if path.len() > 1 {
+                            // Leaf (or disabled branch): close deeper cascades.
+                            // Path `[root, …, item]` → open parent column only.
+                            self.open_path = Some(path[..path.len() - 1].to_vec());
                         }
                     }
                 }
@@ -1172,17 +1183,23 @@ mod tests {
                 ("title".into(), PropValue::Str("View".into())),
                 (
                     "children".into(),
-                    PropValue::List(vec![PropValue::Map(vec![
-                        ("title".into(), PropValue::Str("Nested".into())),
-                        (
-                            "children".into(),
-                            PropValue::List(vec![PropValue::Map(vec![
-                                ("title".into(), PropValue::Str("Deep".into())),
-                                ("action".into(), PropValue::Str("open_lua".into())),
-                                ("lua_file".into(), PropValue::Str("deep.lua".into())),
-                            ])]),
-                        ),
-                    ])]),
+                    PropValue::List(vec![
+                        PropValue::Map(vec![
+                            ("title".into(), PropValue::Str("Nested".into())),
+                            (
+                                "children".into(),
+                                PropValue::List(vec![PropValue::Map(vec![
+                                    ("title".into(), PropValue::Str("Deep".into())),
+                                    ("action".into(), PropValue::Str("open_lua".into())),
+                                    ("lua_file".into(), PropValue::Str("deep.lua".into())),
+                                ])]),
+                            ),
+                        ]),
+                        PropValue::Map(vec![
+                            ("title".into(), PropValue::Str("About".into())),
+                            ("action".into(), PropValue::Str("about".into())),
+                        ]),
+                    ]),
                 ),
             ]),
         ])
@@ -1414,6 +1431,12 @@ mod tests {
             .into_iter()
             .find(|entry| entry.item.title == "Deep")
             .unwrap();
+        assert!(
+            (deep.rect.y - nested.rect.y).abs() < 0.01,
+            "cascading submenu must align with the parent item top, nested.y={} deep.y={}",
+            nested.rect.y,
+            deep.rect.y
+        );
         assert_eq!(
             shell.hit((deep.rect.x + 2.0, deep.rect.y + 2.0), viewport),
             Some(ShellHit::MenuItem(deep.path.clone()))
@@ -1677,7 +1700,37 @@ mod tests {
         assert_eq!(shell.hovered_path, Some(open_path));
         assert_eq!(shell.open_path, Some(vec![0]), "leaf hover keeps the menu");
 
+        // Cascading submenu closes when the pointer moves to a leaf sibling.
+        shell.open_path = Some(vec![1]);
+        let nested = shell
+            .menu_entries(viewport)
+            .into_iter()
+            .find(|entry| entry.item.title == "Nested")
+            .expect("nested entry");
+        shell.hover((nested.rect.x + 4.0, nested.rect.y + 4.0), viewport);
+        assert_eq!(shell.open_path.as_deref(), Some(nested.path.as_slice()));
+        let leaf = shell
+            .menu_entries(viewport)
+            .into_iter()
+            .find(|entry| entry.item.title == "About")
+            .expect("about entry");
+        shell.hover((leaf.rect.x + 4.0, leaf.rect.y + 4.0), viewport);
+        assert_eq!(shell.hovered_path.as_deref(), Some(leaf.path.as_slice()));
+        assert_eq!(
+            shell.open_path,
+            Some(vec![1]),
+            "leaf sibling closes the cascade"
+        );
+        assert!(
+            shell
+                .menu_entries(viewport)
+                .iter()
+                .all(|entry| entry.item.title != "Deep"),
+            "cascading submenu must dismiss"
+        );
+
         // Moving out of the popup clears the selection but keeps the menu.
+        shell.open_path = Some(vec![0]);
         shell.hover((400.0, 300.0), viewport);
         assert_eq!(shell.hovered_path, None);
         assert_eq!(shell.open_path, Some(vec![0]), "menu stays open");
