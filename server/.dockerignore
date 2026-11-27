@@ -1,4 +1,10 @@
-_build
+# Keep release for Dockerfile.runtime; drop the rest of Mix output.
 deps
-.test
+_build/dev
+_build/test
+_build/prod/lib
+_build/prod/*.zap
+_build/prod/phoenix-colocated
 .elixir_ls
+.test
+*.md
