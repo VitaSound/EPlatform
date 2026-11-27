@@ -4,7 +4,7 @@
 Объект формы: `server/priv/lua_modules/form.lua`.
 Методы — сахар над host API. Таблица ниже **сгенерирована** из исходников.
 
-_Generated 2026-11-27 12:59 UTC from `server/priv/lua_modules/form.lua`._
+_Generated 2026-11-27 13:13 UTC from `server/priv/lua_modules/form.lua`._
 
 | Метод | Аргументы | Комментарий в коде |
 | --- | --- | --- |

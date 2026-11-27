@@ -24,7 +24,20 @@ fn main() -> Result<(), String> {
     // at the final size.
     tree.layout(root, QRectF::new(0.0, 0.0, width as f32, height as f32));
 
-    tree.focus_first(root);
+    // Gallery A/B goldens are idle by default. Opt-in focused snapshot:
+    // a widget whose objectName is `focus` (see gallery/focus/*).
+    if let Some(widget) = tree.find_widget("focus") {
+        if tree.set_focus(widget) {
+            let class = tree
+                .widget(widget)
+                .map(|node| node.class_name.as_str())
+                .unwrap_or("");
+            if matches!(class, "QLineEdit" | "QPlainTextEdit") {
+                let length = tree.text(widget).unwrap_or_default().chars().count();
+                tree.set_cursor_position(widget, length);
+            }
+        }
+    }
     let mut painter = QPainter::new();
     paint_widget_tree(&tree, root, &QFusionStyle::default(), &mut painter);
     let image = rasterize(

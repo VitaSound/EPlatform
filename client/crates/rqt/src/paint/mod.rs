@@ -277,9 +277,14 @@ fn paint_widget_background(
                     frame.width,
                     (frame.height - top_margin).max(0.0),
                 );
-                painter.draw_commands(
-                    &style.draw_primitive(QPrimitiveElement::Frame, &frame_option),
-                );
+                // Fusion `PE_FrameGroupBox`: semi-transparent border pixmap
+                // (not palette Mid). Nested boxes darken because the fill is
+                // black @ α=3 composited over the parent face.
+                if !paint_fusion_groupbox_frame(painter, frame_option.rect) {
+                    painter.draw_commands(
+                        &style.draw_primitive(QPrimitiveElement::FrameGroupBox, &frame_option),
+                    );
+                }
             }
         }
         "QLabel" => {}
@@ -498,6 +503,88 @@ fn border_edge_widths(qss: &QStyleDeclarations) -> (f32, f32, f32, f32) {
         width(QBorderSide::Bottom),
         width(QBorderSide::Left),
     )
+}
+
+/// Fusion `PE_FrameGroupBox` — `qDrawBorderPixmap` of `fusion_groupbox.png`
+/// with margins (6,6,6,6). Interior is black @ α=3 (nested faces darken);
+/// the edge pixel is `#757575` @ α=50 → `#d7d7d7` on Window `#efefef`.
+fn paint_fusion_groupbox_frame(painter: &mut QPainter, frame: QRectF) -> bool {
+    let Some(pixmap) = crate::assets::pixmap("fusion/groupbox.png") else {
+        return false;
+    };
+    if frame.width <= 0.0 || frame.height <= 0.0 || pixmap.width == 0 || pixmap.height == 0 {
+        return false;
+    }
+    const M: f32 = 6.0;
+    let src_w = pixmap.width as f32;
+    let src_h = pixmap.height as f32;
+    let left = M.min(src_w);
+    let right = M.min(src_w);
+    let top = M.min(src_h);
+    let bottom = M.min(src_h);
+    let mid_w = (src_w - left - right).max(0.0);
+    let mid_h = (src_h - top - bottom).max(0.0);
+
+    let mut dest_left = left.min(frame.width * 0.5);
+    let mut dest_right = right.min(frame.width * 0.5);
+    let mut dest_top = top.min(frame.height * 0.5);
+    let mut dest_bottom = bottom.min(frame.height * 0.5);
+    if dest_left + dest_right > frame.width {
+        let scale = frame.width / (dest_left + dest_right).max(1.0);
+        dest_left *= scale;
+        dest_right *= scale;
+    }
+    if dest_top + dest_bottom > frame.height {
+        let scale = frame.height / (dest_top + dest_bottom).max(1.0);
+        dest_top *= scale;
+        dest_bottom *= scale;
+    }
+    let dest_mid_w = (frame.width - dest_left - dest_right).max(0.0);
+    let dest_mid_h = (frame.height - dest_top - dest_bottom).max(0.0);
+
+    let src_x = [0.0, left, left + mid_w];
+    let src_y = [0.0, top, top + mid_h];
+    let src_widths = [left, mid_w, right];
+    let src_heights = [top, mid_h, bottom];
+    let dst_x = [
+        frame.x,
+        frame.x + dest_left,
+        frame.x + dest_left + dest_mid_w,
+    ];
+    let dst_y = [
+        frame.y,
+        frame.y + dest_top,
+        frame.y + dest_top + dest_mid_h,
+    ];
+    let dst_widths = [dest_left, dest_mid_w, dest_right];
+    let dst_heights = [dest_top, dest_mid_h, dest_bottom];
+
+    for row in 0..3 {
+        for col in 0..3 {
+            let sw = src_widths[col];
+            let sh = src_heights[row];
+            let dw = dst_widths[col];
+            let dh = dst_heights[row];
+            if sw <= 0.0 || sh <= 0.0 || dw <= 0.0 || dh <= 0.0 {
+                continue;
+            }
+            let patch = pixmap.copy_rect(
+                src_x[col].round() as u32,
+                src_y[row].round() as u32,
+                sw.round().max(1.0) as u32,
+                sh.round().max(1.0) as u32,
+            );
+            if patch.pixels.chunks_exact(4).all(|px| px[3] == 0) {
+                continue;
+            }
+            painter.draw_pixmap(
+                QRectF::new(dst_x[col], dst_y[row], dw, dh),
+                patch,
+                1.0,
+            );
+        }
+    }
+    true
 }
 
 /// Nine-slice `border-image` (Qt: corners as-is; edges stretch or repeat).
@@ -926,7 +1013,9 @@ fn paint_line_edit_selection(widget: &QWidget, painter: &mut QPainter, qss: &QSt
     let metrics = QFontMetrics::new(&font);
     let prefix: String = text.chars().take(start).collect();
     let selected: String = text.chars().take(end).skip(start).collect();
-    let content = qss_content_rect(widget, qss, (3.0, 4.0, 3.0, 3.0));
+    // Fusion: SE_LineEditContents (+1) + QLineEditPrivate horizontalMargin 2 /
+    // verticalMargin-derived caret band → (3,4,3,4) from geometry.
+    let content = qss_content_rect(widget, qss, (3.0, 4.0, 3.0, 4.0));
     let x = content.x + metrics.horizontal_advance(&prefix);
     let width = metrics.horizontal_advance(&selected);
     let y = content.y;
@@ -952,7 +1041,7 @@ fn paint_line_edit_caret(widget: &QWidget, painter: &mut QPainter, qss: &QStyleD
     let prefix: String = text.chars().take(widget.cursor_position).collect();
     let font = qss_font(widget, qss);
     let metrics = QFontMetrics::new(&font);
-    let content = qss_content_rect(widget, qss, (3.0, 4.0, 3.0, 3.0));
+    let content = qss_content_rect(widget, qss, (3.0, 4.0, 3.0, 4.0));
     // Qt puts the 1 px caret exactly at the glyph advance; no extra gap.
     let caret_x = (content.x + metrics.horizontal_advance(&prefix)).min(content.right());
     let caret_y = content.y;
@@ -975,8 +1064,10 @@ fn paint_line_edit_text(widget: &QWidget, painter: &mut QPainter, qss: &QStyleDe
     let font = qss_font(widget, qss);
     let metrics = QFontMetrics::new(&font);
     let line_height = metrics.height();
-    let content = qss_content_rect(widget, qss, (3.0, 4.0, 3.0, 3.0));
-    let y = content.y + ((content.height - line_height) / 2.0).max(0.0);
+    let content = qss_content_rect(widget, qss, (3.0, 4.0, 3.0, 4.0));
+    // Cosmic/glyphon ink sits ~1px lower than Qt inside the content band
+    // (same nudge as VCenter labels).
+    let y = (content.y + ((content.height - line_height) / 2.0).max(0.0) - 1.0).max(content.y);
     let base_x = content.x;
     let color = text_color(widget, qss);
     painter.set_font(font);
@@ -1647,7 +1738,7 @@ mod tests {
         });
         let caret = caret.expect("caret at Qt advance position");
         assert!((caret.y - (geometry.y + 4.0)).abs() < 0.01);
-        assert!((caret.height - (geometry.height - 7.0)).abs() < 0.01);
+        assert!((caret.height - (geometry.height - 8.0)).abs() < 0.01);
     }
 
     #[test]

@@ -1574,7 +1574,7 @@ def build_gallery_cases():
     vg(category, "radio_trio", "exclusive radio trio",
        [radio("r1", "Первый", True), radio("r2", "Второй", False),
         radio("r3", "Третий", False)], height=240)
-    vg(category, "default_button", "default button gets the initial focus ring",
+    vg(category, "default_button", "default button chrome (default=true), idle focus",
        [line("e1", "поле ввода"),
         layout("QHBoxLayout", "buttons",
                [spacer(True), button_state("ok", "OK", default=True),
@@ -1587,6 +1587,83 @@ def build_gallery_cases():
        [widget("QLabel", "l1", prop_text("text", "Тоже отключено") + prop_bool("enabled", False)),
         widget("QLineEdit", "e1", prop_text("text", "нет доступа") + prop_bool("enabled", False)),
         widget("QPushButton", "b1", prop_text("text", "Нельзя") + prop_bool("enabled", False))])
+
+    # ---- gallery/focus: explicit focused vs idle sibling per widget ----
+    # Renderers focus the widget named `focus` only; all other gallery forms
+    # stay idle so A/B diffs are not polluted by caret / Highlight frame.
+    category = "gallery/focus"
+    vg(category, "line_edit", "QLineEdit idle + focused (blue frame, caret)",
+       [label("l1", "QLineEdit:"),
+        line("idle", "без фокуса"),
+        line("focus", "с фокусом")],
+       width=420, height=200)
+    vg(category, "plain_text", "QPlainTextEdit idle + focused",
+       [label("l1", "QPlainTextEdit:"),
+        plain_text_edit("idle", "без фокуса"),
+        plain_text_edit("focus", "с фокусом")],
+       width=420, height=280)
+    vg(category, "push_button", "QPushButton idle + focused (dotted ring)",
+       [label("l1", "QPushButton:"),
+        layout("QHBoxLayout", "row",
+               [button("idle", "без фокуса"), button("focus", "с фокусом")], 6, 0)],
+       width=420, height=160)
+    vg(category, "check_box", "QCheckBox idle + focused (dotted text rect)",
+       [label("l1", "QCheckBox:"),
+        checkbox("idle", "без фокуса", False),
+        checkbox("focus", "с фокусом", True)],
+       width=420, height=180)
+    vg(category, "radio_button", "QRadioButton idle + focused",
+       [label("l1", "QRadioButton:"),
+        radio("idle", "без фокуса", False),
+        radio("focus", "с фокусом", True)],
+       width=420, height=180)
+    vg(category, "combo_box", "QComboBox idle + focused",
+       [label("l1", "QComboBox:"),
+        combo("idle"),
+        combo("focus")],
+       width=360, height=180)
+    vg(category, "spin_box", "QSpinBox idle + focused",
+       [label("l1", "QSpinBox:"),
+        spin_box("idle", 1, 0, 99, ""),
+        spin_box("focus", 2, 0, 99, "")],
+       width=360, height=180)
+    vg(category, "double_spin", "QDoubleSpinBox idle + focused",
+       [label("l1", "QDoubleSpinBox:"),
+        double_spin_box("idle", "1.5", "0", "100", 2, ""),
+        double_spin_box("focus", "2.5", "0", "100", 2, "")],
+       width=360, height=180)
+    vg(category, "slider_h", "horizontal QSlider idle + focused",
+       [label("l1", "QSlider:"),
+        slider("idle", 30, 0, 100, "Qt::Horizontal"),
+        slider("focus", 70, 0, 100, "Qt::Horizontal")],
+       width=360, height=180)
+    vg(category, "list", "QListWidget idle + focused current row",
+       [label("l1", "QListWidget:"),
+        layout("QHBoxLayout", "row",
+               [list_widget("idle"), list_widget("focus")], 8, 0)],
+       width=480, height=260)
+    vg(category, "tree", "QTreeWidget idle + focused current row",
+       [label("l1", "QTreeWidget:"),
+        layout("QHBoxLayout", "row",
+               [tree_widget("idle"), tree_widget("focus")], 8, 0)],
+       width=480, height=260)
+    vg(category, "table", "QTableWidget idle + focused current cell",
+       [label("l1", "QTableWidget:"),
+        layout("QHBoxLayout", "row",
+               [table("idle", 4, 2), table("focus", 4, 2)], 8, 0)],
+       width=520, height=280)
+    vg(category, "tab_widget", "QTabWidget focused (tab bar focus)",
+       [tab_widget("focus", [
+           tab_page("page1", "Первая", [label("l1", "страница 1"), spacer(False)]),
+           tab_page("page2", "Вторая", [label("l2", "страница 2"), spacer(False)]),
+       ], current=0)],
+       width=420, height=240)
+    vg(category, "tool_box", "QToolBox focused",
+       [toolbox_widget("focus", [
+           toolbox_page("page1", "Раздел A", [label("l1", "содержимое A"), spacer(False)]),
+           toolbox_page("page2", "Раздел B", [label("l2", "содержимое B"), spacer(False)]),
+       ], current=0)],
+       width=420, height=280)
 
     # ---- gallery/text: text metrics edge cases ----
     category = "gallery/text"

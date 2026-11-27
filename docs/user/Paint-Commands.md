@@ -5,7 +5,7 @@
 `client/crates/rqt/src/render/primitive.rs` (`RenderPrimitive`).
 Авторы форм **не** вызывают эти API из Lua — только справочник слоёв отрисовки.
 
-_Generated 2026-11-27 12:59 UTC._
+_Generated 2026-11-27 13:13 UTC._
 
 ## Pipeline
 

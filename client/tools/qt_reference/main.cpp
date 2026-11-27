@@ -576,6 +576,17 @@ int main(int argc, char **argv)
     root->show();
     app.processEvents();
 
+    // Gallery A/B goldens are idle by default. Opt-in focused snapshot:
+    // a widget whose objectName is `focus` (see gallery/focus/*).
+    // Without this, QWidget::show() on offscreen still focuses the first
+    // tab-focusable control and paints caret / Highlight frame chrome.
+    if (QWidget *target = root->findChild<QWidget *>(QStringLiteral("focus"))) {
+        target->setFocus(Qt::OtherFocusReason);
+    } else if (QWidget *fw = QApplication::focusWidget()) {
+        fw->clearFocus();
+    }
+    app.processEvents();
+
     QJsonObject output;
     output["form_class"] = QString::fromLatin1(root->metaObject()->className());
     output["form_name"] = root->objectName();

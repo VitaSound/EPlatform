@@ -358,9 +358,14 @@ pub(crate) fn paint_table(
         header_grid,
     );
 
-    let header_color = header_qss
-        .color
-        .unwrap_or_else(|| palette.color(QPaletteRole::ButtonText));
+    // Disabled headers use Mid (gallery/states/155_disabled_table).
+    let header_color = header_qss.color.unwrap_or_else(|| {
+        if widget.enabled {
+            palette.color(QPaletteRole::ButtonText)
+        } else {
+            palette.color(QPaletteRole::Mid)
+        }
+    });
     for (level_index, level) in table.grouped_header.iter().enumerate() {
         let y = top + level_index as f32 * QTABLE_HEADER_H;
         let mut column = 0usize;
@@ -442,9 +447,13 @@ pub(crate) fn paint_table(
     }
     painter.restore();
 
-    let text_color = item_qss
-        .color
-        .unwrap_or_else(|| palette.color(QPaletteRole::Text));
+    let text_color = item_qss.color.unwrap_or_else(|| {
+        if widget.enabled {
+            palette.color(QPaletteRole::Text)
+        } else {
+            palette.color(QPaletteRole::Mid)
+        }
+    });
     let selected_text = item_qss
         .selection_color
         .unwrap_or_else(|| palette.color(QPaletteRole::HighlightedText));

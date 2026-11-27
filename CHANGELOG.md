@@ -2,6 +2,25 @@
 
 ## 2026-11-27
 
+### QGroupBox: Fusion frame pixmap (nested darkening)
+
+- **`PE_FrameGroupBox`.** Вместо palette `Mid` — `fusion_groupbox.png`
+  (как Qt `qDrawBorderPixmap`, margins 6). Заливка `rgba(0,0,0,3)`
+  композитится поверх родителя → каждый вложенный слой темнее без
+  счётчика глубины; ребро `#757575` @ α=50 → `#d7d7d7` на Window
+  `#efefef`. Fallback: `FrameGroupBox` fill/stroke с теми же alpha.
+- Review `gallery/nested/135_group_in_group_in_group`: mean 2.21,
+  >30 1.4% (было ~4.75 / 3.1%).
+
+### LineEdit / focus / table paint parity
+
+- **`QLineEdit` Fusion frame.** Sharp Base fill + AA rounded outline;
+  focus = `Highlight.darker(125)` (value ≤160), soft inner ring α=40,
+  top shadow `rgba(0,0,0,18)`. Rounded stroke supersampled in raster.
+- **Focus opt-in.** `rqt_render` / live open focus widget named `focus`
+  (gallery/focus/*); LineEdit/PlainTextEdit caret at end.
+- **Disabled table.** Header/cell text → palette `Mid` when disabled.
+
 ### Docs: archive agent plans `00`–`44`
 
 - Закрытые handoff-планы перенесены в

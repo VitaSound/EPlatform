@@ -4,9 +4,9 @@
 Каталог собран из упоминаний в `rqt` + частоты классов в `server/priv/qt_forms/**/*.ui`.
 Это подмножество Qt Widgets под продуктовые формы, не полный Qt.
 
-_Generated 2026-11-27 12:59 UTC._
+_Generated 2026-11-27 13:13 UTC._
 
-Классов в `.ui` дереве форм: **31** уникальных, всего вхождений: **1034**.
+Классов в `.ui` дереве форм: **31** уникальных, всего вхождений: **1116**.
 
 ## Layouts
 
@@ -14,8 +14,8 @@ _Generated 2026-11-27 12:59 UTC._
 | --- | --- | --- |
 | `QFormLayout` | rqt/app, .ui×13 |  |
 | `QGridLayout` | rqt/app, .ui×28 | spans/policies есть; row/col stretch из кода Qt — не поддерживаются (решение продукта). |
-| `QHBoxLayout` | rqt/app, .ui×75 |  |
-| `QVBoxLayout` | rqt/app, .ui×163 |  |
+| `QHBoxLayout` | rqt/app, .ui×79 |  |
+| `QVBoxLayout` | rqt/app, .ui×181 |  |
 
 
 ## Controls
@@ -23,18 +23,18 @@ _Generated 2026-11-27 12:59 UTC._
 | Класс | Где виден | Заметки |
 | --- | --- | --- |
 | `QAbstractButton` | rqt/app |  |
-| `QCheckBox` | rqt/app, .ui×39 |  |
-| `QComboBox` | rqt/app, .ui×21 |  |
-| `QDoubleSpinBox` | rqt/app, .ui×1 |  |
+| `QCheckBox` | rqt/app, .ui×41 |  |
+| `QComboBox` | rqt/app, .ui×23 |  |
+| `QDoubleSpinBox` | rqt/app, .ui×3 |  |
 | `QGroupBox` | rqt/app, .ui×27 |  |
-| `QLabel` | rqt/app, .ui×176 | word-wrap — зона внимания / известные хвосты. |
-| `QLineEdit` | rqt/app, .ui×113 |  |
-| `QPlainTextEdit` | rqt/app, .ui×2 | plain text only; rich QTextEdit/HTML — нет. |
+| `QLabel` | rqt/app, .ui×192 | word-wrap — зона внимания / известные хвосты. |
+| `QLineEdit` | rqt/app, .ui×115 |  |
+| `QPlainTextEdit` | rqt/app, .ui×4 | plain text only; rich QTextEdit/HTML — нет. |
 | `QProgressBar` | rqt/app, .ui×3 |  |
-| `QPushButton` | rqt/app, .ui×120 |  |
-| `QRadioButton` | rqt/app, .ui×17 |  |
-| `QSlider` | rqt/app, .ui×2 |  |
-| `QSpinBox` | rqt/app, .ui×1 |  |
+| `QPushButton` | rqt/app, .ui×122 |  |
+| `QRadioButton` | rqt/app, .ui×19 |  |
+| `QSlider` | rqt/app, .ui×4 |  |
+| `QSpinBox` | rqt/app, .ui×3 |  |
 | `QToolButton` | rqt/app, .ui×12 |  |
 
 
@@ -42,9 +42,9 @@ _Generated 2026-11-27 12:59 UTC._
 
 | Класс | Где виден | Заметки |
 | --- | --- | --- |
-| `QListWidget` | rqt/app, .ui×9 |  |
-| `QTableWidget` | rqt/app, .ui×31 |  |
-| `QTreeWidget` | rqt/app, .ui×8 |  |
+| `QListWidget` | rqt/app, .ui×11 |  |
+| `QTableWidget` | rqt/app, .ui×33 |  |
+| `QTreeWidget` | rqt/app, .ui×10 |  |
 
 
 ## Navigation / split
@@ -52,15 +52,15 @@ _Generated 2026-11-27 12:59 UTC._
 | Класс | Где виден | Заметки |
 | --- | --- | --- |
 | `QSplitter` | rqt/app, .ui×2 |  |
-| `QTabWidget` | rqt/app, .ui×2 |  |
-| `QToolBox` | rqt/app, .ui×2 |  |
+| `QTabWidget` | rqt/app, .ui×3 |  |
+| `QToolBox` | rqt/app, .ui×3 |  |
 
 
 ## Shell / windows
 
 | Класс | Где виден | Заметки |
 | --- | --- | --- |
-| `QDialog` | rqt/app, .ui×147 |  |
+| `QDialog` | rqt/app, .ui×161 |  |
 | `QDockWidget` | rqt/app | упоминается при разборе MainWindow; полноценный dock-рантайм не обещан. |
 | `QMainWindow` | rqt/app, .ui×1 |  |
 | `QMdiArea` | rqt/app, .ui×1 |  |
@@ -69,7 +69,7 @@ _Generated 2026-11-27 12:59 UTC._
 | `QMenuBar` | rqt/app, .ui×1 |  |
 | `QStatusBar` | rqt/app, .ui×1 |  |
 | `QToolBar` | rqt/app, .ui×1 |  |
-| `QWidget` | rqt/app, .ui×12 |  |
+| `QWidget` | rqt/app, .ui×16 |  |
 
 
 ## Явно не цель (сейчас)

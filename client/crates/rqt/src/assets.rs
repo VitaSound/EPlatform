@@ -19,6 +19,11 @@ static EMBEDDED: &[(&str, &[u8])] = &[
         "qss/brick.png",
         include_bytes!("../../../assets/qss/brick.png"),
     ),
+    // Qt Fusion `PE_FrameGroupBox` — `:/qt-project.org/styles/commonstyle/images/fusion_groupbox.png`
+    (
+        "fusion/groupbox.png",
+        include_bytes!("../../../assets/fusion/groupbox.png"),
+    ),
 ];
 
 static CACHE: OnceLock<Mutex<HashMap<String, Option<QPixmap>>>> = OnceLock::new();

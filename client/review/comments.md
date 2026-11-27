@@ -1676,3 +1676,471 @@
 
 Комментарий:
 
+## gallery/focus/162_line_edit
+
+<!-- id: gallery/focus/162_line_edit -->
+
+Комментарий:
+
+## gallery/focus/163_plain_text
+
+<!-- id: gallery/focus/163_plain_text -->
+
+Комментарий:
+
+## gallery/focus/164_push_button
+
+<!-- id: gallery/focus/164_push_button -->
+
+Комментарий:
+
+## gallery/focus/165_check_box
+
+<!-- id: gallery/focus/165_check_box -->
+
+Комментарий:
+
+## gallery/focus/166_radio_button
+
+<!-- id: gallery/focus/166_radio_button -->
+
+Комментарий:
+
+## gallery/focus/167_combo_box
+
+<!-- id: gallery/focus/167_combo_box -->
+
+Комментарий:
+
+## gallery/focus/168_spin_box
+
+<!-- id: gallery/focus/168_spin_box -->
+
+Комментарий:
+
+## gallery/focus/169_double_spin
+
+<!-- id: gallery/focus/169_double_spin -->
+
+Комментарий:
+
+## gallery/focus/170_slider_h
+
+<!-- id: gallery/focus/170_slider_h -->
+
+Комментарий:
+
+## gallery/focus/171_list
+
+<!-- id: gallery/focus/171_list -->
+
+Комментарий:
+
+## gallery/focus/172_tree
+
+<!-- id: gallery/focus/172_tree -->
+
+Комментарий:
+
+## gallery/focus/173_table
+
+<!-- id: gallery/focus/173_table -->
+
+Комментарий:
+
+## gallery/focus/174_tab_widget
+
+<!-- id: gallery/focus/174_tab_widget -->
+
+Комментарий:
+
+## gallery/focus/175_tool_box
+
+<!-- id: gallery/focus/175_tool_box -->
+
+Комментарий:
+
+## gallery/text/176_single_char
+
+<!-- id: gallery/text/176_single_char -->
+
+Комментарий:
+
+## gallery/text/177_empty_label
+
+<!-- id: gallery/text/177_empty_label -->
+
+Комментарий:
+
+## gallery/text/178_very_long_wrapping
+
+<!-- id: gallery/text/178_very_long_wrapping -->
+
+Комментарий:
+
+## gallery/text/179_numbers
+
+<!-- id: gallery/text/179_numbers -->
+
+Комментарий:
+
+## gallery/text/180_punctuation
+
+<!-- id: gallery/text/180_punctuation -->
+
+Комментарий:
+
+## gallery/text/181_cyrillic_upper
+
+<!-- id: gallery/text/181_cyrillic_upper -->
+
+Комментарий:
+
+## gallery/text/182_mixed_ru_en
+
+<!-- id: gallery/text/182_mixed_ru_en -->
+
+Комментарий:
+
+## gallery/text/183_spaces
+
+<!-- id: gallery/text/183_spaces -->
+
+Комментарий:
+
+## gallery/text/184_button_long_text
+
+<!-- id: gallery/text/184_button_long_text -->
+
+Комментарий:
+
+## gallery/text/185_group_long_title
+
+<!-- id: gallery/text/185_group_long_title -->
+
+Комментарий:
+
+## gallery/tables/186_size_1x1
+
+<!-- id: gallery/tables/186_size_1x1 -->
+
+Комментарий:
+
+## gallery/tables/187_size_2x2
+
+<!-- id: gallery/tables/187_size_2x2 -->
+
+Комментарий:
+
+## gallery/tables/188_size_4x3
+
+<!-- id: gallery/tables/188_size_4x3 -->
+
+Комментарий:
+
+## gallery/tables/189_size_8x5
+
+<!-- id: gallery/tables/189_size_8x5 -->
+
+Комментарий:
+
+## gallery/tables/190_size_20x3
+
+<!-- id: gallery/tables/190_size_20x3 -->
+
+Комментарий:
+
+## gallery/tables/191_size_3x12
+
+<!-- id: gallery/tables/191_size_3x12 -->
+
+Комментарий:
+
+## gallery/tables/192_narrow_tall
+
+<!-- id: gallery/tables/192_narrow_tall -->
+
+Комментарий:
+
+## gallery/tables/193_wide_short
+
+<!-- id: gallery/tables/193_wide_short -->
+
+Комментарий:
+
+## gallery/tables/194_in_grid
+
+<!-- id: gallery/tables/194_in_grid -->
+
+Комментарий:
+
+## gallery/tables/195_in_form_filter
+
+<!-- id: gallery/tables/195_in_form_filter -->
+
+Комментарий:
+
+## gallery/tables/196_policy_off
+
+<!-- id: gallery/tables/196_policy_off -->
+
+Комментарий:
+
+## gallery/tables/197_policy_always
+
+<!-- id: gallery/tables/197_policy_always -->
+
+Комментарий:
+
+## gallery/lists/198_list_small
+
+<!-- id: gallery/lists/198_list_small -->
+
+Комментарий:
+
+## gallery/lists/199_list_tall
+
+<!-- id: gallery/lists/199_list_tall -->
+
+Комментарий:
+
+## gallery/lists/200_tree_small
+
+<!-- id: gallery/lists/200_tree_small -->
+
+Комментарий:
+
+## gallery/lists/201_tree_overflow
+
+<!-- id: gallery/lists/201_tree_overflow -->
+
+Комментарий:
+
+## gallery/lists/202_list_disabled
+
+<!-- id: gallery/lists/202_list_disabled -->
+
+Комментарий:
+
+## gallery/lists/203_tree_disabled
+
+<!-- id: gallery/lists/203_tree_disabled -->
+
+Комментарий:
+
+## gallery/lists/204_list_in_grid
+
+<!-- id: gallery/lists/204_list_in_grid -->
+
+Комментарий:
+
+## gallery/lists/205_tree_hbox
+
+<!-- id: gallery/lists/205_tree_hbox -->
+
+Комментарий:
+
+## gallery/lists/206_list_wide
+
+<!-- id: gallery/lists/206_list_wide -->
+
+Комментарий:
+
+## gallery/lists/207_combo_in_grid
+
+<!-- id: gallery/lists/207_combo_in_grid -->
+
+Комментарий:
+
+## gallery/groups/208_single_group
+
+<!-- id: gallery/groups/208_single_group -->
+
+Комментарий:
+
+## gallery/groups/209_two_groups
+
+<!-- id: gallery/groups/209_two_groups -->
+
+Комментарий:
+
+## gallery/groups/210_nested_groups
+
+<!-- id: gallery/groups/210_nested_groups -->
+
+Комментарий:
+
+## gallery/groups/211_group_hbox
+
+<!-- id: gallery/groups/211_group_hbox -->
+
+Комментарий:
+
+## gallery/groups/212_group_grid
+
+<!-- id: gallery/groups/212_group_grid -->
+
+Комментарий:
+
+## gallery/groups/213_group_disabled
+
+<!-- id: gallery/groups/213_group_disabled -->
+
+Комментарий:
+
+## gallery/groups/214_three_groups
+
+<!-- id: gallery/groups/214_three_groups -->
+
+Комментарий:
+
+## gallery/groups/215_group_with_table
+
+<!-- id: gallery/groups/215_group_with_table -->
+
+Комментарий:
+
+## gallery/mixed/216_login_form
+
+<!-- id: gallery/mixed/216_login_form -->
+
+Комментарий:
+
+## gallery/mixed/217_filter_bar
+
+<!-- id: gallery/mixed/217_filter_bar -->
+
+Комментарий:
+
+## gallery/mixed/218_properties_grid
+
+<!-- id: gallery/mixed/218_properties_grid -->
+
+Комментарий:
+
+## gallery/mixed/219_button_panel
+
+<!-- id: gallery/mixed/219_button_panel -->
+
+Комментарий:
+
+## gallery/mixed/220_splitter_h
+
+<!-- id: gallery/mixed/220_splitter_h -->
+
+Комментарий:
+
+## gallery/mixed/221_splitter_v
+
+<!-- id: gallery/mixed/221_splitter_v -->
+
+Комментарий:
+
+## gallery/mixed/222_form_with_table
+
+<!-- id: gallery/mixed/222_form_with_table -->
+
+Комментарий:
+
+## gallery/mixed/223_checks_panel
+
+<!-- id: gallery/mixed/223_checks_panel -->
+
+Комментарий:
+
+## gallery/mixed/224_nav_plus_detail
+
+<!-- id: gallery/mixed/224_nav_plus_detail -->
+
+Комментарий:
+
+## gallery/mixed/225_table_and_tree
+
+<!-- id: gallery/mixed/225_table_and_tree -->
+
+Комментарий:
+
+## gallery/tabs/226_basic_two
+
+<!-- id: gallery/tabs/226_basic_two -->
+
+Комментарий:
+
+## gallery/tabs/227_fields_three
+
+<!-- id: gallery/tabs/227_fields_three -->
+
+Комментарий:
+
+## gallery/toolbox/228_basic_two
+
+<!-- id: gallery/toolbox/228_basic_two -->
+
+Комментарий:
+
+## gallery/toolbox/229_fields_three
+
+<!-- id: gallery/toolbox/229_fields_three -->
+
+Комментарий:
+
+## gallery/spin/230_int_suffix
+
+<!-- id: gallery/spin/230_int_suffix -->
+
+Комментарий:
+
+## gallery/spin/231_double_prefix
+
+<!-- id: gallery/spin/231_double_prefix -->
+
+Комментарий:
+
+## gallery/slider/232_horizontal
+
+<!-- id: gallery/slider/232_horizontal -->
+
+Комментарий:
+
+## gallery/slider/233_vertical
+
+<!-- id: gallery/slider/233_vertical -->
+
+Комментарий:
+
+## gallery/progress/234_value_0
+
+<!-- id: gallery/progress/234_value_0 -->
+
+Комментарий:
+
+## gallery/progress/235_value_50
+
+<!-- id: gallery/progress/235_value_50 -->
+
+Комментарий:
+
+## gallery/progress/236_value_100
+
+<!-- id: gallery/progress/236_value_100 -->
+
+Комментарий:
+
+## gallery/textedit/237_multiline_static
+
+<!-- id: gallery/textedit/237_multiline_static -->
+
+Комментарий:
+
+## gallery/textedit/238_empty_focus_sized
+
+<!-- id: gallery/textedit/238_empty_focus_sized -->
+
+Комментарий:
+
+## gallery/qss/239_border_image
+
+<!-- id: gallery/qss/239_border_image -->
+
+Комментарий:
+

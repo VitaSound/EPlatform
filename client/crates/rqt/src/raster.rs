@@ -266,8 +266,8 @@ fn fill_rounded_border(
         return;
     }
     let stroke = width.round().max(1.0) as i32;
+    // Keep fractional radii (Fusion focus soft-ring uses ~1.7).
     let radius = radius
-        .round()
         .max(0.0)
         .min((right - left).min(bottom - top) as f32 / 2.0);
     let inner_left = left + stroke;
@@ -293,20 +293,30 @@ fn fill_rounded_border(
     let y1 = bounds.bottom().ceil() as i32;
     for y in y0..y1 {
         for x in x0..x1 {
-            let px = x as f32 + 0.5;
-            let py = y as f32 + 0.5;
-            let outer = inside_rounded_rect(px, py, left, top, right, bottom, radius);
-            let inner = inside_rounded_rect(
-                px,
-                py,
-                inner_left,
-                inner_top,
-                inner_right,
-                inner_bottom,
-                inner_radius,
-            );
-            if outer && !inner {
-                image.blend_pixel(x, y, color, None);
+            // 4×4 supersampling so radius-2 corners match Fusion AA instead of
+            // a hard stairstep that reads as a square frame.
+            let mut cover = 0.0_f32;
+            for sy in [0.125_f32, 0.375, 0.625, 0.875] {
+                for sx in [0.125_f32, 0.375, 0.625, 0.875] {
+                    let px = x as f32 + sx;
+                    let py = y as f32 + sy;
+                    let outer = inside_rounded_rect(px, py, left, top, right, bottom, radius);
+                    let inner = inside_rounded_rect(
+                        px,
+                        py,
+                        inner_left,
+                        inner_top,
+                        inner_right,
+                        inner_bottom,
+                        inner_radius,
+                    );
+                    if outer && !inner {
+                        cover += 1.0 / 16.0;
+                    }
+                }
+            }
+            if cover > 0.0 {
+                image.blend_pixel(x, y, color.with_alpha(color.alpha * cover), None);
             }
         }
     }

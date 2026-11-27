@@ -3321,6 +3321,22 @@ impl App {
         {
             return;
         }
+        // gallery/focus/* fixtures name the target `focus` so live open
+        // matches rqt_render / qt_reference opt-in snapshots.
+        if let Some(widget) = self
+            .forms
+            .get_mut(form_id)
+            .and_then(|form| form.tree.find_widget("focus"))
+        {
+            if self
+                .forms
+                .get_mut(form_id)
+                .is_some_and(|form| form.tree.set_focus(widget))
+            {
+                self.sync_focus(form_id, widget, true);
+                return;
+            }
+        }
         let Some(widget) = self
             .forms
             .get_mut(form_id)

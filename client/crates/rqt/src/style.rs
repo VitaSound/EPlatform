@@ -8,6 +8,7 @@ pub use crate::gui::QPaintCommand;
 pub enum QPrimitiveElement {
     Panel,
     Frame,
+    FrameGroupBox,
     FrameLineEdit,
     FrameDefaultButton,
     FrameFocusRect,
@@ -807,6 +808,33 @@ impl QStyle for QFusionStyle {
                     color: palette.color(crate::gui::QPaletteRole::Mid),
                 }]
             }
+            // Fusion `PE_FrameGroupBox` draws `fusion_groupbox.png` via
+            // `qDrawBorderPixmap` (not palette Mid / Window.darker). Flat-edge
+            // equivalent of that pixmap when the asset is unavailable:
+            //   fill  = rgba(0,0,0,3)        → nests as Window.darker(101)
+            //   edge  = rgba(117,117,117,50) → #d7d7d7 on Window #efefef
+            QPrimitiveElement::FrameGroupBox => {
+                let rect = option.rect;
+                let border = QColor::rgba8(0x75, 0x75, 0x75, 50);
+                let fill = QColor::rgba8(0, 0, 0, 3);
+                let inset = QRectF::new(
+                    rect.x + 1.0,
+                    rect.y + 1.0,
+                    (rect.width - 2.0).max(0.0),
+                    (rect.height - 2.0).max(0.0),
+                );
+                vec![
+                    QPaintCommand::StrokeRect {
+                        rect,
+                        width: self.pixel_metric(QPixelMetric::DefaultFrameWidth),
+                        color: border,
+                    },
+                    QPaintCommand::FillRect {
+                        rect: inset,
+                        color: fill,
+                    },
+                ]
+            }
             QPrimitiveElement::FrameDefaultButton => vec![QPaintCommand::StrokeRect {
                 rect: option.rect,
                 width: self.pixel_metric(QPixelMetric::ButtonDefaultIndicator),
@@ -911,18 +939,34 @@ impl QStyle for QFusionStyle {
                 ]
             }
             QControlElement::LineEdit => {
-                // Fusion paints the rounded frame inset on top/left/bottom; the
-                // right outline sits on `geometry.right()-1` (half-open stroke
-                // needs width-1, not width-2). Probe: h=25 → rows 105..127.
+                // Qt Fusion `PE_PanelLineEdit` + `PE_FrameLineEdit` (qtbase
+                // qfusionstyle.cpp): sharp Base fill inset by 1px, then an
+                // AA rounded outline on `rect.adjusted(0,0,-1,-1)` with radius
+                // 2. Focus uses `highlight.darker(125)` (not raw Highlight),
+                // a soft inner ring (α=40, r≈1.7), and a 1px top shadow.
                 let outer = option.rect;
-                let frame = QRectF::new(
+                let fill_rect = QRectF::new(
                     outer.x + 1.0,
                     outer.y + 1.0,
-                    (outer.width - 1.0).max(1.0),
+                    (outer.width - 2.0).max(1.0),
                     (outer.height - 2.0).max(1.0),
                 );
-                let outline = if option.state.contains(QStyleState::FOCUSED) {
-                    palette.color(crate::gui::QPaletteRole::Highlight)
+                let frame = QRectF::new(
+                    outer.x,
+                    outer.y,
+                    (outer.width - 1.0).max(1.0),
+                    (outer.height - 1.0).max(1.0),
+                );
+                let focused = option.state.contains(QStyleState::FOCUSED);
+                let outline = if focused {
+                    let mut outline = palette
+                        .color(crate::gui::QPaletteRole::Highlight)
+                        .darker(125);
+                    // Fusion clamps value ≤ 160 after darkening.
+                    if outline.value() > 160 {
+                        outline = outline.with_value(160);
+                    }
+                    outline
                 } else {
                     palette
                         .color(crate::gui::QPaletteRole::Window)
@@ -933,10 +977,9 @@ impl QStyle for QFusionStyle {
                 } else {
                     palette.color(crate::gui::QPaletteRole::Window)
                 };
-                vec![
-                    QPaintCommand::FillRoundedRect {
-                        rect: frame,
-                        radius: 2.0,
+                let mut commands = vec![
+                    QPaintCommand::FillRect {
+                        rect: fill_rect,
                         color: fill,
                     },
                     QPaintCommand::StrokeRoundedRect {
@@ -945,7 +988,30 @@ impl QStyle for QFusionStyle {
                         width: self.pixel_metric(QPixelMetric::DefaultFrameWidth),
                         color: outline,
                     },
-                ]
+                ];
+                if focused {
+                    let soft = QRectF::new(
+                        outer.x + 1.0,
+                        outer.y + 1.0,
+                        (outer.width - 3.0).max(1.0),
+                        (outer.height - 3.0).max(1.0),
+                    );
+                    commands.push(QPaintCommand::StrokeRoundedRect {
+                        rect: soft,
+                        radius: 1.7,
+                        width: 1.0,
+                        color: outline.with_alpha(40.0 / 255.0),
+                    });
+                }
+                // Fusion `topShadow()` = rgba(0,0,0,18) under the top edge.
+                let shadow_y = outer.y + 1.0;
+                commands.push(QPaintCommand::DrawLine {
+                    from: QPointF::new(outer.x + 2.0, shadow_y),
+                    to: QPointF::new(outer.right() - 2.0, shadow_y),
+                    width: 1.0,
+                    color: QColor::rgba8(0, 0, 0, 18),
+                });
+                commands
             }
             QControlElement::Label => Vec::new(),
             QControlElement::TableView => vec![
