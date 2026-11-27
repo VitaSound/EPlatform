@@ -517,6 +517,8 @@ pub struct Gfx {
     /// metrics use `dpr` even if `ui_scale == 1`, then `TextArea.scale`
     /// compensates so layout size stays correct while glyphs stay sharp.
     text_hd: bool,
+    /// One-shot log so we can confirm glyph_scale in the browser console.
+    text_hd_logged: bool,
     rect_pipeline: wgpu::RenderPipeline,
     shape_pipeline: wgpu::RenderPipeline,
     texture_pipeline: wgpu::RenderPipeline,
@@ -638,9 +640,12 @@ impl Gfx {
             .map_err(|e| format!("request_device: {e:?}"))?;
 
         let caps = surface.get_capabilities(&adapter);
-        let max_dim = device.limits().max_texture_dimension_2d;
+        let device_max = device.limits().max_texture_dimension_2d;
+        // Temporary debug override: `?maxdim=2048` or `window.__epMaxDim=2048`
+        // forces mode 2/3 on a high-limit GPU so texthd can be compared.
+        let max_dim = max_dim_override().unwrap_or(device_max).min(device_max);
         crate::App::log(format!(
-            "gfx limits: max_texture_dimension_2d={max_dim} (adapter={})",
+            "gfx limits: max_texture_dimension_2d={max_dim} (device={device_max}, adapter={})",
             adapter.limits().max_texture_dimension_2d
         ));
         let (width, height) = fit_dimensions(size.width, size.height, max_dim);
@@ -835,6 +840,7 @@ impl Gfx {
             dpr,
             ui_scale,
             text_hd,
+            text_hd_logged: false,
             rect_pipeline,
             shape_pipeline,
             texture_pipeline,
@@ -1267,18 +1273,30 @@ impl Gfx {
         }
         // Quantize metrics so resize float drift does not mint a new glyph
         // set every frame and fill the atlas permanently.
-        // Mode-2 text_hd: rasterize glyphs at DPR, then shrink via TextArea.scale
-        // so layout positions stay in surface pixels while strokes stay sharp.
+        // Mode-2 text_hd: rasterize glyphs at browser DPR (may exceed ui_scale
+        // when the browser upscales a 1× surface), then shrink via TextArea.scale.
         let glyph_scale = if self.text_hd {
-            self.dpr.max(scale).max(1.0)
+            browser_device_pixel_ratio()
+                .max(self.dpr)
+                .max(scale)
+                .max(1.0)
         } else {
             scale
         };
+        // Compensate so layout size matches non-hd; glyph atlas stays denser.
         let area_scale = if self.text_hd && glyph_scale > scale && glyph_scale > 0.0 {
             scale / glyph_scale
         } else {
             1.0
         };
+        if self.text_hd && !self.text_hd_logged {
+            self.text_hd_logged = true;
+            crate::App::log(format!(
+                "gfx text_hd apply: ui_scale={scale:.3} gfx_dpr={:.3} browser_dpr={:.3} glyph_scale={glyph_scale:.3} area_scale={area_scale:.3}",
+                self.dpr,
+                browser_device_pixel_ratio()
+            ));
+        }
         let font_size = quantize_font_px(FONT_SIZE * glyph_scale);
         let line_height = quantize_font_px(LINE_HEIGHT * glyph_scale).max(font_size);
         let mut shaped: Vec<(usize, Vec<Buffer>, Vec<&ColoredText>)> =
@@ -1594,6 +1612,67 @@ fn quantize_font_px(px: f32) -> f32 {
     ((px * 4.0).round() / 4.0).max(1.0)
 }
 
+/// Browser `devicePixelRatio` (wasm). Used by `text_hd` so glyph scale follows
+/// the real upscale factor even when winit/`ui_scale` stayed at 1.
+fn browser_device_pixel_ratio() -> f32 {
+    #[cfg(target_arch = "wasm32")]
+    {
+        web_sys::window()
+            .map(|w| w.device_pixel_ratio() as f32)
+            .filter(|d| *d > 0.0)
+            .unwrap_or(1.0)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        1.0
+    }
+}
+
+/// Temporary texture-limit override for forcing render mode 2/3 in debug.
+fn max_dim_override() -> Option<u32> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        if let Some(window) = web_sys::window() {
+            if let Ok(v) = js_sys::Reflect::get(
+                window.as_ref(),
+                &wasm_bindgen::JsValue::from_str("__epMaxDim"),
+            ) {
+                if let Some(n) = v.as_f64() {
+                    if n >= 64.0 {
+                        return Some(n as u32);
+                    }
+                }
+            }
+            if let Ok(search) = window.location().search() {
+                return parse_maxdim_query(&search);
+            }
+        }
+        None
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        None
+    }
+}
+
+/// `Some(n)` when `?maxdim=n` is present and parseable.
+pub(crate) fn parse_maxdim_query(search: &str) -> Option<u32> {
+    let q = search.trim_start_matches('?');
+    for pair in q.split('&') {
+        let (key, value) = match pair.split_once('=') {
+            Some(kv) => kv,
+            None => continue,
+        };
+        if key == "maxdim" {
+            let n: u32 = value.parse().ok()?;
+            if n >= 64 {
+                return Some(n);
+            }
+        }
+    }
+    None
+}
+
 /// Mode-2 sharper text experiment. Opt-in via `?texthd=1` or `window.__epTextHd`.
 fn text_hd_enabled() -> bool {
     #[cfg(target_arch = "wasm32")]
@@ -1643,5 +1722,13 @@ mod tests {
         assert!(parse_texthd_query("main=gallery.lua&texthd=true"));
         assert!(!parse_texthd_query("?texthd=0"));
         assert!(!parse_texthd_query(""));
+    }
+
+    #[test]
+    fn maxdim_query_parses_limit() {
+        assert_eq!(parse_maxdim_query("?maxdim=2048"), Some(2048));
+        assert_eq!(parse_maxdim_query("main=x&maxdim=1024"), Some(1024));
+        assert_eq!(parse_maxdim_query("?maxdim=10"), None);
+        assert_eq!(parse_maxdim_query(""), None);
     }
 }

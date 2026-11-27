@@ -94,20 +94,35 @@ mod imp {
     }
 
     impl PhoenixSocket {
-        pub fn open(url: &str, topic: String, on_event: Sender<SocketEvent>) -> Self {
+        /// `wake` must call `Window::request_redraw` (or equivalent). Without
+        /// it, socket messages sit in the mpsc queue until some other event
+        /// wakes winit — idle dirty-paint no longer spins every frame.
+        pub fn open(
+            url: &str,
+            topic: String,
+            on_event: Sender<SocketEvent>,
+            wake: Option<Rc<dyn Fn()>>,
+        ) -> Self {
             let ws = web_sys::WebSocket::new(url).expect("failed to open WebSocket");
             let topic_rc = Rc::new(topic);
             let next_ref = Rc::new(RefCell::new(1u32));
+            fn poke(wake: &Option<Rc<dyn Fn()>>) {
+                if let Some(wake) = wake {
+                    wake();
+                }
+            }
 
             // onopen → phx_join
             {
                 let ws_open = ws.clone();
                 let topic = topic_rc.clone();
                 let on_event = on_event.clone();
+                let wake = wake.clone();
                 let closure = Closure::<dyn FnMut(web_sys::Event)>::new(move |_e| {
                     let _ =
                         ws_open.send_with_str(&crate::socket::protocol::join_frame(topic.as_str()));
                     let _ = on_event.send(SocketEvent::Opened);
+                    poke(&wake);
                 });
                 ws.set_onopen(Some(closure.as_ref().unchecked_ref()));
                 closure.forget();
@@ -118,23 +133,31 @@ mod imp {
                 let topic = topic_rc.clone();
                 let joined = Cell::new(false);
                 let on_event = on_event.clone();
+                let wake = wake.clone();
                 let closure = Closure::<dyn FnMut(web_sys::MessageEvent)>::new(
                     move |e: web_sys::MessageEvent| {
                         let Some(text) = e.data().as_string() else {
                             return;
                         };
+                        let mut woke = false;
                         match crate::socket::protocol::decode(&text, topic.as_str()) {
                             Some(crate::socket::protocol::Decoded::Joined) if !joined.get() => {
                                 joined.set(true);
                                 let _ = on_event.send(SocketEvent::Joined);
+                                woke = true;
                             }
                             Some(crate::socket::protocol::Decoded::Reply(payload)) => {
                                 let _ = on_event.send(SocketEvent::Reply(payload));
+                                woke = true;
                             }
                             Some(crate::socket::protocol::Decoded::Command(payload)) => {
                                 let _ = on_event.send(SocketEvent::Command(payload));
+                                woke = true;
                             }
                             _ => {}
+                        }
+                        if woke {
+                            poke(&wake);
                         }
                     },
                 );
@@ -145,16 +168,20 @@ mod imp {
             // onclose / onerror
             {
                 let on_event = on_event.clone();
+                let wake = wake.clone();
                 let closure = Closure::<dyn FnMut(web_sys::Event)>::new(move |_e| {
                     let _ = on_event.send(SocketEvent::Closed);
+                    poke(&wake);
                 });
                 ws.set_onclose(Some(closure.as_ref().unchecked_ref()));
                 closure.forget();
             }
             {
                 let on_event = on_event.clone();
+                let wake = wake.clone();
                 let closure = Closure::<dyn FnMut(web_sys::Event)>::new(move |_e| {
                     let _ = on_event.send(SocketEvent::Error("websocket error".into()));
+                    poke(&wake);
                 });
                 ws.set_onerror(Some(closure.as_ref().unchecked_ref()));
                 closure.forget();
@@ -221,7 +248,12 @@ mod imp {
     pub struct PhoenixSocket;
 
     impl PhoenixSocket {
-        pub fn open(url: &str, topic: String, on_event: Sender<SocketEvent>) -> Self {
+        pub fn open(
+            url: &str,
+            topic: String,
+            on_event: Sender<SocketEvent>,
+            _wake: Option<std::rc::Rc<dyn Fn()>>,
+        ) -> Self {
             let _ = (url, topic, on_event);
             Self
         }

@@ -4715,10 +4715,14 @@ impl ApplicationHandler for App {
             // Replace the placeholder receiver created in App::new by moving
             // events through a bridge: simplest is to rebuild App fields here.
             self.rx = rx;
+            let wake_window = window.clone();
             self.socket = Some(PhoenixSocket::open(
                 &self.params.backend,
                 format!("app:{}", self.params.app),
                 tx,
+                Some(Rc::new(move || {
+                    wake_window.request_redraw();
+                }) as Rc<dyn Fn()>),
             ));
             Self::log("socket object created");
 
