@@ -4,9 +4,9 @@
 Каталог собран из упоминаний в `rqt` + частоты классов в `server/priv/qt_forms/**/*.ui`.
 Это подмножество Qt Widgets под продуктовые формы, не полный Qt.
 
-_Generated 2026-11-27 08:50 UTC._
+_Generated 2026-11-27 09:53 UTC._
 
-Классов в `.ui` дереве форм: **31** уникальных, всего вхождений: **1033**.
+Классов в `.ui` дереве форм: **31** уникальных, всего вхождений: **1034**.
 
 ## Layouts
 
@@ -27,7 +27,7 @@ _Generated 2026-11-27 08:50 UTC._
 | `QComboBox` | rqt/app, .ui×21 |  |
 | `QDoubleSpinBox` | rqt/app, .ui×1 |  |
 | `QGroupBox` | rqt/app, .ui×27 |  |
-| `QLabel` | rqt/app, .ui×175 | word-wrap — зона внимания / известные хвосты. |
+| `QLabel` | rqt/app, .ui×176 | word-wrap — зона внимания / известные хвосты. |
 | `QLineEdit` | rqt/app, .ui×113 |  |
 | `QPlainTextEdit` | rqt/app, .ui×2 | plain text only; rich QTextEdit/HTML — нет. |
 | `QProgressBar` | rqt/app, .ui×3 |  |

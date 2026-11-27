@@ -35,6 +35,61 @@ pub struct QLinearGradient {
     pub stops: Vec<(f32, QColor)>,
 }
 
+/// Qt Style Sheets `background-repeat`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum QBackgroundRepeat {
+    #[default]
+    /// Tile both axes (Qt default when unspecified).
+    Repeat,
+    RepeatX,
+    RepeatY,
+    NoRepeat,
+}
+
+/// Qt Style Sheets `background-position` (horizontal, vertical).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct QBackgroundPosition {
+    pub horizontal: QTextAlign,
+    pub vertical: QBackgroundVAlign,
+}
+
+impl Default for QBackgroundPosition {
+    fn default() -> Self {
+        Self {
+            horizontal: QTextAlign::Left,
+            vertical: QBackgroundVAlign::Top,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum QBackgroundVAlign {
+    #[default]
+    Top,
+    Center,
+    Bottom,
+}
+
+/// Mid-edge mode for `border-image` (`stretch` | `repeat`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum QBorderImageMode {
+    #[default]
+    Stretch,
+    Repeat,
+}
+
+/// Qt Style Sheets `border-image`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct QBorderImage {
+    pub source: String,
+    /// Source slice in px: `(top, right, bottom, left)`.
+    pub slice: (f32, f32, f32, f32),
+    /// Horizontal mid-edge mode (top/bottom strips + center width).
+    pub horizontal: QBorderImageMode,
+    /// Vertical mid-edge mode (left/right strips + center height).
+    pub vertical: QBorderImageMode,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct QStyleDeclarations {
     pub background: Option<QColor>,
@@ -51,6 +106,11 @@ pub struct QStyleDeclarations {
     /// `(left, top, right, bottom)` in px; outside the border.
     pub margin: Option<(f32, f32, f32, f32)>,
     pub background_gradient: Option<QLinearGradient>,
+    /// Local asset path from `background-image: url(...)`.
+    pub background_image: Option<String>,
+    pub background_repeat: Option<QBackgroundRepeat>,
+    pub background_position: Option<QBackgroundPosition>,
+    pub border_image: Option<QBorderImage>,
     pub selection_background: Option<QColor>,
     pub selection_color: Option<QColor>,
     pub font_family: Option<String>,
@@ -97,6 +157,18 @@ impl QStyleDeclarations {
         }
         if other.background_gradient.is_some() {
             self.background_gradient = other.background_gradient.clone();
+        }
+        if other.background_image.is_some() {
+            self.background_image = other.background_image.clone();
+        }
+        if other.background_repeat.is_some() {
+            self.background_repeat = other.background_repeat;
+        }
+        if other.background_position.is_some() {
+            self.background_position = other.background_position;
+        }
+        if other.border_image.is_some() {
+            self.border_image = other.border_image.clone();
         }
         if other.selection_background.is_some() {
             self.selection_background = other.selection_background;
@@ -394,20 +466,62 @@ fn parse_declarations(body: &str) -> QStyleDeclarations {
         let name = name.trim().to_ascii_lowercase();
         let value = value.trim();
         match name.as_str() {
-            "background" | "background-color" => {
+            "background-color" => {
                 if value.eq_ignore_ascii_case("none") || value.eq_ignore_ascii_case("transparent") {
                     declarations.background = Some(QColor::rgba8(0, 0, 0, 0));
-                } else if let Some(gradient) = parse_linear_gradient(value) {
-                    declarations.background_gradient = Some(gradient);
                 } else if let Some(color) = parse_color(value) {
                     declarations.background = Some(color);
                 }
             }
-            "background-image" | "border-image" => {
+            "background" => {
+                // Qt shorthand: color / url / repeat / position (and gradients).
+                if value.eq_ignore_ascii_case("none") || value.eq_ignore_ascii_case("transparent") {
+                    declarations.background = Some(QColor::rgba8(0, 0, 0, 0));
+                    declarations.background_gradient = None;
+                    declarations.background_image = None;
+                } else {
+                    if let Some(gradient) = parse_linear_gradient(value) {
+                        declarations.background_gradient = Some(gradient);
+                        declarations.background_image = None;
+                    } else if let Some(color) = parse_color_token(value) {
+                        declarations.background = Some(color);
+                    }
+                    if let Some(url) = parse_url(value) {
+                        declarations.background_image = Some(url);
+                        declarations.background_gradient = None;
+                    }
+                    if let Some(repeat) = parse_background_repeat_token(value) {
+                        declarations.background_repeat = Some(repeat);
+                    }
+                    if let Some(position) = parse_background_position(value) {
+                        declarations.background_position = Some(position);
+                    }
+                }
+            }
+            "background-image" => {
                 if value.eq_ignore_ascii_case("none") || value.eq_ignore_ascii_case("transparent") {
                     declarations.background_gradient = None;
+                    declarations.background_image = None;
                 } else if let Some(gradient) = parse_linear_gradient(value) {
+                    // Historical: some sheets put gradients in background-image.
                     declarations.background_gradient = Some(gradient);
+                    declarations.background_image = None;
+                } else if let Some(url) = parse_url(value) {
+                    declarations.background_image = Some(url);
+                    declarations.background_gradient = None;
+                }
+            }
+            "background-repeat" => {
+                declarations.background_repeat = parse_background_repeat(value);
+            }
+            "background-position" => {
+                declarations.background_position = parse_background_position(value);
+            }
+            "border-image" => {
+                if value.eq_ignore_ascii_case("none") {
+                    declarations.border_image = None;
+                } else if let Some(image) = parse_border_image(value) {
+                    declarations.border_image = Some(image);
                 }
             }
             "color" => {
@@ -556,6 +670,187 @@ fn parse_declarations(body: &str) -> QStyleDeclarations {
     declarations
 }
 
+fn parse_url(value: &str) -> Option<String> {
+    let lower = value.to_ascii_lowercase();
+    let start = lower.find("url(")?;
+    let open = start + 4;
+    let close = value[open..].find(')')? + open;
+    let inner = value[open..close]
+        .trim()
+        .trim_matches(|c| c == '"' || c == '\'');
+    if inner.is_empty() {
+        None
+    } else {
+        Some(inner.to_string())
+    }
+}
+
+/// Color when the whole value is a color, or the first color token in a shorthand.
+fn parse_color_token(value: &str) -> Option<QColor> {
+    if let Some(color) = parse_color(value) {
+        return Some(color);
+    }
+    for token in value.split_whitespace() {
+        let lowered = token.to_ascii_lowercase();
+        if lowered.starts_with("url(")
+            || matches!(
+                lowered.as_str(),
+                "repeat"
+                    | "repeat-x"
+                    | "repeat-y"
+                    | "repeat-xy"
+                    | "no-repeat"
+                    | "top"
+                    | "bottom"
+                    | "left"
+                    | "right"
+                    | "center"
+            )
+        {
+            continue;
+        }
+        if let Some(color) = parse_color(token) {
+            return Some(color);
+        }
+    }
+    None
+}
+
+fn parse_background_repeat(value: &str) -> Option<QBackgroundRepeat> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "repeat" | "repeat-xy" => Some(QBackgroundRepeat::Repeat),
+        "repeat-x" => Some(QBackgroundRepeat::RepeatX),
+        "repeat-y" => Some(QBackgroundRepeat::RepeatY),
+        "no-repeat" => Some(QBackgroundRepeat::NoRepeat),
+        _ => None,
+    }
+}
+
+fn parse_background_repeat_token(value: &str) -> Option<QBackgroundRepeat> {
+    for token in value.split_whitespace() {
+        if let Some(repeat) = parse_background_repeat(token) {
+            return Some(repeat);
+        }
+    }
+    None
+}
+
+fn parse_background_position(value: &str) -> Option<QBackgroundPosition> {
+    let tokens: Vec<&str> = value
+        .split_whitespace()
+        .map(|token| token.trim())
+        .filter(|token| {
+            let lowered = token.to_ascii_lowercase();
+            !lowered.starts_with("url(")
+                && !matches!(
+                    lowered.as_str(),
+                    "repeat"
+                        | "repeat-x"
+                        | "repeat-y"
+                        | "repeat-xy"
+                        | "no-repeat"
+                        | "stretch"
+                )
+                && parse_color(token).is_none()
+                && parse_px(token).is_none()
+        })
+        .collect();
+    if tokens.is_empty() {
+        return None;
+    }
+    let mut horizontal = QTextAlign::Left;
+    let mut vertical = QBackgroundVAlign::Top;
+    let mut saw = false;
+    for token in &tokens {
+        match token.to_ascii_lowercase().as_str() {
+            "left" => {
+                horizontal = QTextAlign::Left;
+                saw = true;
+            }
+            "right" => {
+                horizontal = QTextAlign::Right;
+                saw = true;
+            }
+            "top" => {
+                vertical = QBackgroundVAlign::Top;
+                saw = true;
+            }
+            "bottom" => {
+                vertical = QBackgroundVAlign::Bottom;
+                saw = true;
+            }
+            "center" => {
+                // Qt: lone `center` centers both axes; with another axis token it
+                // centers the remaining axis. Approximate: set both if alone.
+                if tokens.len() == 1 {
+                    horizontal = QTextAlign::Center;
+                    vertical = QBackgroundVAlign::Center;
+                } else if !tokens.iter().any(|t| {
+                    matches!(t.to_ascii_lowercase().as_str(), "left" | "right")
+                }) {
+                    horizontal = QTextAlign::Center;
+                } else {
+                    vertical = QBackgroundVAlign::Center;
+                }
+                saw = true;
+            }
+            _ => {}
+        }
+    }
+    saw.then_some(QBackgroundPosition {
+        horizontal,
+        vertical,
+    })
+}
+
+fn parse_border_image_mode(token: &str) -> Option<QBorderImageMode> {
+    match token.to_ascii_lowercase().as_str() {
+        "stretch" => Some(QBorderImageMode::Stretch),
+        "repeat" => Some(QBorderImageMode::Repeat),
+        // Qt lists round/space in the type grammar; treat like repeat for now.
+        "round" | "space" => Some(QBorderImageMode::Repeat),
+        _ => None,
+    }
+}
+
+fn parse_border_image(value: &str) -> Option<QBorderImage> {
+    let source = parse_url(value)?;
+    let lower = value.to_ascii_lowercase();
+    let url_start = lower.find("url(")?;
+    let open = url_start + 4;
+    let close = value[open..].find(')')? + open;
+    let after_url = value.get(close + 1..).unwrap_or("").trim();
+    let mut nums = Vec::new();
+    let mut modes = Vec::new();
+    for token in after_url.split_whitespace() {
+        if let Some(mode) = parse_border_image_mode(token) {
+            modes.push(mode);
+            continue;
+        }
+        if let Some(number) = parse_px(token).or_else(|| token.parse::<f32>().ok()) {
+            nums.push(number);
+        }
+    }
+    let slice = match nums.as_slice() {
+        [] => (0.0, 0.0, 0.0, 0.0),
+        [all] => (*all, *all, *all, *all),
+        [vertical, horizontal] => (*vertical, *horizontal, *vertical, *horizontal),
+        [top, horizontal, bottom] => (*top, *horizontal, *bottom, *horizontal),
+        [top, right, bottom, left, ..] => (*top, *right, *bottom, *left),
+    };
+    let (horizontal, vertical) = match modes.as_slice() {
+        [] => (QBorderImageMode::Stretch, QBorderImageMode::Stretch),
+        [both] => (*both, *both),
+        [horizontal, vertical, ..] => (*horizontal, *vertical),
+    };
+    Some(QBorderImage {
+        source,
+        slice,
+        horizontal,
+        vertical,
+    })
+}
+
 /// QSS 1/2/3/4-value box shorthand → `(left, top, right, bottom)`.
 fn parse_box_sides(value: &str) -> Option<(f32, f32, f32, f32)> {
     let values: Vec<f32> = value.split_whitespace().filter_map(parse_px).collect();
@@ -701,16 +996,16 @@ fn merge_side_decl(target: &mut Option<QBorderSideDecl>, source: QBorderSideDecl
 fn border_style_width(value: &str) -> (Option<f32>, bool) {
     let lower = value.to_ascii_lowercase();
     if lower.contains("none") || lower.contains("hidden") {
+        // Qt: none/hidden clears the border.
         (Some(0.0), true)
     } else if lower.contains("solid")
         || lower.contains("dashed")
         || lower.contains("dotted")
         || lower.contains("double")
     {
-        (
-            Some(value.split_whitespace().find_map(parse_px).unwrap_or(1.0)),
-            false,
-        )
+        // Style-only (`border-style: solid`) must not invent a width or it
+        // clobbers a prior `border-width: Npx` down to 1px.
+        (value.split_whitespace().find_map(parse_px), false)
     } else {
         (value.split_whitespace().find_map(parse_px), false)
     }
@@ -977,6 +1272,74 @@ mod tests {
         assert_eq!(gradient.stops.len(), 2);
         assert_eq!(gradient.stops[0], (0.0, QColor::rgb(255, 255, 255)));
         assert_eq!(gradient.stops[1], (1.0, QColor::rgb(0x20, 0x40, 0x20)));
+    }
+
+    #[test]
+    fn border_style_solid_does_not_clobber_border_width() {
+        let sheet = QStyleSheet::parse(
+            "QPushButton { border-width: 52px; border-style: solid; border-color: transparent; \
+             border-image: url(qss/border-frame.png) 113 113 113 113 stretch stretch; }",
+        );
+        let (tree, id) = widget();
+        let declarations = sheet.resolve(tree.widget(id).unwrap());
+        assert_eq!(declarations.border_width, Some(52.0));
+        assert!(declarations.border_image.is_some());
+    }
+
+    #[test]
+    fn parses_url_background_and_border_image() {
+        let sheet = QStyleSheet::parse(
+            "QPushButton { background-image: url(\"qss/brick.png\"); \
+             background-repeat: no-repeat; background-position: bottom right; \
+             border-image: url(qss/border-frame.png) 16 16 16 16 stretch repeat; }",
+        );
+        let (tree, id) = widget();
+        let declarations = sheet.resolve(tree.widget(id).unwrap());
+        assert_eq!(
+            declarations.background_image.as_deref(),
+            Some("qss/brick.png")
+        );
+        assert_eq!(
+            declarations.background_repeat,
+            Some(QBackgroundRepeat::NoRepeat)
+        );
+        assert_eq!(
+            declarations.background_position,
+            Some(QBackgroundPosition {
+                horizontal: QTextAlign::Right,
+                vertical: QBackgroundVAlign::Bottom,
+            })
+        );
+        let border = declarations.border_image.expect("border-image");
+        assert_eq!(border.source, "qss/border-frame.png");
+        assert_eq!(border.slice, (16.0, 16.0, 16.0, 16.0));
+        assert_eq!(border.horizontal, QBorderImageMode::Stretch);
+        assert_eq!(border.vertical, QBorderImageMode::Repeat);
+    }
+
+    #[test]
+    fn parses_background_shorthand_url_repeat_position() {
+        let sheet = QStyleSheet::parse(
+            "QPushButton { background: #abcdef url(qss/brick.png) repeat-y left; }",
+        );
+        let (tree, id) = widget();
+        let declarations = sheet.resolve(tree.widget(id).unwrap());
+        assert_eq!(declarations.background, Some(QColor::rgb(0xab, 0xcd, 0xef)));
+        assert_eq!(
+            declarations.background_image.as_deref(),
+            Some("qss/brick.png")
+        );
+        assert_eq!(
+            declarations.background_repeat,
+            Some(QBackgroundRepeat::RepeatY)
+        );
+        assert_eq!(
+            declarations.background_position,
+            Some(QBackgroundPosition {
+                horizontal: QTextAlign::Left,
+                vertical: QBackgroundVAlign::Top,
+            })
+        );
     }
 
     #[test]

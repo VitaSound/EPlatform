@@ -1112,10 +1112,12 @@ def build_gallery_cases():
             }
         )
 
-    def vg(category, name, description, body, width=460, height=320, spacing=6, margins=11):
+    def vg(category, name, description, body, width=460, height=320, spacing=6, margins=11, style=""):
         def make_xml(title, body=body, width=width, height=height,
-                     spacing=spacing, margins=margins):
-            return form(title, width, height, body, spacing=spacing, margins=margins)
+                     spacing=spacing, margins=margins, style=style):
+            return form(
+                title, width, height, body, spacing=spacing, margins=margins, style=style
+            )
         add_case(category, name, description, make_xml)
 
     def gr(category, name, description, items, width=460, height=320, spacing=6, margins=11):
@@ -1903,6 +1905,79 @@ def build_gallery_cases():
     vg(category, "empty_focus_sized", "empty QPlainTextEdit at default size hint",
        [label("l1", "Комментарий:"), plain_text_edit("edit", "")],
        width=420, height=240)
+
+    category = "gallery/qss"
+    # Demonstrates Qt Style Sheets image contract (stylesheet-reference):
+    # - border-image: 9-slice; needs border-width; edges stretch|repeat
+    # - background-image: intrinsic size; background-repeat / background-position
+    # Paths: client/qss → assets/qss (Qt); wasm uses embedded rqt::assets.
+    qss_border_image = """
+QDialog { background-color: #eceff4; }
+QLabel#title { color: #2e3440; }
+QLabel#framed {
+  background-color: #eceff4;
+  border-width: 52px;
+  border-style: solid;
+  border-color: transparent;
+  /* user-style ornate 9-slice; transparent center (no fill image) */
+  border-image: url(qss/border-frame.png) 113 113 113 113 stretch stretch;
+  padding: 10px;
+  color: #2e3440;
+}
+QLabel#tiled {
+  color: #ffffff;
+  padding: 8px;
+  background: #d8dee9 url(qss/brick.png) repeat;
+}
+QLabel#once {
+  color: #2e3440;
+  padding: 8px;
+  background: #d8dee9 url(qss/brick.png) no-repeat center;
+}
+"""
+    fixed = (
+        '<property name="sizePolicy"><sizepolicy hsizetype="Preferred" vsizetype="Fixed">'
+        "<horstretch>0</horstretch><verstretch>0</verstretch></sizepolicy></property>"
+    )
+    vg(
+        category,
+        "border_image",
+        "Qt QSS: border-image 9-slice + background-image repeat/no-repeat",
+        [
+            label("title", "Qt QSS images"),
+            widget(
+                "QLabel",
+                "framed",
+                prop_text("text", "border-image (ornate frame, empty center)")
+                + fixed
+                + '<property name="minimumSize"><size><width>0</width><height>140</height></size></property>'
+                + '<property name="maximumSize"><size><width>16777215</width><height>140</height></size></property>'
+                + '<property name="alignment"><set>Qt::AlignCenter</set></property>',
+            ),
+            widget(
+                "QLabel",
+                "tiled",
+                prop_text("text", "background-image repeat (brick)")
+                + fixed
+                + '<property name="minimumSize"><size><width>0</width><height>64</height></size></property>'
+                + '<property name="maximumSize"><size><width>16777215</width><height>64</height></size></property>'
+                + '<property name="alignment"><set>Qt::AlignCenter</set></property>',
+            ),
+            widget(
+                "QLabel",
+                "once",
+                prop_text("text", "background-image no-repeat + center")
+                + fixed
+                + '<property name="minimumSize"><size><width>0</width><height>64</height></size></property>'
+                + '<property name="maximumSize"><size><width>16777215</width><height>64</height></size></property>'
+                + '<property name="alignment"><set>Qt::AlignCenter</set></property>',
+            ),
+            spacer(False),
+        ],
+        width=450,
+        height=360,
+        style=qss_border_image,
+    )
 
     assert len(cases) >= 100, f"gallery too small: {len(cases)}"
     return cases

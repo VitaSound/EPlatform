@@ -492,7 +492,9 @@ fn parse_cell(item: Node<'_, '_>) -> LayoutCell {
 }
 
 /// `Qt::AlignRight|Qt::AlignmentFlag::AlignVCenter` → alignment bitmask.
-fn parse_alignment(value: &str) -> u32 {
+///
+/// Also accepts the shorthand `Qt::AlignCenter` (= HCenter|VCenter).
+pub fn parse_alignment(value: &str) -> u32 {
     value
         .split('|')
         .map(str::trim)
@@ -503,6 +505,8 @@ fn parse_alignment(value: &str) -> u32 {
                 "AlignLeft" | "AlignLeading" => ALIGN_LEFT,
                 "AlignRight" | "AlignTrailing" => ALIGN_RIGHT,
                 "AlignHCenter" => ALIGN_HCENTER,
+                // Qt::AlignCenter == AlignVCenter | AlignHCenter.
+                "AlignCenter" => ALIGN_HCENTER | ALIGN_VCENTER,
                 "AlignTop" => ALIGN_TOP,
                 "AlignBottom" => ALIGN_BOTTOM,
                 "AlignVCenter" => ALIGN_VCENTER,
@@ -915,6 +919,38 @@ mod tests {
         assert_eq!(layout.form_alignment, ALIGN_HCENTER | ALIGN_TOP);
         assert_eq!(layout.horizontal_spacing, Some(9));
         assert_eq!(layout.vertical_spacing, Some(4));
+    }
+
+    #[test]
+    fn parse_alignment_covers_horizontal_vertical_and_center() {
+        assert_eq!(parse_alignment("Qt::AlignLeft"), ALIGN_LEFT);
+        assert_eq!(parse_alignment("Qt::AlignLeading"), ALIGN_LEFT);
+        assert_eq!(parse_alignment("Qt::AlignRight"), ALIGN_RIGHT);
+        assert_eq!(parse_alignment("Qt::AlignTrailing"), ALIGN_RIGHT);
+        assert_eq!(parse_alignment("Qt::AlignHCenter"), ALIGN_HCENTER);
+        assert_eq!(parse_alignment("Qt::AlignTop"), ALIGN_TOP);
+        assert_eq!(parse_alignment("Qt::AlignBottom"), ALIGN_BOTTOM);
+        assert_eq!(parse_alignment("Qt::AlignVCenter"), ALIGN_VCENTER);
+        assert_eq!(
+            parse_alignment("Qt::AlignCenter"),
+            ALIGN_HCENTER | ALIGN_VCENTER
+        );
+        assert_eq!(
+            parse_alignment("Qt::AlignmentFlag::AlignCenter"),
+            ALIGN_HCENTER | ALIGN_VCENTER
+        );
+        assert_eq!(
+            parse_alignment("Qt::AlignLeft|Qt::AlignTop"),
+            ALIGN_LEFT | ALIGN_TOP
+        );
+        assert_eq!(
+            parse_alignment("Qt::AlignRight|Qt::AlignBottom"),
+            ALIGN_RIGHT | ALIGN_BOTTOM
+        );
+        assert_eq!(
+            parse_alignment("Qt::AlignmentFlag::AlignHCenter|Qt::AlignmentFlag::AlignVCenter"),
+            ALIGN_HCENTER | ALIGN_VCENTER
+        );
     }
 
     #[test]

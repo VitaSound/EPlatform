@@ -140,4 +140,5 @@ return {
     { number = 137, id = "gallery/progress/222_value_100", category = "gallery/progress", ui = "gallery/progress/222_value_100.ui" },
     { number = 138, id = "gallery/textedit/223_multiline_static", category = "gallery/textedit", ui = "gallery/textedit/223_multiline_static.ui" },
     { number = 139, id = "gallery/textedit/224_empty_focus_sized", category = "gallery/textedit", ui = "gallery/textedit/224_empty_focus_sized.ui" },
+    { number = 140, id = "gallery/qss/225_border_image", category = "gallery/qss", ui = "gallery/qss/225_border_image.ui" },
 }

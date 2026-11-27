@@ -3,7 +3,7 @@
 
 Функции, которые Lua видит через Elixir `deflua` (`server/lib/e_platform/lua/api.ex`). Платформенные `Form`/`App` вызывают их внутри.
 
-_Generated 2026-11-27 08:50 UTC._
+_Generated 2026-11-27 09:53 UTC._
 
 | Функция | Аргументы |
 | --- | --- |

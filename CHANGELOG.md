@@ -2,6 +2,31 @@
 
 ## 2026-11-27
 
+### Волна: agent-plan 41 — QSS url() / border-image + assets
+
+- **Assets.** `rqt::assets` — embedded PNG registry (`client/assets/…`)
+  для wasm/native tests + native FS fallback; `client/qss` → symlink
+  на `assets/qss` для Qt `qt_reference`.
+- **QSS (по Qt Style Sheets Reference).**  
+  `background-image` + `background-repeat`
+  (`repeat`/`repeat-x`/`repeat-y`/`no-repeat`, default `repeat`) +
+  `background-position`; shorthand `background:`.  
+  `border-image: url() slice stretch|repeat` — 9-slice; нужен
+  `border-width` (dest edges = border widths, не slice).  
+  `border-style: solid` больше не затирает явный `border-width` до 1px.
+- **Paint.** Фон — intrinsic size + tile/align (не stretch). Рамка —
+  углы as-is, края stretch|repeat через `DrawPixmap`; прозрачный center
+  не рисуется.
+- **QLabel alignment.** Свойство `.ui` `alignment` (`AlignLeft/Right/
+  HCenter/Top/Bottom/VCenter` + shorthand `AlignCenter`) задаёт H/V
+  позицию текста; QSS `text-align` перекрывает только горизонталь.
+- **Gallery/review.** `#140 gallery/qss/225_border_image` — ornate
+  `border-image` (пустой центр), brick `background-image` repeat и
+  no-repeat+center. Ассеты: `brick.png`, `border-frame.png`.
+- **Тесты.** Парсинг alignment-флагов; матрица 3×3 H×V + `AlignCenter`
+  в paint; raster/assets на border-image.
+- **План.** `docs/agent-plans/41-qss-url-border-image.md` → Status: done.
+
 ### Волна: agent-plan 40 — QPainter path / dash pen / opacity
 
 - **Path.** Минимальный `QPainterPath` (move/line/arc/close) +

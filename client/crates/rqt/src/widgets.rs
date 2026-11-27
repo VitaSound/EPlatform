@@ -6218,6 +6218,9 @@ fn load_pixmap(path: &str) -> Option<QPixmap> {
     if let Some(pixmap) = crate::icons::pixmap(path) {
         return Some(pixmap);
     }
+    if let Some(pixmap) = crate::assets::pixmap(path) {
+        return Some(pixmap);
+    }
     if path.starts_with(":/") || path.starts_with("data:") || path.is_empty() {
         return None;
     }

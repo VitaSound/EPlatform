@@ -742,6 +742,39 @@ mod tests {
         assert_eq!(image.pixel(4, 4), [0, 0, 0, 255]);
     }
 
+    #[test]
+    fn border_image_nine_slice_matches_source_corners() {
+        use crate::gui::QPainter;
+        use crate::paint::paint_widget_tree;
+        use crate::style::QFusionStyle;
+        use crate::widgets::load_ui;
+
+        let ui = r#"<ui version="4.0"><class>Dialog</class>
+ <widget class="QDialog" name="Dialog">
+  <property name="geometry"><rect><x>0</x><y>0</y><width>200</width><height>140</height></rect></property>
+  <property name="styleSheet"><string>QDialog { background: #000000; }</string></property>
+  <widget class="QLabel" name="frame">
+   <property name="geometry"><rect><x>0</x><y>0</y><width>200</width><height>140</height></rect></property>
+   <property name="text"><string></string></property>
+   <property name="styleSheet"><string>QLabel { background: #808080; border-width: 52px; border-style: solid; border-color: transparent; border-image: url(qss/border-frame.png) 113 113 113 113 stretch stretch; }</string></property>
+  </widget>
+ </widget></ui>"#;
+        let (tree, root) = load_ui(ui).expect("loads ui");
+        let style = QFusionStyle::default();
+        let mut painter = QPainter::new();
+        paint_widget_tree(&tree, root, &style, &mut painter);
+        let image = rasterize(painter.commands(), 200, 140, QColor::rgb(0, 0, 0));
+
+        // Ornate black ring on edges; transparent center leaves QSS background.
+        let mid = image.pixel(100, 70);
+        assert_eq!(mid, [0x80, 0x80, 0x80, 255], "center shows background, not image fill");
+        let ring_ink = (0..200u32)
+            .flat_map(|x| (0..52u32).map(move |y| (x, y)))
+            .chain((0..200u32).flat_map(|x| (88..140u32).map(move |y| (x, y))))
+            .any(|(x, y)| image.pixel(x, y)[0] < 40 && image.pixel(x, y)[3] > 200);
+        assert!(ring_ink, "expected black ornate frame on the border ring");
+    }
+
     /// 32×32 contract: dashed focus ring paints alternating top-edge pixels.
     #[test]
     fn dashed_stroke_rect_32x32_contract() {

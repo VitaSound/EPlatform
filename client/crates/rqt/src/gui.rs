@@ -384,6 +384,26 @@ impl QPixmap {
             self.pixels[index + 3],
         ]
     }
+
+    /// Copy an axis-aligned sub-rectangle (clamped to this pixmap).
+    pub fn copy_rect(&self, x: u32, y: u32, width: u32, height: u32) -> Self {
+        let x = x.min(self.width);
+        let y = y.min(self.height);
+        let width = width.min(self.width.saturating_sub(x));
+        let height = height.min(self.height.saturating_sub(y));
+        let mut pixels = vec![0u8; (width * height * 4) as usize];
+        for row in 0..height {
+            let src = (((y + row) * self.width + x) * 4) as usize;
+            let dst = (row * width * 4) as usize;
+            let len = (width * 4) as usize;
+            pixels[dst..dst + len].copy_from_slice(&self.pixels[src..src + len]);
+        }
+        Self {
+            width,
+            height,
+            pixels,
+        }
+    }
 }
 
 pub fn srgb_to_linear(channel: f32) -> f32 {

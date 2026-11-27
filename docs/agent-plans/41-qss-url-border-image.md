@@ -1,6 +1,6 @@
 # 41 — QSS url() / border-image + assets
 
-Status: ready
+Status: done
 Priority: P2
 Depends-on: [04-gpu-texture-blit-circle.md]
 Blocks: []
@@ -42,8 +42,8 @@ Qt Style Sheets images.
 
 ## Tests / acceptance
 
-- [ ] Fixture with border-image matches expectation
-- [ ] `cargo test`
+- [x] Fixture with border-image matches expectation
+- [x] `cargo test`
 
 ## Agent handoff prompt (copy-paste)
 

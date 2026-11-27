@@ -31,7 +31,7 @@ Related:
 | `QStyle` Fusion | `QFusionStyle` | Partial; indicators incomplete |
 | `QPainter` | `QPaintCommand[]` + path/dash subset | Path move/line/arc; `StrokeDashedRect` |
 | Paint engine / RHI | `append_paint_commands` + `Gfx` (wgpu) | SDF shapes incl. dashed focus (kind 5) |
-| QSS | `qss` module | No `url()`/`border-image` yet → plan 41 |
+| QSS | `qss` module | `url()` + `background-repeat`/`position`; `border-image` 9-slice stretch\|repeat via `assets` |
 | Window / DPR | winit + canvas geometry | Own contract — see geometry doc |
 
 Full widget/primitive tables: see agent plan pack and historical review in chat plan §15.

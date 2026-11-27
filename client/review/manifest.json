@@ -1712,5 +1712,13 @@
     "description": "empty QPlainTextEdit at default size hint",
     "path": "review/forms/gallery/textedit/224_empty_focus_sized.ui",
     "number": 139
+  },
+  {
+    "id": "gallery/qss/225_border_image",
+    "category": "gallery/qss",
+    "title": "#140 qss/225_border_image",
+    "description": "Qt QSS: border-image 9-slice + background-image repeat/no-repeat",
+    "path": "review/forms/gallery/qss/225_border_image.ui",
+    "number": 140
   }
 ]

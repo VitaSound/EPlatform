@@ -1,6 +1,9 @@
 use crate::core::QVariant;
 use crate::gui::{QColor, QFont, QFontMetrics, QPainter, QPaletteRole, QRectF};
-use crate::qss::{QBorderSide, QStyleDeclarations, QStyleSheet, QTextAlign};
+use crate::qss::{
+    QBackgroundRepeat, QBackgroundVAlign, QBorderImage, QBorderImageMode, QBorderSide,
+    QStyleDeclarations, QStyleSheet, QTextAlign,
+};
 use crate::style::{QControlElement, QPrimitiveElement, QStyle, QStyleOption, QStyleState};
 use crate::widgets::{wrap_text_lines, QWidget, QWidgetId, QWidgetTree, QCOMBO_POPUP_ROW_H};
 
@@ -332,6 +335,18 @@ fn paint_widget_background(
             painter.fill_rect(frame, background);
         }
     }
+    if let Some(path) = qss.background_image.as_deref() {
+        if let Some(pixmap) = crate::assets::pixmap(path) {
+            paint_background_image(painter, frame, &pixmap, qss);
+        }
+    }
+    if let Some(border_image) = &qss.border_image {
+        // Qt: border-image needs a positive border width; destination edge
+        // sizes come from border-width (not from the source slice).
+        if paint_border_image(painter, frame, border_image, qss) {
+            return;
+        }
+    }
     if let Some(width) = qss.border_width {
         if width > 0.0 {
             let color = qss
@@ -345,6 +360,263 @@ fn paint_widget_background(
         }
     }
     paint_qss_side_borders(widget, painter, qss);
+}
+
+/// Qt `background-image`: intrinsic size, `background-repeat` + `background-position`.
+fn paint_background_image(
+    painter: &mut QPainter,
+    frame: QRectF,
+    pixmap: &crate::gui::QPixmap,
+    qss: &QStyleDeclarations,
+) {
+    let tile_w = (pixmap.width as f32).max(1.0);
+    let tile_h = (pixmap.height as f32).max(1.0);
+    let repeat = qss.background_repeat.unwrap_or(QBackgroundRepeat::Repeat);
+    let position = qss.background_position.unwrap_or_default();
+    let origin_x = align_background_x(frame, tile_w, position.horizontal);
+    let origin_y = align_background_y(frame, tile_h, position.vertical);
+
+    let (repeat_x, repeat_y) = match repeat {
+        QBackgroundRepeat::Repeat => (true, true),
+        QBackgroundRepeat::RepeatX => (true, false),
+        QBackgroundRepeat::RepeatY => (false, true),
+        QBackgroundRepeat::NoRepeat => (false, false),
+    };
+
+    let start_x = if repeat_x {
+        let mut x = origin_x;
+        while x > frame.x {
+            x -= tile_w;
+        }
+        x
+    } else {
+        origin_x
+    };
+    let start_y = if repeat_y {
+        let mut y = origin_y;
+        while y > frame.y {
+            y -= tile_h;
+        }
+        y
+    } else {
+        origin_y
+    };
+    let end_x = if repeat_x {
+        frame.x + frame.width
+    } else {
+        (origin_x + tile_w).min(frame.x + frame.width)
+    };
+    let end_y = if repeat_y {
+        frame.y + frame.height
+    } else {
+        (origin_y + tile_h).min(frame.y + frame.height)
+    };
+
+    let mut y = start_y;
+    while y < end_y {
+        if y + tile_h <= frame.y {
+            y += tile_h;
+            continue;
+        }
+        let mut x = start_x;
+        while x < end_x {
+            if x + tile_w <= frame.x {
+                x += tile_w;
+                continue;
+            }
+            let Some(dest) = QRectF::new(x, y, tile_w, tile_h).intersected(&frame) else {
+                x += tile_w;
+                continue;
+            };
+            let src_x = (dest.x - x).round().max(0.0) as u32;
+            let src_y = (dest.y - y).round().max(0.0) as u32;
+            let patch = pixmap.copy_rect(
+                src_x,
+                src_y,
+                dest.width.round().max(1.0) as u32,
+                dest.height.round().max(1.0) as u32,
+            );
+            painter.draw_pixmap(dest, patch, 1.0);
+            if !repeat_x {
+                break;
+            }
+            x += tile_w;
+        }
+        if !repeat_y {
+            break;
+        }
+        y += tile_h;
+    }
+}
+
+fn align_background_x(frame: QRectF, tile_w: f32, align: QTextAlign) -> f32 {
+    match align {
+        QTextAlign::Left => frame.x,
+        QTextAlign::Center => frame.x + ((frame.width - tile_w) * 0.5),
+        QTextAlign::Right => frame.x + frame.width - tile_w,
+    }
+}
+
+fn align_background_y(frame: QRectF, tile_h: f32, align: QBackgroundVAlign) -> f32 {
+    match align {
+        QBackgroundVAlign::Top => frame.y,
+        QBackgroundVAlign::Center => frame.y + ((frame.height - tile_h) * 0.5),
+        QBackgroundVAlign::Bottom => frame.y + frame.height - tile_h,
+    }
+}
+
+fn border_edge_widths(qss: &QStyleDeclarations) -> (f32, f32, f32, f32) {
+    let base = qss.border_width.unwrap_or(0.0);
+    let width = |side: QBorderSide| {
+        qss.side_border(side)
+            .and_then(|decl| decl.width)
+            .unwrap_or(base)
+            .max(0.0)
+    };
+    (
+        width(QBorderSide::Top),
+        width(QBorderSide::Right),
+        width(QBorderSide::Bottom),
+        width(QBorderSide::Left),
+    )
+}
+
+/// Nine-slice `border-image` (Qt: corners as-is; edges stretch or repeat).
+fn paint_border_image(
+    painter: &mut QPainter,
+    frame: QRectF,
+    border_image: &QBorderImage,
+    qss: &QStyleDeclarations,
+) -> bool {
+    let Some(pixmap) = crate::assets::pixmap(&border_image.source) else {
+        return false;
+    };
+    if frame.width <= 0.0 || frame.height <= 0.0 || pixmap.width == 0 || pixmap.height == 0 {
+        return false;
+    }
+
+    let (dest_top, dest_right, dest_bottom, dest_left) = border_edge_widths(qss);
+    if dest_top + dest_right + dest_bottom + dest_left <= 0.0 {
+        return false;
+    }
+
+    let (slice_top, slice_right, slice_bottom, slice_left) = border_image.slice;
+    let src_w = pixmap.width as f32;
+    let src_h = pixmap.height as f32;
+    let left = slice_left.clamp(0.0, src_w);
+    let right = slice_right.clamp(0.0, src_w);
+    let top = slice_top.clamp(0.0, src_h);
+    let bottom = slice_bottom.clamp(0.0, src_h);
+    let mid_w = (src_w - left - right).max(0.0);
+    let mid_h = (src_h - top - bottom).max(0.0);
+
+    let mut dest_left = dest_left.min(frame.width * 0.5);
+    let mut dest_right = dest_right.min(frame.width * 0.5);
+    let mut dest_top = dest_top.min(frame.height * 0.5);
+    let mut dest_bottom = dest_bottom.min(frame.height * 0.5);
+    if dest_left + dest_right > frame.width {
+        let scale = frame.width / (dest_left + dest_right).max(1.0);
+        dest_left *= scale;
+        dest_right *= scale;
+    }
+    if dest_top + dest_bottom > frame.height {
+        let scale = frame.height / (dest_top + dest_bottom).max(1.0);
+        dest_top *= scale;
+        dest_bottom *= scale;
+    }
+    let dest_mid_w = (frame.width - dest_left - dest_right).max(0.0);
+    let dest_mid_h = (frame.height - dest_top - dest_bottom).max(0.0);
+
+    let src_x = [0.0, left, left + mid_w];
+    let src_y = [0.0, top, top + mid_h];
+    let src_widths = [left, mid_w, right];
+    let src_heights = [top, mid_h, bottom];
+    let dst_x = [frame.x, frame.x + dest_left, frame.x + dest_left + dest_mid_w];
+    let dst_y = [frame.y, frame.y + dest_top, frame.y + dest_top + dest_mid_h];
+    let dst_widths = [dest_left, dest_mid_w, dest_right];
+    let dst_heights = [dest_top, dest_mid_h, dest_bottom];
+
+    for row in 0..3 {
+        for col in 0..3 {
+            let sw = src_widths[col];
+            let sh = src_heights[row];
+            let dw = dst_widths[col];
+            let dh = dst_heights[row];
+            if sw <= 0.0 || sh <= 0.0 || dw <= 0.0 || dh <= 0.0 {
+                continue;
+            }
+            let patch = pixmap.copy_rect(
+                src_x[col].round() as u32,
+                src_y[row].round() as u32,
+                sw.round().max(1.0) as u32,
+                sh.round().max(1.0) as u32,
+            );
+            // Skip fully transparent patches (typical empty border-image center).
+            if patch.pixels.chunks_exact(4).all(|px| px[3] == 0) {
+                continue;
+            }
+            let dest = QRectF::new(dst_x[col], dst_y[row], dw, dh);
+            let tile_h = row == 1 && border_image.vertical == QBorderImageMode::Repeat;
+            let tile_w = col == 1 && border_image.horizontal == QBorderImageMode::Repeat;
+            if tile_w || tile_h {
+                paint_tiled_patch(painter, dest, &patch, tile_w, tile_h);
+            } else {
+                painter.draw_pixmap(dest, patch, 1.0);
+            }
+        }
+    }
+    true
+}
+
+fn paint_tiled_patch(
+    painter: &mut QPainter,
+    dest: QRectF,
+    patch: &crate::gui::QPixmap,
+    tile_x: bool,
+    tile_y: bool,
+) {
+    let tile_w = (patch.width as f32).max(1.0);
+    let tile_h = (patch.height as f32).max(1.0);
+    let end_x = if tile_x {
+        dest.x + dest.width
+    } else {
+        dest.x + tile_w.min(dest.width)
+    };
+    let end_y = if tile_y {
+        dest.y + dest.height
+    } else {
+        dest.y + tile_h.min(dest.height)
+    };
+    let mut y = dest.y;
+    while y < end_y {
+        let mut x = dest.x;
+        while x < end_x {
+            let w = if tile_x {
+                tile_w.min(dest.x + dest.width - x)
+            } else {
+                dest.width
+            };
+            let h = if tile_y {
+                tile_h.min(dest.y + dest.height - y)
+            } else {
+                dest.height
+            };
+            let cell = if w < tile_w || h < tile_h {
+                patch.copy_rect(0, 0, w.round().max(1.0) as u32, h.round().max(1.0) as u32)
+            } else {
+                patch.clone()
+            };
+            painter.draw_pixmap(QRectF::new(x, y, w, h), cell, 1.0);
+            if !tile_x {
+                break;
+            }
+            x += tile_w;
+        }
+        if !tile_y {
+            break;
+        }
+        y += tile_h;
+    }
 }
 
 fn paint_qss_side_borders(widget: &QWidget, painter: &mut QPainter, qss: &QStyleDeclarations) {
@@ -494,6 +766,93 @@ fn paint_splitter_handles(tree: &QWidgetTree, widget: &QWidget, painter: &mut QP
 
 pub(crate) fn property_bool(widget: &QWidget, key: &str) -> bool {
     matches!(widget.property(key), Some(QVariant::Bool(true)))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LabelVAlign {
+    Top,
+    Center,
+    Bottom,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct LabelAlign {
+    horizontal: QTextAlign,
+    vertical: LabelVAlign,
+}
+
+fn widget_alignment_flags(widget: &QWidget) -> u32 {
+    match widget.property("alignment") {
+        Some(QVariant::String(text)) | Some(QVariant::Enum(text)) => {
+            form_xml::parse_alignment(text)
+        }
+        Some(QVariant::List(items)) => items.iter().fold(0u32, |mask, item| {
+            mask | match item {
+                QVariant::String(text) | QVariant::Enum(text) => form_xml::parse_alignment(text),
+                _ => 0,
+            }
+        }),
+        _ => 0,
+    }
+}
+
+/// QLabel text align from QSS `text-align` (horizontal) + `.ui` `alignment` flags.
+///
+/// Qt default when unset: left + vertical center.
+fn label_align(widget: &QWidget, qss: &QStyleDeclarations) -> LabelAlign {
+    let flags = widget_alignment_flags(widget);
+    let horizontal = if let Some(align) = qss.text_align {
+        align
+    } else if flags & form_xml::ALIGN_HCENTER != 0 {
+        QTextAlign::Center
+    } else if flags & form_xml::ALIGN_RIGHT != 0 {
+        QTextAlign::Right
+    } else {
+        QTextAlign::Left
+    };
+    let vertical = if flags & form_xml::ALIGN_TOP != 0 {
+        LabelVAlign::Top
+    } else if flags & form_xml::ALIGN_BOTTOM != 0 {
+        LabelVAlign::Bottom
+    } else {
+        // AlignVCenter, AlignCenter, or unset → Qt default VCenter.
+        LabelVAlign::Center
+    };
+    LabelAlign {
+        horizontal,
+        vertical,
+    }
+}
+
+fn aligned_text_x(content: QRectF, text_width: f32, horizontal: QTextAlign) -> f32 {
+    match horizontal {
+        QTextAlign::Center => {
+            content.x + ((content.width - text_width) / 2.0).max(0.0)
+        }
+        QTextAlign::Right => content.x + (content.width - text_width).max(0.0),
+        QTextAlign::Left => content.x,
+    }
+}
+
+fn aligned_text_y(
+    content: QRectF,
+    block_height: f32,
+    vertical: LabelVAlign,
+    glyphon_nudge: bool,
+) -> f32 {
+    let mut y = match vertical {
+        LabelVAlign::Top => content.y,
+        LabelVAlign::Center => {
+            content.y + ((content.height - block_height) / 2.0).max(0.0)
+        }
+        LabelVAlign::Bottom => (content.bottom() - block_height).max(content.y),
+    };
+    // Glyphon places ink ~1px lower than Qt inside a tall VCenter label
+    // (gallery/spin #129: "Количество:" starts at y=49 in Qt, y=50 here).
+    if glyphon_nudge && vertical == LabelVAlign::Center && content.height > block_height + 2.0 {
+        y = (y - 1.0).max(content.y);
+    }
+    y
 }
 
 pub(crate) fn property_int(widget: &QWidget, key: &str) -> Option<i64> {
@@ -753,25 +1112,21 @@ fn paint_widget_text(
     let line_height = metrics.height();
     painter.set_font(font);
     let content = qss_content_rect(widget, qss, (0.0, 0.0, 0.0, 0.0));
+    let align = label_align(widget, qss);
     if widget.class_name == "QLabel" && property_bool(widget, "wordWrap") {
-        // Word-wrapped label: greedy lines at the content width, block
-        // vertically centred (Qt default alignment), clipped to the rect.
+        // Word-wrapped label: greedy lines at content width; block aligned
+        // per Qt::Align* (default VCenter), clipped to the rect.
         let lines = wrap_text_lines(&text, content.width, &metrics);
         let block_height = lines.len() as f32 * line_height;
-        let top = content.y + ((content.height - block_height) / 2.0).max(0.0);
+        let top = aligned_text_y(content, block_height, align.vertical, true);
         let max_lines = ((content.height / line_height).ceil() as usize).max(1);
         let color = text_color(widget, qss);
         for (index, line) in lines.iter().take(max_lines).enumerate() {
-            let mut x = content.x;
-            match qss.text_align {
-                Some(QTextAlign::Center) => {
-                    x += ((content.width - metrics.horizontal_advance(line)) / 2.0).max(0.0);
-                }
-                Some(QTextAlign::Right) => {
-                    x += (content.width - metrics.horizontal_advance(line)).max(0.0);
-                }
-                _ => {}
-            }
+            let x = aligned_text_x(
+                content,
+                metrics.horizontal_advance(line),
+                align.horizontal,
+            );
             draw_text_line(
                 painter,
                 x,
@@ -786,13 +1141,8 @@ fn paint_widget_text(
     }
     // Align using metrics, but always draw through `content.right()`.
     // Metric-tight widths clip the last glyph under glyphon (OK→O, value→valu).
-    let mut y = content.y + ((content.height - line_height) / 2.0).max(0.0);
-    // Glyphon places ink ~1px lower than Qt inside a tall VCenter label
-    // (gallery/spin #129: "Количество:" starts at y=49 in Qt, y=50 here).
-    if widget.class_name == "QLabel" && content.height > line_height + 2.0 {
-        y = (y - 1.0).max(content.y);
-    }
     let mut text_x = content.x;
+    let mut y = content.y + ((content.height - line_height) / 2.0).max(0.0);
     match widget.class_name.as_str() {
         "QPushButton" | "QToolButton" => {
             text_x += ((content.width - text_width) / 2.0).max(0.0);
@@ -801,15 +1151,10 @@ fn paint_widget_text(
         "QCheckBox" | "QRadioButton" => {
             text_x += widget.font.pixel_size + 6.0;
         }
-        "QLabel" => match qss.text_align {
-            Some(QTextAlign::Center) => {
-                text_x += ((content.width - text_width) / 2.0).max(0.0);
-            }
-            Some(QTextAlign::Right) => {
-                text_x += (content.width - text_width).max(0.0);
-            }
-            _ => {}
-        },
+        "QLabel" => {
+            text_x = aligned_text_x(content, text_width, align.horizontal);
+            y = aligned_text_y(content, line_height, align.vertical, true);
+        }
         _ => {
             if qss.padding.is_none() {
                 text_x += 4.0;
@@ -1071,6 +1416,125 @@ mod tests {
         });
         let edit_text = edit_text.expect("line edit text");
         assert_eq!(edit_text.x, 13.0);
+    }
+
+    #[test]
+    fn qlabel_alignment_covers_all_horizontal_and_vertical_flags() {
+        use crate::gui::QPaintCommand;
+        use crate::style::QFusionStyle;
+        use crate::widgets::load_ui;
+        use std::collections::BTreeMap;
+
+        fn text_origin(alignment: &str) -> (f32, f32) {
+            let ui = format!(
+                r#"<ui version="4.0"><class>Dialog</class>
+ <widget class="QDialog" name="Dialog">
+  <property name="geometry"><rect><x>0</x><y>0</y><width>200</width><height>100</height></rect></property>
+  <widget class="QLabel" name="label">
+   <property name="geometry"><rect><x>0</x><y>0</y><width>200</width><height>100</height></rect></property>
+   <property name="text"><string>Hi</string></property>
+   <property name="alignment"><set>{alignment}</set></property>
+  </widget>
+ </widget></ui>"#
+            );
+            let (tree, root) = load_ui(&ui).expect("loads ui");
+            let style = QFusionStyle::default();
+            let mut painter = QPainter::new();
+            paint_widget_tree(&tree, root, &style, &mut painter);
+            let rect = painter
+                .commands()
+                .iter()
+                .find_map(|command| match command {
+                    QPaintCommand::DrawText { rect, text, .. } if text == "Hi" => Some(*rect),
+                    _ => None,
+                })
+                .expect("label text");
+            (rect.x, rect.y)
+        }
+
+        // 3×3 matrix + AlignCenter shorthand.
+        let cases = [
+            ("Qt::AlignLeft|Qt::AlignTop", "left_top"),
+            ("Qt::AlignHCenter|Qt::AlignTop", "hcenter_top"),
+            ("Qt::AlignRight|Qt::AlignTop", "right_top"),
+            ("Qt::AlignLeft|Qt::AlignVCenter", "left_vcenter"),
+            ("Qt::AlignHCenter|Qt::AlignVCenter", "hcenter_vcenter"),
+            ("Qt::AlignRight|Qt::AlignVCenter", "right_vcenter"),
+            ("Qt::AlignLeft|Qt::AlignBottom", "left_bottom"),
+            ("Qt::AlignHCenter|Qt::AlignBottom", "hcenter_bottom"),
+            ("Qt::AlignRight|Qt::AlignBottom", "right_bottom"),
+            ("Qt::AlignCenter", "align_center"),
+        ];
+        let mut got = BTreeMap::new();
+        for (flags, key) in cases {
+            got.insert(key, text_origin(flags));
+        }
+
+        let left_top = got["left_top"];
+        let hcenter_top = got["hcenter_top"];
+        let right_top = got["right_top"];
+        let left_vcenter = got["left_vcenter"];
+        let hcenter_vcenter = got["hcenter_vcenter"];
+        let right_vcenter = got["right_vcenter"];
+        let left_bottom = got["left_bottom"];
+        let hcenter_bottom = got["hcenter_bottom"];
+        let right_bottom = got["right_bottom"];
+        let align_center = got["align_center"];
+
+        // Horizontal ordering on each row.
+        for row in [
+            [left_top, hcenter_top, right_top],
+            [left_vcenter, hcenter_vcenter, right_vcenter],
+            [left_bottom, hcenter_bottom, right_bottom],
+        ] {
+            assert!(
+                row[0].0 < row[1].0 && row[1].0 < row[2].0,
+                "expected left < hcenter < right, got {row:?}"
+            );
+        }
+        // Vertical ordering on each column.
+        for col in [
+            [left_top, left_vcenter, left_bottom],
+            [hcenter_top, hcenter_vcenter, hcenter_bottom],
+            [right_top, right_vcenter, right_bottom],
+        ] {
+            assert!(
+                col[0].1 < col[1].1 && col[1].1 < col[2].1,
+                "expected top < vcenter < bottom, got {col:?}"
+            );
+        }
+        // Qt::AlignCenter == HCenter|VCenter.
+        assert_eq!(align_center, hcenter_vcenter);
+        // Absolute anchors: top/left near origin, bottom near widget bottom.
+        assert!(left_top.0 < 2.0, "left x {}", left_top.0);
+        assert!(left_top.1 < 2.0, "top y {}", left_top.1);
+        assert!(left_bottom.1 > 70.0, "bottom y {}", left_bottom.1);
+        assert!(right_top.0 > 100.0, "right x {}", right_top.0);
+    }
+
+    #[test]
+    fn qss_border_image_emits_nine_textured_patches() {
+        let ui = r#"<ui version="4.0"><class>Dialog</class>
+ <widget class="QDialog" name="Dialog">
+  <property name="geometry"><rect><x>0</x><y>0</y><width>200</width><height>160</height></rect></property>
+  <widget class="QLabel" name="frame">
+   <property name="geometry"><rect><x>10</x><y>10</y><width>180</width><height>140</height></rect></property>
+   <property name="text"><string></string></property>
+   <property name="styleSheet"><string>QLabel { border-width: 52px; border-style: solid; border-color: transparent; border-image: url(qss/border-frame.png) 113 113 113 113 stretch stretch; }</string></property>
+  </widget>
+ </widget></ui>"#;
+        let (tree, root) = load_ui(ui).expect("loads ui");
+        let style = QFusionStyle::default();
+        let mut painter = QPainter::new();
+        paint_widget_tree(&tree, root, &style, &mut painter);
+
+        let patches = painter
+            .commands()
+            .iter()
+            .filter(|command| matches!(command, QPaintCommand::DrawPixmap { .. }))
+            .count();
+        // Center patch is fully transparent and skipped → 8 edge/corner draws.
+        assert_eq!(patches, 8, "expected 8 border-image patches, got {patches}");
     }
 
     #[test]

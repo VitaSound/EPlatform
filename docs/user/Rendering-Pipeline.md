@@ -84,9 +84,19 @@
 
 ## QSS (кратко)
 
-Поддерживается подмножество: цвета, состояния (`:hover`, `:pressed`, …), box model margin/padding, item-view селекторы, вертикальный `qlineargradient`, локальные `url(...)` / `border-image` (stretch 9-slice через `rqt::assets`).
+Поддерживается подмножество: цвета, состояния (`:hover`, `:pressed`, …), box model margin/padding, item-view селекторы, вертикальный `qlineargradient`, локальные `url(...)`.
 
-Нет: remote `http(s)` URL, полный CSS repeat/round/space для border-image.
+Картинки в QSS (как в [Qt Style Sheets Reference](https://doc.qt.io/qt-6/stylesheet-reference.html)):
+
+- **`background-image`** — исходный размер, **не** масштабируется.  
+  `background-repeat`: `repeat` (default) / `repeat-x` / `repeat-y` / `no-repeat`.  
+  `background-position`: `top`/`bottom`/`left`/`right`/`center` (default `top left`).
+- **`border-image`** — 9-slice «шкурка»: углы как есть; края `stretch`|`repeat`.  
+  Нужен `border-width` > 0 (ширина рамки = размер краёв на виджете). Рисуется поверх фона.
+
+Ассеты: `rqt::assets` (embedded + `client/assets/…`); для Qt offscreen — symlink `client/qss` → `assets/qss`.
+
+Нет: remote `http(s)` URL; `background-origin`/`clip`/`attachment`; полноценный CSS `round`/`space`.
 
 Актуальный enum-справочник: [[Paint Commands]] (генерируется из кода).
 
