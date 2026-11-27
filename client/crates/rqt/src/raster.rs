@@ -186,6 +186,15 @@ pub fn rasterize(
             QPaintCommand::StrokeRect { rect, width, color } => {
                 fill_rounded_border(&mut image, *rect, 0.0, *width, *color, clip);
             }
+            QPaintCommand::StrokeDashedRect {
+                rect,
+                width,
+                color,
+                dash,
+                gap,
+            } => {
+                stroke_dashed_rect(&mut image, *rect, *width, *color, *dash, *gap, clip);
+            }
             QPaintCommand::StrokeRoundedRect {
                 rect,
                 radius,
@@ -225,6 +234,20 @@ pub fn rasterize(
         }
     }
     image
+}
+
+fn stroke_dashed_rect(
+    image: &mut QRasterImage,
+    rect: QRectF,
+    width: f32,
+    color: QColor,
+    dash: f32,
+    gap: f32,
+    clip: Option<QRectF>,
+) {
+    for fragment in crate::render::expand_dashed_stroke_rect(rect, width, color, dash, gap) {
+        fill_rect(image, fragment.rect, fragment.color, clip);
+    }
 }
 
 fn fill_rounded_border(
@@ -717,6 +740,30 @@ mod tests {
         assert_eq!(image.pixel(0, 0), [255, 0, 0, 255]);
         assert_eq!(image.pixel(3, 3), [255, 0, 0, 255]);
         assert_eq!(image.pixel(4, 4), [0, 0, 0, 255]);
+    }
+
+    /// 32×32 contract: dashed focus ring paints alternating top-edge pixels.
+    #[test]
+    fn dashed_stroke_rect_32x32_contract() {
+        let image = rasterize(
+            &[QPaintCommand::StrokeDashedRect {
+                rect: QRectF::new(4.0, 4.0, 24.0, 24.0),
+                width: 1.0,
+                color: QColor::rgb(255, 255, 255),
+                dash: 1.0,
+                gap: 1.0,
+            }],
+            32,
+            32,
+            QColor::rgb(0, 0, 0),
+        );
+        assert_eq!(image.pixel(4, 4), [255, 255, 255, 255]);
+        assert_eq!(image.pixel(5, 4), [0, 0, 0, 255]);
+        assert_eq!(image.pixel(6, 4), [255, 255, 255, 255]);
+        assert_eq!(image.pixel(16, 16), [0, 0, 0, 255]);
+        // Interior clear; left edge continues the dash/gap cadence.
+        assert_eq!(image.pixel(4, 6), [255, 255, 255, 255]);
+        assert_eq!(image.pixel(4, 5), [0, 0, 0, 255]);
     }
 
     #[test]

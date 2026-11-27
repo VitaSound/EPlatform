@@ -1,6 +1,6 @@
 # 40 — QPainter path, dash pen, opacity
 
-Status: ready
+Status: done
 Priority: P2
 Depends-on: [05-render-primitive-lower.md]
 Blocks: []
@@ -40,10 +40,24 @@ Minimum path/arc support, dashed pens, and a coherent opacity stack for controls
 |------|--------|
 | gui.rs, render/, gfx.rs, raster.rs, paint focus | As needed |
 
+## Call sites (step 1)
+
+- `paint/focus.rs` `paint_dotted_rect` — button/check/radio focus (was 1×1 FillRect)
+- `paint/scroll.rs` list/tree current-row focus via `paint_dotted_rect`
+- Opacity already on `QPainter` state + draw_* alpha multiply; Save/Restore stacks it
+
+## Done
+
+- `QPainterPath` move/line/arc/close + `stroke_path`
+- `QPaintCommand::StrokeDashedRect` → `RenderPrimitive::DashedStroke`
+- GPU `ShapePrim` kind 5 (one SDF quad); CPU `expand_dashed_stroke_rect`
+- Focus/list/tree use dashed stroke (no 1×1 flood)
+- 32×32 raster contract + opacity save/restore test
+
 ## Tests / acceptance
 
-- [ ] Focus ring without 1×1 explosion
-- [ ] `cargo test`
+- [x] Focus ring without 1×1 explosion
+- [x] `cargo test`
 
 ## Agent handoff prompt (copy-paste)
 

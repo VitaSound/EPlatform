@@ -1157,14 +1157,35 @@ mod tests {
         let style = QFusionStyle::default();
         let mut painter = QPainter::new();
         paint_widget_tree(&tree, root, &style, &mut painter);
-        let dots = painter
+        let rings = painter
             .commands()
             .iter()
-            .filter(|command| matches!(command, QPaintCommand::FillRect { rect, .. }
-                if (rect.width - 1.0).abs() < 0.01 && (rect.height - 1.0).abs() < 0.01
-                    && rect.x >= text_x - 4.0 && rect.x <= text_x + metrics.horizontal_advance(text) + 4.0))
+            .filter(|command| {
+                matches!(
+                    command,
+                    QPaintCommand::StrokeDashedRect { rect, dash, gap, .. }
+                        if (*dash - 1.0).abs() < 0.01
+                            && (*gap - 1.0).abs() < 0.01
+                            && rect.x >= text_x - 4.0
+                            && rect.x <= text_x + metrics.horizontal_advance(text) + 4.0
+                )
+            })
             .count();
-        assert!(dots >= 8, "expected dotted focus rect, got {dots} dots");
+        assert_eq!(rings, 1, "expected one StrokeDashedRect focus ring");
+        let ones = painter
+            .commands()
+            .iter()
+            .filter(|command| {
+                matches!(
+                    command,
+                    QPaintCommand::FillRect { rect, .. }
+                        if (rect.width - 1.0).abs() < 0.01 && (rect.height - 1.0).abs() < 0.01
+                            && rect.x >= text_x - 4.0
+                            && rect.x <= text_x + metrics.horizontal_advance(text) + 4.0
+                )
+            })
+            .count();
+        assert_eq!(ones, 0, "focus ring must not emit 1×1 FillRect flood");
     }
 
     #[test]

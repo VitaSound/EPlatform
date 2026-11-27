@@ -2,6 +2,21 @@
 
 ## 2026-11-27
 
+### Волна: agent-plan 40 — QPainter path / dash pen / opacity
+
+- **Path.** Минимальный `QPainterPath` (move/line/arc/close) +
+  `stroke_path` → `DrawLine` (дуги тесселируются).
+- **Dash.** `StrokeDashedRect` / `RenderPrimitive::DashedStroke`;
+  `expand_dashed_stroke_rect` — span на dash (не 1×1 flood в MAX_RECTS);
+  GPU и CPU рисуют одни и те же pixel spans (SDF kind 5 оставлен, но
+  focus не через него — AA/clip сдвигал рамку вниз-вправо).
+- **Focus.** `paint_dotted_rect` → dashed stroke; симметричный inset 3px
+  по half-open frame (углы pinned); button/check/radio, list/tree.
+- **Opacity.** Save/Restore стек `set_opacity`; тест на stack + alpha.
+- **Тесты.** 32×32 raster contract; focus без 1×1 FillRect; symmetric
+  outer edges.
+- **План.** `docs/agent-plans/40-qpainter-path-pen.md` → Status: done.
+
 ### Fix: QToolBox Fusion header lines
 
 - **Paint.** Снова вызывается `paint_toolbox` (был закомментирован как

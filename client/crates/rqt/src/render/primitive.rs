@@ -22,6 +22,14 @@ pub enum RenderPrimitive {
         width: f32,
         color: QColor,
     },
+    /// Axis-aligned dashed stroke (one GPU SDF quad / CPU dash segments).
+    DashedStroke {
+        rect: QRectF,
+        width: f32,
+        color: QColor,
+        dash: f32,
+        gap: f32,
+    },
     Ellipse {
         rect: QRectF,
         /// `0` = filled; otherwise stroke width.

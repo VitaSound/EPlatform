@@ -39,9 +39,11 @@ fn fs(in: Out) -> @location(0) vec4f {
 }
 "#;
 
-/// SDF shapes: solid/rounded fill, linear gradient (+radius), ellipse, segment.
+/// SDF shapes: solid/rounded fill, linear gradient (+radius), ellipse, segment,
+/// dashed stroke rect.
 /// `params = (radius, stroke_width, kind, _)` where kind is
-/// 0=solid, 1=gradientH, 2=gradientV, 3=ellipse, 4=line (endpoints in color1).
+/// 0=solid, 1=gradientH, 2=gradientV, 3=ellipse, 4=line (endpoints in color1),
+/// 5=dashed stroke (dash/gap in color1.xy).
 const SHAPE_WGSL: &str = r#"
 struct Out {
     @builtin(position) pos: vec4f,
@@ -89,6 +91,28 @@ fn sd_segment(p: vec2f, a: vec2f, b: vec2f) -> f32 {
     return length(pa - ba * h);
 }
 
+/// Arc length along the rectangle perimeter (top→right→bottom→left).
+fn rect_outline_param(p: vec2f, b: vec2f) -> f32 {
+    let hw = max(b.x, 0.5);
+    let hh = max(b.y, 0.5);
+    let w = hw * 2.0;
+    let h = hh * 2.0;
+    let ax = abs(p.x) / hw;
+    let ay = abs(p.y) / hh;
+    if (ax > ay) {
+        let y_along = clamp(p.y + hh, 0.0, h);
+        if (p.x >= 0.0) {
+            return w + y_along;
+        }
+        return w + h + w + (h - y_along);
+    }
+    let x_along = clamp(p.x + hw, 0.0, w);
+    if (p.y < 0.0) {
+        return x_along;
+    }
+    return w + h + (w - x_along);
+}
+
 @fragment
 fn fs(in: Out) -> @location(0) vec4f {
     let radius = in.params.x;
@@ -97,10 +121,22 @@ fn fs(in: Out) -> @location(0) vec4f {
 
     var d: f32;
     var cover: f32;
-    if (kind > 3.5) {
+    if (kind > 3.5 && kind < 4.5) {
         // color1 = local endpoints (not a color). Capsule around the segment.
         d = sd_segment(in.local, in.color1.xy, in.color1.zw) - max(stroke, 1.0) * 0.5;
         cover = 1.0 - smoothstep(-0.75, 0.75, d);
+    } else if (kind > 4.5) {
+        d = sd_rounded_box(in.local, in.half_size, radius);
+        let outer = 1.0 - smoothstep(-0.75, 0.75, d);
+        let inner = 1.0 - smoothstep(-0.75, 0.75, d + max(stroke, 1.0));
+        cover = clamp(outer - inner, 0.0, 1.0);
+        let dash = max(in.color1.x, 1.0);
+        let gap = max(in.color1.y, 1.0);
+        let period = dash + gap;
+        let s = rect_outline_param(in.local, in.half_size);
+        if (period > 0.0 && (s - floor(s / period) * period) >= dash) {
+            cover = 0.0;
+        }
     } else {
         if (kind > 2.5) {
             d = sd_ellipse(in.local, in.half_size);
@@ -181,10 +217,11 @@ pub struct ShapePrim {
     pub radius: f32,
     /// `0` = filled; otherwise stroke width in logical px.
     pub stroke: f32,
-    /// 0 solid, 1 gradientH, 2 gradientV, 3 ellipse, 4 line segment.
+    /// 0 solid, 1 gradientH, 2 gradientV, 3 ellipse, 4 line segment, 5 dashed stroke.
     pub kind: u8,
     pub color0: [f32; 4],
-    /// Gradient end — or for `kind==4`, local endpoints `(ax,ay,bx,by)`.
+    /// Gradient end — or for `kind==4`, local endpoints `(ax,ay,bx,by)`;
+    /// for `kind==5`, `(dash, gap, _, _)`.
     pub color1: [f32; 4],
 }
 
@@ -281,6 +318,30 @@ impl ShapePrim {
             kind: 4,
             color0: color,
             color1: [from_x - cx, from_y - cy, to_x - cx, to_y - cy],
+        }
+    }
+
+    /// One dashed axis-aligned stroke rect (focus rings) — avoids 1×1 floods.
+    pub fn dashed_stroke(
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        width: f32,
+        color: [f32; 4],
+        dash: f32,
+        gap: f32,
+    ) -> Self {
+        Self {
+            x,
+            y,
+            w,
+            h,
+            radius: 0.0,
+            stroke: width.max(1.0),
+            kind: 5,
+            color0: color,
+            color1: [dash.max(1.0), gap.max(1.0), 0.0, 0.0],
         }
     }
 }
@@ -1388,13 +1449,20 @@ fn push_shape_quad(
     let y0 = 1.0 - y / surface_h * 2.0;
     let y1 = 1.0 - (y + h) / surface_h * 2.0;
     let c0 = color_linear(s.color0);
-    // kind 4 packs local endpoints into color1 — scale them, don't sRGB them.
+    // kind 4 packs local endpoints; kind 5 packs dash/gap — scale, don't sRGB.
     let c1 = if s.kind == 4 {
         [
             s.color1[0] * scale,
             s.color1[1] * scale,
             s.color1[2] * scale,
             s.color1[3] * scale,
+        ]
+    } else if s.kind == 5 {
+        [
+            s.color1[0] * scale,
+            s.color1[1] * scale,
+            0.0,
+            0.0,
         ]
     } else {
         color_linear(s.color1)

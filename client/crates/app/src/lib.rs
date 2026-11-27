@@ -3804,6 +3804,7 @@ fn append_paint_commands(
             command,
             QPaintCommand::FillRect { .. }
                 | QPaintCommand::StrokeRect { .. }
+                | QPaintCommand::StrokeDashedRect { .. }
                 | QPaintCommand::StrokeRoundedRect { .. }
                 | QPaintCommand::FillRoundedRect { .. }
                 | QPaintCommand::DrawLine { .. }
@@ -3952,6 +3953,24 @@ fn append_paint_commands(
                 flush_shape_batch(batches, &mut shapes);
                 flush_texture_batch(batches, &mut textures);
                 push_stroke_rect(&mut rects, clip, *rect, *width, *color);
+            }
+            QPaintCommand::StrokeDashedRect {
+                rect,
+                width,
+                color,
+                dash,
+                gap,
+            } => {
+                // Pixel spans (same as CPU raster) — SDF kind-5 AA + quad clip
+                // biased the ring toward bottom/right so top/left gaps looked larger.
+                flush_tri_batch(batches, &mut tris);
+                flush_shape_batch(batches, &mut shapes);
+                flush_texture_batch(batches, &mut textures);
+                for fragment in rqt::render::expand_dashed_stroke_rect(
+                    *rect, *width, *color, *dash, *gap,
+                ) {
+                    push_rect(&mut rects, clip, fragment.rect, fragment.color);
+                }
             }
             QPaintCommand::StrokeRoundedRect {
                 rect,
@@ -5817,6 +5836,14 @@ mod tests {
                                 ),
                                 width: shape.stroke,
                                 color: c0,
+                            });
+                        } else if shape.kind == 5 {
+                            commands.push(QPaintCommand::StrokeDashedRect {
+                                rect,
+                                width: shape.stroke,
+                                color: c0,
+                                dash: shape.color1[0],
+                                gap: shape.color1[1],
                             });
                         } else if shape.kind == 3 {
                             if shape.stroke > 0.0 {

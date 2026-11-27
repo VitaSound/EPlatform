@@ -678,6 +678,131 @@ impl QFontMetrics {
     }
 }
 
+/// Minimal `QPainterPath` subset: move/line/arc/close (no SVG / cubic engine).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct QPainterPath {
+    elements: Vec<QPainterPathElement>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum QPainterPathElement {
+    MoveTo(QPointF),
+    LineTo(QPointF),
+    /// Ellipse arc in `rect`; angles in degrees, Qt-style (0° = 3 o'clock, CCW).
+    ArcTo {
+        rect: QRectF,
+        start_angle: f32,
+        span_angle: f32,
+    },
+    Close,
+}
+
+impl QPainterPath {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn move_to(&mut self, point: QPointF) {
+        self.elements.push(QPainterPathElement::MoveTo(point));
+    }
+
+    pub fn line_to(&mut self, point: QPointF) {
+        self.elements.push(QPainterPathElement::LineTo(point));
+    }
+
+    pub fn arc_to(&mut self, rect: QRectF, start_angle: f32, span_angle: f32) {
+        self.elements.push(QPainterPathElement::ArcTo {
+            rect,
+            start_angle,
+            span_angle,
+        });
+    }
+
+    pub fn close(&mut self) {
+        self.elements.push(QPainterPathElement::Close);
+    }
+
+    pub fn elements(&self) -> &[QPainterPathElement] {
+        &self.elements
+    }
+
+    /// Flatten to solid stroke segments (arcs → polylines).
+    pub fn stroke_segments(&self, arc_steps_per_90: u32) -> Vec<(QPointF, QPointF)> {
+        let steps_per_90 = arc_steps_per_90.max(1);
+        let mut out = Vec::new();
+        let mut start: Option<QPointF> = None;
+        let mut current: Option<QPointF> = None;
+        for el in &self.elements {
+            match el {
+                QPainterPathElement::MoveTo(p) => {
+                    start = Some(*p);
+                    current = Some(*p);
+                }
+                QPainterPathElement::LineTo(p) => {
+                    if let Some(from) = current {
+                        out.push((from, *p));
+                    }
+                    current = Some(*p);
+                }
+                QPainterPathElement::ArcTo {
+                    rect,
+                    start_angle,
+                    span_angle,
+                } => {
+                    let points = sample_arc(*rect, *start_angle, *span_angle, steps_per_90);
+                    if let Some(first) = points.first().copied() {
+                        if let Some(from) = current {
+                            out.push((from, first));
+                        } else {
+                            start = Some(first);
+                        }
+                        for window in points.windows(2) {
+                            out.push((window[0], window[1]));
+                        }
+                        current = points.last().copied();
+                    }
+                }
+                QPainterPathElement::Close => {
+                    if let (Some(from), Some(to)) = (current, start) {
+                        if (from.x - to.x).abs() > f32::EPSILON
+                            || (from.y - to.y).abs() > f32::EPSILON
+                        {
+                            out.push((from, to));
+                        }
+                    }
+                    current = start;
+                }
+            }
+        }
+        out
+    }
+}
+
+fn sample_arc(
+    rect: QRectF,
+    start_angle: f32,
+    span_angle: f32,
+    steps_per_90: u32,
+) -> Vec<QPointF> {
+    if rect.width <= 0.0 || rect.height <= 0.0 || span_angle.abs() < f32::EPSILON {
+        return Vec::new();
+    }
+    let cx = rect.x + rect.width * 0.5;
+    let cy = rect.y + rect.height * 0.5;
+    let rx = rect.width * 0.5;
+    let ry = rect.height * 0.5;
+    let steps = ((span_angle.abs() / 90.0) * steps_per_90 as f32).ceil().max(1.0) as u32;
+    let mut points = Vec::with_capacity(steps as usize + 1);
+    for i in 0..=steps {
+        let t = i as f32 / steps as f32;
+        let deg = start_angle + span_angle * t;
+        let rad = deg.to_radians();
+        // Qt: 0° at 3 o'clock, CCW — x = cos, y = -sin in screen Y-down.
+        points.push(QPointF::new(cx + rx * rad.cos(), cy - ry * rad.sin()));
+    }
+    points
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum QPaintCommand {
     Save,
@@ -697,6 +822,14 @@ pub enum QPaintCommand {
         rect: QRectF,
         width: f32,
         color: QColor,
+    },
+    /// Axis-aligned dashed stroke (focus rings). `dash`/`gap` in logical px.
+    StrokeDashedRect {
+        rect: QRectF,
+        width: f32,
+        color: QColor,
+        dash: f32,
+        gap: f32,
     },
     StrokeRoundedRect {
         rect: QRectF,
@@ -874,6 +1007,24 @@ impl QPainter {
         });
     }
 
+    /// Qt `QPen` DotLine / DashLine-style axis-aligned rect (focus rings).
+    pub fn stroke_dashed_rect(
+        &mut self,
+        rect: QRectF,
+        width: f32,
+        color: QColor,
+        dash: f32,
+        gap: f32,
+    ) {
+        self.commands.push(QPaintCommand::StrokeDashedRect {
+            rect,
+            width,
+            color: color.with_alpha(color.alpha * self.current.opacity),
+            dash: dash.max(1.0),
+            gap: gap.max(1.0),
+        });
+    }
+
     pub fn stroke_rounded_rect(&mut self, rect: QRectF, radius: f32, width: f32, color: QColor) {
         self.commands.push(QPaintCommand::StrokeRoundedRect {
             rect,
@@ -881,6 +1032,13 @@ impl QPainter {
             width,
             color: color.with_alpha(color.alpha * self.current.opacity),
         });
+    }
+
+    /// Stroke a path as solid segments (arcs tessellated). Opacity applies.
+    pub fn stroke_path(&mut self, path: &QPainterPath, width: f32, color: QColor) {
+        for (from, to) in path.stroke_segments(8) {
+            self.draw_line(from, to, width, color);
+        }
     }
 
     pub fn fill_rounded_rect(&mut self, rect: QRectF, radius: f32, color: QColor) {
@@ -1092,5 +1250,48 @@ mod tests {
         }
         assert_eq!(painter.commands()[5], QPaintCommand::Restore);
         assert_eq!(painter.opacity(), 1.0);
+    }
+
+    #[test]
+    fn painter_opacity_stacks_via_save_restore() {
+        let mut painter = QPainter::new();
+        painter.set_opacity(0.8);
+        painter.save();
+        painter.set_opacity(0.25);
+        painter.fill_rect(QRectF::new(0.0, 0.0, 1.0, 1.0), QColor::rgb(0, 0, 0));
+        match &painter.commands()[1] {
+            QPaintCommand::FillRect { color, .. } => {
+                assert!((color.alpha - 0.25).abs() < 1e-6);
+            }
+            other => panic!("expected FillRect, got {other:?}"),
+        }
+        painter.restore();
+        assert!((painter.opacity() - 0.8).abs() < 1e-6);
+        painter.stroke_dashed_rect(
+            QRectF::new(0.0, 0.0, 10.0, 10.0),
+            1.0,
+            QColor::rgb(0, 0, 0),
+            1.0,
+            1.0,
+        );
+        match painter.commands().last() {
+            Some(QPaintCommand::StrokeDashedRect { color, dash, gap, .. }) => {
+                assert!((color.alpha - 0.8).abs() < 1e-6);
+                assert_eq!((*dash, *gap), (1.0, 1.0));
+            }
+            other => panic!("expected StrokeDashedRect, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn painter_path_flattens_line_and_arc() {
+        let mut path = QPainterPath::new();
+        path.move_to(QPointF::new(0.0, 0.0));
+        path.line_to(QPointF::new(10.0, 0.0));
+        path.arc_to(QRectF::new(5.0, -5.0, 10.0, 10.0), 0.0, 90.0);
+        path.close();
+        let segs = path.stroke_segments(4);
+        assert!(segs.len() >= 3);
+        assert_eq!(segs[0], (QPointF::new(0.0, 0.0), QPointF::new(10.0, 0.0)));
     }
 }

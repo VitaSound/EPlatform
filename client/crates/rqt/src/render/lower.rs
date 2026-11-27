@@ -53,6 +53,19 @@ pub fn lower_commands(commands: &[QPaintCommand], _scale: f32) -> Vec<RenderPrim
                 width: *width,
                 color: *color,
             }),
+            QPaintCommand::StrokeDashedRect {
+                rect,
+                width,
+                color,
+                dash,
+                gap,
+            } => out.push(RenderPrimitive::DashedStroke {
+                rect: *rect,
+                width: *width,
+                color: *color,
+                dash: *dash,
+                gap: *gap,
+            }),
             QPaintCommand::FillEllipse { rect, color } => out.push(RenderPrimitive::Ellipse {
                 rect: *rect,
                 stroke: 0.0,
@@ -271,6 +284,85 @@ fn expand_stroke_rect_border(rect: QRectF, width: f32, color: QColor) -> Vec<Low
     ]
 }
 
+/// Dashed axis-aligned border as dash-length spans (not 1×1 per pixel).
+///
+/// Focus rings previously flooded `FillRect` 1×1 dots into the solid-rect
+/// GPU batch (`MAX_RECTS`). Emit one span per dash instead.
+///
+/// Geometry is half-open `[left,right)×[top,bottom)`: strokes sit on the first
+/// and last **interior** pixels so top/left gaps match bottom/right (the old
+/// `floor(right)` / `floor(bottom)` 1×1 loop painted the exterior edge and
+/// looked shifted down-right).
+pub fn expand_dashed_stroke_rect(
+    rect: QRectF,
+    width: f32,
+    color: QColor,
+    dash: f32,
+    gap: f32,
+) -> Vec<LoweredRect> {
+    let left = rect.left().round();
+    let top = rect.top().round();
+    let right = rect.right().round();
+    let bottom = rect.bottom().round();
+    if right <= left || bottom <= top {
+        return Vec::new();
+    }
+    let stroke = width.round().max(1.0);
+    let dash = dash.round().max(1.0);
+    let gap = gap.round().max(1.0);
+    let period = dash + gap;
+    let last_x = right - stroke;
+    let last_y = bottom - stroke;
+    if last_x < left || last_y < top {
+        return Vec::new();
+    }
+    let mut rects = Vec::new();
+    let mut push = |r: QRectF| {
+        if r.width > 0.0 && r.height > 0.0 {
+            rects.push(LoweredRect { rect: r, color });
+        }
+    };
+
+    // Top & bottom, including both corners (pin last column if period misses it).
+    for x in dash_stops(left, last_x, period) {
+        let end = (x + dash).min(last_x + stroke);
+        push(QRectF::new(x, top, end - x, stroke));
+        push(QRectF::new(x, last_y, end - x, stroke));
+    }
+
+    // Left & right between the corner rows already covered by horizontals.
+    for y in dash_stops(top + period, last_y - period, period) {
+        let end = (y + dash).min(last_y);
+        if end > y {
+            push(QRectF::new(left, y, stroke, end - y));
+            push(QRectF::new(last_x, y, stroke, end - y));
+        }
+    }
+    rects
+}
+
+/// Dash origins from `first` through `last` inclusive, stepping `period`.
+/// Always includes `last` so both ends of an edge get a dash (symmetric frame).
+fn dash_stops(first: f32, last: f32, period: f32) -> Vec<f32> {
+    if last < first {
+        return Vec::new();
+    }
+    let period = period.max(1.0);
+    let mut out = Vec::new();
+    let mut t = first;
+    while t <= last + f32::EPSILON {
+        out.push(t);
+        t += period;
+    }
+    if out
+        .last()
+        .is_none_or(|v| (*v - last).abs() > f32::EPSILON)
+    {
+        out.push(last);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -300,5 +392,49 @@ mod tests {
         let end = QColor::rgba8(255, 255, 255, 255);
         let bands = expand_linear_gradient(rect, 4.0, start, end, true, 1.0);
         assert_eq!(bands.len(), 80);
+    }
+
+    #[test]
+    fn dashed_stroke_is_linear_in_perimeter_not_area() {
+        let rect = QRectF::new(0.0, 0.0, 100.0, 40.0);
+        let fragments =
+            expand_dashed_stroke_rect(rect, 1.0, QColor::rgba8(0, 0, 0, 255), 1.0, 1.0);
+        let perimeter = ((rect.width + rect.height) * 2.0) as usize;
+        assert!(
+            fragments.len() <= perimeter,
+            "got {} dash spans for perimeter ~{perimeter}",
+            fragments.len()
+        );
+        assert!(fragments
+            .iter()
+            .all(|f| f.rect.width >= 1.0 - f32::EPSILON || f.rect.height >= 1.0 - f32::EPSILON));
+    }
+
+    #[test]
+    fn dashed_stroke_keeps_symmetric_outer_edges() {
+        let rect = QRectF::new(10.0, 20.0, 50.0, 30.0);
+        let fragments =
+            expand_dashed_stroke_rect(rect, 1.0, QColor::rgba8(0, 0, 0, 255), 1.0, 1.0);
+        // Outer edges sit on first/last interior pixels of the half-open rect.
+        assert!(fragments.iter().any(|f| (f.rect.x - 10.0).abs() < 0.01 && (f.rect.y - 20.0).abs() < 0.01));
+        assert!(fragments.iter().any(|f| (f.rect.x - 59.0).abs() < 0.01 && (f.rect.y - 20.0).abs() < 0.01));
+        assert!(fragments.iter().any(|f| (f.rect.x - 10.0).abs() < 0.01 && (f.rect.y - 49.0).abs() < 0.01));
+        assert!(fragments.iter().any(|f| (f.rect.x - 59.0).abs() < 0.01 && (f.rect.y - 49.0).abs() < 0.01));
+        assert!(!fragments.iter().any(|f| f.rect.right() > 60.0 + f32::EPSILON));
+        assert!(!fragments.iter().any(|f| f.rect.bottom() > 50.0 + f32::EPSILON));
+    }
+
+    #[test]
+    fn lower_commands_maps_dashed_stroke() {
+        let commands = [crate::gui::QPaintCommand::StrokeDashedRect {
+            rect: QRectF::new(1.0, 2.0, 10.0, 8.0),
+            width: 1.0,
+            color: QColor::rgba8(0, 0, 0, 180),
+            dash: 1.0,
+            gap: 1.0,
+        }];
+        let prims = lower_commands(&commands, 1.0);
+        assert_eq!(prims.len(), 1);
+        assert!(matches!(prims[0], RenderPrimitive::DashedStroke { .. }));
     }
 }

@@ -29,8 +29,8 @@ Related:
 | `.ui` / Widgets | `form-xml` + `QWidgetTree` | Strong |
 | `QLayout` | `relayout` | Grid stretch not supported (product decision) |
 | `QStyle` Fusion | `QFusionStyle` | Partial; indicators incomplete |
-| `QPainter` | `QPaintCommand[]` | Good IR; GPU execution weak |
-| Paint engine / RHI | `append_paint_commands` + `Gfx` (wgpu) | Historically solid-rect simulation |
+| `QPainter` | `QPaintCommand[]` + path/dash subset | Path move/line/arc; `StrokeDashedRect` |
+| Paint engine / RHI | `append_paint_commands` + `Gfx` (wgpu) | SDF shapes incl. dashed focus (kind 5) |
 | QSS | `qss` module | No `url()`/`border-image` yet → plan 41 |
 | Window / DPR | winit + canvas geometry | Own contract — see geometry doc |
 

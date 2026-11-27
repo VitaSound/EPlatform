@@ -21,14 +21,16 @@ pub(crate) fn paint_focus_indicators(widget: &QWidget, painter: &mut QPainter, q
     match widget.class_name.as_str() {
         "QPushButton" | "QToolButton" => {
             let frame = qss_frame_rect(widget, qss);
+            // Pixel-align a symmetric inset: same gap on all four sides of the
+            // half-open frame (avoid floor(right)/floor(bottom) exterior bias).
+            let inset = 3.0;
+            let left = (frame.left() + inset).round();
+            let top = (frame.top() + inset).round();
+            let right = (frame.right() - inset).round();
+            let bottom = (frame.bottom() - inset).round();
             paint_dotted_rect(
                 painter,
-                QRectF::new(
-                    frame.x + 3.0,
-                    frame.y + 3.0,
-                    (frame.width - 6.0).max(1.0),
-                    (frame.height - 6.0).max(1.0),
-                ),
+                QRectF::new(left, top, (right - left).max(1.0), (bottom - top).max(1.0)),
                 color,
             );
         }
@@ -61,25 +63,10 @@ pub(crate) fn paint_focus_indicators(widget: &QWidget, painter: &mut QPainter, q
     }
 }
 
+/// Qt DotLine focus rect — one `StrokeDashedRect` (not a 1×1 FillRect flood).
 pub(crate) fn paint_dotted_rect(painter: &mut QPainter, rect: QRectF, color: QColor) {
-    let left = rect.x.floor();
-    let top = rect.y.floor();
-    let right = rect.right().floor();
-    let bottom = rect.bottom().floor();
-    if right <= left || bottom <= top {
+    if rect.width <= 0.0 || rect.height <= 0.0 {
         return;
     }
-    let mut x = left;
-    while x <= right {
-        painter.fill_rect(QRectF::new(x, top, 1.0, 1.0), color);
-        painter.fill_rect(QRectF::new(x, bottom, 1.0, 1.0), color);
-        x += 2.0;
-    }
-    let mut y = top + 2.0;
-    while y < bottom {
-        painter.fill_rect(QRectF::new(left, y, 1.0, 1.0), color);
-        painter.fill_rect(QRectF::new(right, y, 1.0, 1.0), color);
-        y += 2.0;
-    }
+    painter.stroke_dashed_rect(rect, 1.0, color, 1.0, 1.0);
 }
-
