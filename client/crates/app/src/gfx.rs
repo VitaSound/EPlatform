@@ -1125,32 +1125,8 @@ impl Gfx {
         let surf_w_u = self.config.width.max(1);
         let surf_h_u = self.config.height.max(1);
         let to_scissor = |rect: Option<[f32; 4]>| -> Built {
-            match rect {
-                None => Built::Scissor {
-                    x: 0,
-                    y: 0,
-                    w: surf_w_u,
-                    h: surf_h_u,
-                },
-                Some(rect) => {
-                    let x = (rect[0] * scale).floor().max(0.0) as u32;
-                    let y = (rect[1] * scale).floor().max(0.0) as u32;
-                    let right = ((rect[0] + rect[2].max(0.0)) * scale)
-                        .ceil()
-                        .min(surface_w) as u32;
-                    let bottom = ((rect[1] + rect[3].max(0.0)) * scale)
-                        .ceil()
-                        .min(surface_h) as u32;
-                    let w = right.saturating_sub(x).min(surf_w_u.saturating_sub(x));
-                    let h = bottom.saturating_sub(y).min(surf_h_u.saturating_sub(y));
-                    Built::Scissor {
-                        x,
-                        y,
-                        w: w.max(1),
-                        h: h.max(1),
-                    }
-                }
-            }
+            let (x, y, w, h) = clamp_scissor(rect, scale, surf_w_u, surf_h_u);
+            Built::Scissor { x, y, w, h }
         };
 
         for batch in batches {
@@ -1728,10 +1704,87 @@ pub(crate) fn parse_texthd_query(search: &str) -> bool {
     false
 }
 
+/// Framebuffer scissor `[x, y, w, h]` for a logical clip rect, always
+/// clamped into the surface.
+///
+/// A clip rect may legitimately sit fully outside the surface (e.g. a
+/// tiled MDI window whose minimum size overflows the tile cell and the
+/// viewport: `y = 680` on a 657px-high canvas). wgpu rejects any
+/// `set_scissor_rect` that is not contained in the render area — the
+/// command buffer becomes invalid, every later `Queue.submit` drops the
+/// frame and the canvas stays black. Clamp `x`/`y` into the surface first
+/// so `x + w <= surf_w` / `y + h <= surf_h` always hold; a fully
+/// off-screen rect degenerates to a single edge texel (the geometry drawn
+/// under it is off-screen anyway).
+fn clamp_scissor(
+    rect: Option<[f32; 4]>,
+    scale: f32,
+    surf_w: u32,
+    surf_h: u32,
+) -> (u32, u32, u32, u32) {
+    let (surf_w_u, surf_h_u) = (surf_w.max(1), surf_h.max(1));
+    let surface_w = surf_w_u as f32;
+    let surface_h = surf_h_u as f32;
+    let Some(rect) = rect else {
+        return (0, 0, surf_w_u, surf_h_u);
+    };
+    let x = (rect[0] * scale)
+        .floor()
+        .max(0.0)
+        .min(surface_w - 1.0) as u32;
+    let y = (rect[1] * scale)
+        .floor()
+        .max(0.0)
+        .min(surface_h - 1.0) as u32;
+    let right = ((rect[0] + rect[2].max(0.0)) * scale)
+        .ceil()
+        .min(surface_w) as u32;
+    let bottom = ((rect[1] + rect[3].max(0.0)) * scale)
+        .ceil()
+        .min(surface_h) as u32;
+    let w = right.saturating_sub(x).min(surf_w_u.saturating_sub(x));
+    let h = bottom.saturating_sub(y).min(surf_h_u.saturating_sub(y));
+    (x, y, w.max(1), h.max(1))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    #[test]
+    fn scissor_offscreen_rect_stays_inside_surface() {
+        // The black-screen repro: tiled window below the viewport emitted
+        // y=680, h=1 on a 657px-high surface → wgpu validation error →
+        // invalid command buffer → every frame dropped.
+        let (x, y, w, h) = clamp_scissor(Some([194.0, 680.0, 42.0, 20.0]), 1.0, 1280, 657);
+        assert!(x + w <= 1280, "x+w outside surface: {x}+{w}");
+        assert!(y + h <= 657, "y+h outside surface: {y}+{h}");
+        assert!(w >= 1 && h >= 1);
+    }
+
+    #[test]
+    fn scissor_onscreen_rect_is_unchanged() {
+        assert_eq!(
+            clamp_scissor(Some([10.0, 20.0, 100.0, 50.0]), 1.0, 1280, 657),
+            (10, 20, 100, 50)
+        );
+        assert_eq!(clamp_scissor(None, 1.0, 1280, 657), (0, 0, 1280, 657));
+    }
+
+    #[test]
+    fn scissor_partial_overflow_clips_to_surface() {
+        let (x, y, w, h) = clamp_scissor(Some([1200.0, 600.0, 200.0, 200.0]), 1.0, 1280, 657);
+        assert_eq!((x + w, y + h), (1280, 657));
+
+        // Fully outside on the left/top: degenerates to a valid 1px texel.
+        let (x, y, w, h) = clamp_scissor(Some([-50.0, -50.0, 20.0, 20.0]), 1.0, 1280, 657);
+        assert_eq!((x, y), (0, 0));
+        assert!(w >= 1 && h >= 1);
+
+        // DPR-scaled surface keeps the same guarantees.
+        let (x, y, w, h) = clamp_scissor(Some([194.0, 680.0, 42.0, 20.0]), 2.0, 2560, 1314);
+        assert!(x + w <= 2560 && y + h <= 1314);
+    }
     #[test]
     fn texthd_query_parses_flag() {
         assert!(parse_texthd_query("?texthd=1"));
