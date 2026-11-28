@@ -110,12 +110,17 @@
         почти сразу (≈0–2 с)» — режут рукопожатие Upgrade. «OPEN был, CLOSE через
         20–60 с» — убивают уже открытое соединение. Код close 1006 = обрыв без
         чистого завершения (типично для DPI).<br />
-        ?backend=wss://host/socket/websocket — переопределить адрес.
+        ?hb=2 — heartbeat каждые 2 с; ?retry=3 — автопереподключения после
+        обрыва (видна повторяемость ~11 с). ?backend=wss://host/socket/websocket —
+        переопределить адрес.
       </div>
     </div>
     <script>
       (function () {
         var q = new URLSearchParams(location.search);
+        var HB = Math.max(1, parseFloat(q.get("hb")) || 10); // сек между heartbeat
+        var RETRY = Math.min(10, parseInt(q.get("retry"), 10) || 0); // автопереподключений
+        var retriesLeft = RETRY;
         var BACKEND =
           q.get("backend") ||
           (location.protocol === "https:" ? "wss:" : "ws:") +
@@ -130,6 +135,10 @@
           navigator.userAgent +
           "\n" +
           location.href +
+          "\nheartbeat каждые " +
+          HB +
+          " с, автоповторов: " +
+          RETRY +
           "\nвремя: " +
           new Date().toISOString();
 
@@ -192,12 +201,12 @@
         var run = 0;
         function testOurs() {
           run++;
-          var myRun = run;
+          retriesLeft = RETRY;
           logEl.textContent = "";
           verdict("", "…выполняется тест…");
           log("info", "Цель: " + BACKEND);
           testHttp().then(function () {
-            wsTest(BACKEND, true, myRun);
+            wsTest(BACKEND, true, run);
           });
         }
 
@@ -310,7 +319,7 @@
                     } catch (e) {
                       log("err", "heartbeat #" + hb + " send failed: " + e);
                     }
-                  }, 10000);
+                  }, HB * 1000);
                   handled = true;
                 }
               } catch (e) {}
@@ -379,6 +388,20 @@
                     " ms. ") +
                   "JOIN был получен — смотрите таймкоды выше."
               );
+            }
+            if (ev.code !== 1000 && retriesLeft > 0 && phoenixJoin) {
+              retriesLeft--;
+              log(
+                "warn",
+                "→ автопереподключение через 1 с (осталось попыток: " +
+                  retriesLeft +
+                  ")"
+              );
+              setTimeout(function () {
+                log("info", "--- повторная попытка ---");
+                testHttp();
+                wsTest(BACKEND, true, ++run);
+              }, 1000);
             }
           };
         }
