@@ -27,12 +27,13 @@
         color: #8b93a1;
         font-size: 12px;
         word-break: break-all;
+        white-space: pre-wrap;
         margin-bottom: 14px;
       }
       #verdict {
         padding: 12px 14px;
         border-radius: 8px;
-        font-size: 16px;
+        font-size: 15px;
         font-weight: 600;
         margin-bottom: 14px;
         background: #2b2f36;
@@ -48,6 +49,11 @@
         background: #3a1512;
         border-color: #b3392b;
         color: #ff9c8f;
+      }
+      #verdict.warn {
+        background: #3a3012;
+        border-color: #a08b3a;
+        color: #ffd479;
       }
       #log {
         border: 1px solid #33383f;
@@ -69,6 +75,12 @@
       }
       .l-info {
         color: #9fb4d0;
+      }
+      .l-sep {
+        color: #6f7787;
+        border-top: 1px dashed #3a4049;
+        margin-top: 8px;
+        padding-top: 8px;
       }
       .row {
         margin-top: 12px;
@@ -102,43 +114,51 @@
       <div id="verdict">…выполняется тест…</div>
       <div id="log"></div>
       <div class="row">
-        <button id="again">↻ Повторить наш wss</button>
+        <button id="again">↻ Повторить серию</button>
         <button id="foreign">Тест чужого wss (echo.websocket.org)</button>
       </div>
       <div class="hint">
-        Интерпретация: «OPEN + JOIN OK» — канал полностью работает. «ERROR/CLOSE
-        почти сразу (≈0–2 с)» — режут рукопожатие Upgrade. «OPEN был, CLOSE через
-        20–60 с» — убивают уже открытое соединение. Код close 1006 = обрыв без
-        чистого завершения (типично для DPI).<br />
-        ?hb=2 — heartbeat каждые 2 с; ?retry=3 — автопереподключения после
-        обрыва (видна повторяемость ~11 с). ?backend=wss://host/socket/websocket —
-        переопределить адрес.
+        Интерпретация: «OPEN + JOIN OK» — канал работает. Обрыв
+        <b>code=1006</b> = резкий обрыв без чистого завершения (типично для
+        middlebox/DPI). Смотрите время обрыва: ≈одинаковое в каждой попытке →
+        таймерный киллер (~N с); разное/только иногда → интермиттиентная
+        блокировка. Если «выжило ≥ hold» — соединение живёт стабильно.<br />
+        Параметры: <b>?loop=5</b> — серия из 5 попыток (итог в конце);
+        <b>?hb=2</b> — heartbeat каждые 2 с; <b>?hold=45</b> — сколько секунд
+        держать «здоровое» соединение перед успехом; ?backend= — другой адрес.
       </div>
     </div>
     <script>
       (function () {
         var q = new URLSearchParams(location.search);
         var HB = Math.max(1, parseFloat(q.get("hb")) || 10); // сек между heartbeat
-        var RETRY = Math.min(10, parseInt(q.get("retry"), 10) || 0); // автопереподключений
-        var retriesLeft = RETRY;
+        var LOOP = Math.min(20, parseInt(q.get("loop") || q.get("retry"), 10) || 1);
+        var HOLD = Math.min(300, parseFloat(q.get("hold")) || 45); // сек «здоровья»
         var BACKEND =
           q.get("backend") ||
           (location.protocol === "https:" ? "wss:" : "ws:") +
             "//" +
             location.host +
             "/socket/websocket";
+
         var logEl = document.getElementById("log");
         var verdictEl = document.getElementById("verdict");
         var t0 = performance.now();
+        var stats = [];
+        var attemptNo = 0;
+        var current = null; // {ws, hbTimer, timeout, finished, joined, openAt, joinAt}
 
         document.getElementById("meta").textContent =
           navigator.userAgent +
           "\n" +
           location.href +
-          "\nheartbeat каждые " +
+          "\nloop=" +
+          LOOP +
+          ", hb=" +
           HB +
-          " с, автоповторов: " +
-          RETRY +
+          " с, hold=" +
+          HOLD +
+          " с" +
           "\nвремя: " +
           new Date().toISOString();
 
@@ -169,12 +189,16 @@
             "] " +
             msg;
           logEl.appendChild(line);
-          line.scrollIntoView && line.scrollIntoView({ block: "nearest" });
+          while (logEl.children.length > 900) logEl.removeChild(logEl.firstChild);
         }
 
         function verdict(cls, text) {
           verdictEl.className = cls;
           verdictEl.textContent = text;
+        }
+
+        function sec(ms) {
+          return (ms / 1000).toFixed(1) + " с";
         }
 
         function testHttp() {
@@ -188,8 +212,7 @@
                     r.status +
                     " за " +
                     Math.round(performance.now() - s) +
-                    " ms: " +
-                    t.slice(0, 80)
+                    " ms"
                 );
               });
             })
@@ -198,71 +221,194 @@
             });
         }
 
-        var run = 0;
-        function testOurs() {
-          run++;
-          retriesLeft = RETRY;
-          logEl.textContent = "";
-          verdict("", "…выполняется тест…");
-          log("info", "Цель: " + BACKEND);
-          testHttp().then(function () {
-            wsTest(BACKEND, true, run);
-          });
+        // -- серия попыток ----------------------------------------------------
+
+        function startLoop() {
+          stats = [];
+          attemptNo = 0;
+          log("sep", "===== НОВАЯ СЕРИЯ: " + LOOP + " попыток =====");
+          verdict("", "…серия: попытка 1/" + LOOP + "…");
+          nextAttempt();
         }
 
-        function wsTest(url, phoenixJoin, myRun) {
-          var s = performance.now();
-          var joined = false;
-          var hb = 0;
-          var hbTimer = null;
-          var finished = false;
-          var ws;
-          if (phoenixJoin && url.indexOf("vsn=") === -1) {
+        function nextAttempt() {
+          if (attemptNo >= LOOP) {
+            summarize();
+            return;
+          }
+          attemptNo++;
+          verdict("", "…попытка " + attemptNo + "/" + LOOP + ": подключение…");
+          log("sep", "--- попытка " + attemptNo + "/" + LOOP + " ---");
+          testHttp().then(runAttempt);
+        }
+
+        function finishAttempt(res) {
+          if (current) {
+            clearTimeout(current.timeout);
+            clearTimeout(current.holdTimer);
+            if (current.hbTimer) clearInterval(current.hbTimer);
+            var ws = current.ws;
+            current = null;
+            try {
+              ws.close(1000, "diag done");
+            } catch (e) {}
+          }
+          res.attempt = attemptNo;
+          stats.push(res);
+          verdict(
+            res.survived ? "ok" : "bad",
+            "попытка " +
+              attemptNo +
+              "/" +
+              LOOP +
+              ": " +
+              (res.survived
+                ? "ПРОЖИЛА " + HOLD + " с ✅"
+                : res.opened
+                  ? (res.joined ? "OPEN+JOIN ✅, " : "OPEN ✅, JOIN нет, ") +
+                    "обрыв через " +
+                    sec(res.dieMs) +
+                    " после OPEN, code=" +
+                    res.code
+                  : "OPEN не состоялся: " + res.note)
+          );
+          if (stats.length < LOOP) {
+            setTimeout(nextAttempt, 1500);
+          } else {
+            setTimeout(summarize, 300);
+          }
+        }
+
+        function summarize() {
+          var n = stats.length;
+          var opened = stats.filter(function (r) {
+            return r.opened;
+          }).length;
+          var joined = stats.filter(function (r) {
+            return r.joined;
+          }).length;
+          var survived = stats.filter(function (r) {
+            return r.survived;
+          }).length;
+          var dies = stats
+            .filter(function (r) {
+              return r.opened && !r.survived;
+            })
+            .map(function (r) {
+              return sec(r.dieMs) + "(code=" + r.code + ")";
+            });
+          var lines = stats
+            .map(function (r) {
+              return (
+                "  #" +
+                r.attempt +
+                ": " +
+                (r.survived
+                  ? "выжила ≥" + HOLD + " с"
+                  : r.opened
+                    ? "OPEN " +
+                      r.openMs +
+                      " ms" +
+                      (r.joined ? ", JOIN " + r.joinMs + " ms" : ", JOIN нет") +
+                      ", обрыв через " +
+                      sec(r.dieMs) +
+                      ", code=" +
+                      r.code +
+                      (r.wasClean ? " clean" : " НЕ clean")
+                    : "не открылась (" + r.note + ")")
+              );
+            })
+            .join("\n");
+          var summary =
+            "ИТОГО: " +
+            n +
+            " попыток | OPEN " +
+            opened +
+            "/" +
+            n +
+            " | JOIN " +
+            joined +
+            "/" +
+            n +
+            " | выжило ≥" +
+            HOLD +
+            " с: " +
+            survived +
+            "/" +
+            n +
+            (dies.length
+              ? "\nобрывы: " + dies.join(", ")
+              : "\nобрывов не было");
+          log("sep", summary + "\n" + lines);
+          verdict(
+            survived === n ? "ok" : opened > 0 && survived > 0 ? "warn" : "bad",
+            summary
+          );
+        }
+
+        // -- одна попытка (наш backend) ---------------------------------------
+
+        function runAttempt() {
+          var url = BACKEND;
+          if (url.indexOf("vsn=") === -1) {
             url += (url.indexOf("?") === -1 ? "?" : "&") + "vsn=2.0.0";
           }
+          var s = performance.now();
+          var rec = {
+            attempt: attemptNo,
+            opened: false,
+            joined: false,
+            survived: false,
+            openMs: 0,
+            joinMs: 0,
+            dieMs: 0,
+            code: null,
+            wasClean: false,
+            note: "",
+          };
+          var ws;
           log("info", "WS: new WebSocket(" + url + ")");
           try {
             ws = new WebSocket(url);
           } catch (e) {
+            rec.note = "конструктор: " + e;
             log("err", "WS: конструктор бросил: " + e);
-            verdict("bad", "WebSocket недоступен: " + e);
+            finishAttempt(rec);
             return;
           }
+          current = { ws: ws, hbTimer: null, timeout: null, rec: rec };
 
-          var preJoinKill = setTimeout(function () {
-            if (!joined && !finished) {
-              log(
-                "err",
-                "WS: таймаут 20 с — ни OPEN, ни ERROR (соединение висит)"
-              );
-              verdict(
-                "bad",
-                "WS: нет ответа за 20 с (рукопожатие зависло — вероятно, дропает DPI)"
-              );
+          current.timeout = setTimeout(function () {
+            if (!rec.opened) {
+              rec.note = "нет ни OPEN, ни ERROR за 20 с";
+              log("err", "WS: таймаут 20 с — рукопожатие зависло");
+              finishAttempt(rec);
             }
           }, 20000);
 
           ws.onopen = function () {
-            log(
-              "ok",
-              "WS: OPEN — рукопожатие Upgrade прошло за " +
-                Math.round(performance.now() - s) +
-                " ms"
-            );
-            if (phoenixJoin) {
-              var topic = "app:diag-" + Math.random().toString(36).slice(2, 10);
-              ws.send(JSON.stringify(["1", "1", topic, "phx_join", {}]));
-              log("info", "→ phx_join " + topic);
-              ws._topic = topic;
-            } else {
-              verdict("ok", "ЧУЖОЙ WS: OPEN — чужой сокет открылся ✅");
-              try {
-                ws.send("ping-" + Date.now());
-                log("info", "→ echo ping отправлен");
-              } catch (e) {
-                log("err", "echo send failed: " + e);
+            rec.opened = true;
+            rec.openMs = Math.round(performance.now() - s);
+            log("ok", "WS: OPEN за " + rec.openMs + " ms");
+            var topic = "app:diag-" + Math.random().toString(36).slice(2, 10);
+            ws._topic = topic;
+            ws.send(JSON.stringify(["1", "1", topic, "phx_join", {}]));
+            log("info", "→ phx_join " + topic);
+            // «здоровье» фиксируем от OPEN
+            var holdTimer = setTimeout(function () {
+              if (current && current.rec === rec && !rec.survived) {
+                rec.survived = rec.joined;
+                if (!rec.joined) rec.note = "жило, но JOIN не пришёл за " + HOLD + " с";
+                log(
+                  rec.survived ? "ok" : "err",
+                  rec.survived
+                    ? "WS: продержалось " + HOLD + " с после OPEN — считаю успех"
+                    : "WS: живо " + HOLD + " с, но JOIN так и не пришёл"
+                );
+                finishAttempt(rec);
               }
-            }
+            }, HOLD * 1000);
+            current.holdTimer = holdTimer;
           };
 
           ws.onmessage = function (ev) {
@@ -272,151 +418,145 @@
               try {
                 var m = JSON.parse(ev.data);
                 if (m[3] === "phx_reply" && m[2] === "phoenix") {
-                  log(
-                    "ok",
-                    "← heartbeat reply #" +
-                      hb +
-                      " (сервер ответил, канал жив; status=" +
-                      (m[4] && m[4].status) +
-                      ")"
-                  );
+                  log("ok", "← heartbeat reply (сервер ответил)");
                   handled = true;
                 } else if (
-                  phoenixJoin &&
-                  !joined &&
+                  !rec.joined &&
                   m[3] === "phx_reply" &&
                   m[1] === "1" &&
                   m[2] === ws._topic
                 ) {
-                  joined = true;
-                  clearTimeout(preJoinKill);
-                  log(
-                    "ok",
-                    "JOIN OK — ответ Phoenix за " +
-                      Math.round(performance.now() - s) +
-                      " ms: " +
-                      JSON.stringify(m[4]).slice(0, 120)
-                  );
+                  rec.joined = true;
+                  rec.joinMs = Math.round(performance.now() - s);
+                  log("ok", "JOIN OK за " + rec.joinMs + " ms");
                   verdict(
-                    "ok",
-                    "НАШ WS РАБОТАЕТ: OPEN + JOIN за " +
-                      Math.round(performance.now() - s) +
-                      " ms ✅\nСоединение держим, смотрите heartbeat ниже."
+                    "warn",
+                    "попытка " +
+                      attemptNo +
+                      "/" +
+                      LOOP +
+                      ": OPEN+JOIN за " +
+                      rec.joinMs +
+                      " ms, удерживаем " +
+                      HOLD +
+                      " с…"
                   );
-                  hbTimer = setInterval(function () {
-                    hb++;
-                    try {
-                      ws.send(
-                        JSON.stringify([
-                          null,
-                          String(100 + hb),
-                          "phoenix",
-                          "phxheartbeat",
-                          {},
-                        ])
-                      );
-                      log("info", "→ heartbeat #" + hb);
-                    } catch (e) {
-                      log("err", "heartbeat #" + hb + " send failed: " + e);
-                    }
-                  }, HB * 1000);
+                  if (current && current.rec === rec && !current.hbTimer) {
+                    current.hbTimer = setInterval(function () {
+                      rec.hb = (rec.hb || 0) + 1;
+                      try {
+                        ws.send(
+                          JSON.stringify([
+                            null,
+                            String(100 + rec.hb),
+                            "phoenix",
+                            "phxheartbeat",
+                            {},
+                          ])
+                        );
+                        log("info", "→ heartbeat #" + rec.hb);
+                      } catch (e) {
+                        log("err", "heartbeat #" + rec.hb + " send failed: " + e);
+                      }
+                    }, HB * 1000);
+                  }
                   handled = true;
                 }
               } catch (e) {}
             }
             if (!handled) {
-              log("ok", "← message (" + raw.length + " b): " + raw.slice(0, 140));
+              log("info", "← message (" + raw.length + " b): " + raw.slice(0, 140));
             }
           };
 
           ws.onerror = function () {
             log(
               "err",
-              "WS: onerror на +" +
-                Math.round(performance.now() - s) +
-                " ms (браузер не даёт деталей — см. close ниже)"
+              "WS: onerror на +" + Math.round(performance.now() - s) + " ms"
             );
-            if (!joined && !finished) {
-              verdict(
-                "bad",
-                "WS: ошибка на " +
-                  Math.round(performance.now() - s) +
-                  " ms — рукопожатие не прошло (режут/блокируют)"
-              );
-            }
           };
 
           ws.onclose = function (ev) {
-            finished = true;
-            clearTimeout(preJoinKill);
-            if (hbTimer) clearInterval(hbTimer);
-            var t = Math.round(performance.now() - s);
-            var clean = ev.wasClean ? "clean" : "НЕ clean";
+            if (!current || current.rec !== rec) return; // уже закрыли сами
+            rec.dieMs = Math.round(performance.now() - s);
+            rec.code = ev.code;
+            rec.wasClean = ev.wasClean;
             log(
-              joined || ev.code === 1000 ? "warn" : "err",
+              ev.code === 1000 ? "warn" : "err",
               "WS: CLOSE code=" +
                 ev.code +
-                " (" +
-                clean +
-                ") reason='" +
-                ev.reason +
-                "' через " +
-                t +
+                (ev.wasClean ? " (clean)" : " (НЕ clean)") +
+                " через " +
+                sec(rec.dieMs) +
+                " после старта" +
+                (rec.opened ? " (" + sec(rec.dieMs - rec.openMs) + " после OPEN)" : "")
+            );
+            finishAttempt(rec);
+          };
+        }
+
+        // -- контрольный чужой wss (одиночный) --------------------------------
+
+        function testForeign() {
+          log("sep", "--- контрольный тест чужого wss ---");
+          var url = "wss://echo.websocket.org/.ws";
+          var s = performance.now();
+          var ws;
+          try {
+            ws = new WebSocket(url);
+          } catch (e) {
+            log("err", "чужой WS: " + e);
+            return;
+          }
+          var to = setTimeout(function () {
+            log("err", "чужой WS: таймаут 15 с без OPEN");
+            try {
+              ws.close();
+            } catch (e) {}
+          }, 15000);
+          ws.onopen = function () {
+            log(
+              "ok",
+              "чужой WS: OPEN за " + Math.round(performance.now() - s) + " ms"
+            );
+            verdict("ok", "ЧУЖОЙ WS: OPEN ✅ (наш — см. серию в логе)");
+            try {
+              ws.send("ping-" + Date.now());
+            } catch (e) {}
+          };
+          ws.onmessage = function (ev) {
+            log("ok", "чужой WS ← " + String(ev.data).slice(0, 80));
+            clearTimeout(to);
+            setTimeout(function () {
+              try {
+                ws.close(1000);
+              } catch (e) {}
+            }, 500);
+          };
+          ws.onerror = function () {
+            log("err", "чужой WS: onerror на +" + Math.round(performance.now() - s) + " ms");
+          };
+          ws.onclose = function (ev) {
+            clearTimeout(to);
+            log(
+              ev.code === 1000 ? "warn" : "err",
+              "чужой WS: CLOSE code=" +
+                ev.code +
+                " через " +
+                Math.round(performance.now() - s) +
                 " ms"
             );
-            if (!joined) {
-              verdict(
-                "bad",
-                "WS: закрыт ДО присоединения: code=" +
-                  ev.code +
-                  " через " +
-                  t +
-                  " ms" +
-                  (ev.code === 1006
-                    ? " (обрыв без чистого завершения — типично для DPI-блокировки)"
-                    : "")
-              );
-            } else {
-              verdict(
-                ev.code === 1000 ? "ok" : "bad",
-                (ev.code === 1000
-                  ? "Соединение закрыто чисто (code=1000). "
-                  : "Соединение ПОРЕЗАНО после работы: code=" +
-                    ev.code +
-                    " через " +
-                    t +
-                    " ms. ") +
-                  "JOIN был получен — смотрите таймкоды выше."
-              );
-            }
-            if (ev.code !== 1000 && retriesLeft > 0 && phoenixJoin) {
-              retriesLeft--;
-              log(
-                "warn",
-                "→ автопереподключение через 1 с (осталось попыток: " +
-                  retriesLeft +
-                  ")"
-              );
-              setTimeout(function () {
-                log("info", "--- повторная попытка ---");
-                testHttp();
-                wsTest(BACKEND, true, ++run);
-              }, 1000);
+            if (ev.code !== 1000) {
+              verdict("bad", "ЧУЖОЙ WS тоже рвётся — блокировка общая, не наша");
             }
           };
         }
 
-        function testForeign() {
-          log("info", "--- контрольный тест чужого wss ---");
-          wsTest("wss://echo.websocket.org/.ws", false, ++run);
-        }
+        document.getElementById("again").addEventListener("click", startLoop);
+        document.getElementById("foreign").addEventListener("click", testForeign);
 
-        document.getElementById("again").addEventListener("click", testOurs);
-        document
-          .getElementById("foreign")
-          .addEventListener("click", testForeign);
-
-        testOurs();
+        log("sep", "===== АВТОЗАПУСК: серия " + LOOP + " попыток =====");
+        startLoop();
       })();
     </script>
   </body>
