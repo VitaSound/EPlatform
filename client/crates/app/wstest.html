@@ -126,6 +126,9 @@
         Параметры: <b>?loop=5</b> — серия из 5 попыток (итог в конце);
         <b>?hb=2</b> — heartbeat каждые 2 с; <b>?hold=45</b> — сколько секунд
         держать «здоровое» соединение перед успехом; ?backend= — другой адрес.
+        <br /><b>Держите экран включённым весь прогон!</b> iOS роняет WebSocket
+        при уходе страницы в фон (code=1006) — такие попытки помечаются
+        «испорчено фоном» и в статистику блокировок не входят.
       </div>
     </div>
     <script>
@@ -146,7 +149,9 @@
         var t0 = performance.now();
         var stats = [];
         var attemptNo = 0;
-        var current = null; // {ws, hbTimer, timeout, finished, joined, openAt, joinAt}
+        var pendingNext = false;
+        var isHidden = document.hidden;
+        var current = null; // {ws, hbTimer, timeout, holdTimer, rec}
 
         document.getElementById("meta").textContent =
           navigator.userAgent +
@@ -201,6 +206,44 @@
           return (ms / 1000).toFixed(1) + " с";
         }
 
+        // -- видимость страницы (iOS роняет WS при уходе в фон) --------------
+
+        function noteHidden(hidden) {
+          if (hidden === isHidden) return;
+          isHidden = hidden;
+          log(
+            hidden ? "warn" : "ok",
+            (hidden
+              ? "⏸ СТРАНИЦА УШЛА В ФОН / ЭКРАН ВЫКЛЮЧИЛСЯ"
+              : "▶ СТРАНИЦА ВЕРНУЛАСЬ / ЭКРАН ВКЛЮЧЁН") +
+              " " +
+              clock()
+          );
+          if (hidden && current) {
+            current.rec.tainted = true;
+            current.rec.note = "страница ушла в фон";
+            log(
+              "warn",
+              "текущая попытка помечена «испорчено фоном» — в статистику блокировок не пойдёт"
+            );
+          }
+          if (!hidden && pendingNext) {
+            pendingNext = false;
+            log("info", "▶ продолжаю серию после возвращения в фон");
+            nextAttempt();
+          }
+        }
+
+        document.addEventListener("visibilitychange", function () {
+          noteHidden(document.hidden);
+        });
+        window.addEventListener("pagehide", function () {
+          noteHidden(true);
+        });
+        window.addEventListener("pageshow", function () {
+          noteHidden(false);
+        });
+
         function testHttp() {
           var s = performance.now();
           return fetch("/health", { cache: "no-store" })
@@ -232,6 +275,11 @@
         }
 
         function nextAttempt() {
+          if (document.hidden) {
+            pendingNext = true;
+            log("warn", "страница в фоне — следующая попытка после разблокировки");
+            return;
+          }
           if (attemptNo >= LOOP) {
             summarize();
             return;
@@ -254,24 +302,38 @@
             } catch (e) {}
           }
           res.attempt = attemptNo;
+          if (isHidden) {
+            res.tainted = true;
+            res.note = res.note || "страница ушла в фон";
+          }
           stats.push(res);
-          verdict(
-            res.survived ? "ok" : "bad",
-            "попытка " +
+          var taintNote = res.tainted ? "\n⚠ испорчено фоном (экран выключался) — не показательно" : "";
+          var vt;
+          if (res.tainted && res.code === null) {
+            vt =
+              "попытка " +
+              attemptNo +
+              "/" +
+              LOOP +
+              ": ПРЕРВАНА (страница ушла в фон)";
+          } else if (res.survived) {
+            vt = "попытка " + attemptNo + "/" + LOOP + ": ПРОЖИЛА " + HOLD + " с ✅";
+          } else if (res.opened) {
+            vt =
+              "попытка " +
               attemptNo +
               "/" +
               LOOP +
               ": " +
-              (res.survived
-                ? "ПРОЖИЛА " + HOLD + " с ✅"
-                : res.opened
-                  ? (res.joined ? "OPEN+JOIN ✅, " : "OPEN ✅, JOIN нет, ") +
-                    "обрыв через " +
-                    sec(res.dieMs) +
-                    " после OPEN, code=" +
-                    res.code
-                  : "OPEN не состоялся: " + res.note)
-          );
+              (res.joined ? "OPEN+JOIN ✅, " : "OPEN ✅, JOIN нет, ") +
+              "обрыв через " +
+              sec(res.dieMs) +
+              " после OPEN, code=" +
+              res.code;
+          } else {
+            vt = "попытка " + attemptNo + "/" + LOOP + ": OPEN не состоялся: " + res.note;
+          }
+          verdict(res.tainted ? "warn" : res.survived ? "ok" : "bad", vt + taintNote);
           if (stats.length < LOOP) {
             setTimeout(nextAttempt, 1500);
           } else {
@@ -280,17 +342,23 @@
         }
 
         function summarize() {
-          var n = stats.length;
-          var opened = stats.filter(function (r) {
+          var clean = stats.filter(function (r) {
+            return !r.tainted;
+          });
+          var tainted = stats.filter(function (r) {
+            return r.tainted;
+          });
+          var n = clean.length;
+          var opened = clean.filter(function (r) {
             return r.opened;
           }).length;
-          var joined = stats.filter(function (r) {
+          var joined = clean.filter(function (r) {
             return r.joined;
           }).length;
-          var survived = stats.filter(function (r) {
+          var survived = clean.filter(function (r) {
             return r.survived;
           }).length;
-          var dies = stats
+          var dies = clean
             .filter(function (r) {
               return r.opened && !r.survived;
             })
@@ -299,30 +367,50 @@
             });
           var lines = stats
             .map(function (r) {
+              var body;
+              if (r.tainted && r.code === null) {
+                body =
+                  (r.opened
+                    ? "OPEN " +
+                      r.openMs +
+                      " ms" +
+                      (r.joined ? ", JOIN " + r.joinMs + " ms" : "") +
+                      ", "
+                    : "") +
+                  "прервана уходом в фон (" +
+                  (r.note || "страница скрыта") +
+                  ")";
+              } else if (r.survived) {
+                body = "выжила ≥" + HOLD + " с";
+              } else if (r.opened) {
+                body =
+                  "OPEN " +
+                  r.openMs +
+                  " ms" +
+                  (r.joined ? ", JOIN " + r.joinMs + " ms" : ", JOIN нет") +
+                  ", обрыв через " +
+                  sec(r.dieMs) +
+                  ", code=" +
+                  r.code +
+                  (r.wasClean ? " clean" : " НЕ clean");
+              } else {
+                body = "не открылась (" + r.note + ")";
+              }
               return (
                 "  #" +
                 r.attempt +
                 ": " +
-                (r.survived
-                  ? "выжила ≥" + HOLD + " с"
-                  : r.opened
-                    ? "OPEN " +
-                      r.openMs +
-                      " ms" +
-                      (r.joined ? ", JOIN " + r.joinMs + " ms" : ", JOIN нет") +
-                      ", обрыв через " +
-                      sec(r.dieMs) +
-                      ", code=" +
-                      r.code +
-                      (r.wasClean ? " clean" : " НЕ clean")
-                    : "не открылась (" + r.note + ")")
+                body +
+                (r.tainted ? " ⚠ испорчено фоном" : "")
               );
             })
             .join("\n");
           var summary =
-            "ИТОГО: " +
+            "ИТОГО (чистых попыток: " +
             n +
-            " попыток | OPEN " +
+            ", испорчено сном/фоном: " +
+            tainted.length +
+            ") | OPEN " +
             opened +
             "/" +
             n +
@@ -336,12 +424,14 @@
             survived +
             "/" +
             n +
-            (dies.length
-              ? "\nобрывы: " + dies.join(", ")
-              : "\nобрывов не было");
+            (dies.length ? "\nобрывы (только чистые): " + dies.join(", ") : "\nобрывов не было");
           log("sep", summary + "\n" + lines);
           verdict(
-            survived === n ? "ok" : opened > 0 && survived > 0 ? "warn" : "bad",
+            n > 0 && survived === n
+              ? "ok"
+              : n > 0 && survived > 0
+                ? "warn"
+                : "bad",
             summary
           );
         }
@@ -359,6 +449,7 @@
             opened: false,
             joined: false,
             survived: false,
+            tainted: false,
             openMs: 0,
             joinMs: 0,
             dieMs: 0,
@@ -397,6 +488,14 @@
             // «здоровье» фиксируем от OPEN
             var holdTimer = setTimeout(function () {
               if (current && current.rec === rec && !rec.survived) {
+                if (rec.tainted) {
+                  log(
+                    "warn",
+                    "hold истёк, но попытка испорчена фоном — не считаю успех, жду событий/закрытия"
+                  );
+                  finishAttempt(rec);
+                  return;
+                }
                 rec.survived = rec.joined;
                 if (!rec.joined) rec.note = "жило, но JOIN не пришёл за " + HOLD + " с";
                 log(
@@ -478,6 +577,7 @@
 
           ws.onclose = function (ev) {
             if (!current || current.rec !== rec) return; // уже закрыли сами
+            if (document.hidden) rec.tainted = true;
             rec.dieMs = Math.round(performance.now() - s);
             rec.code = ev.code;
             rec.wasClean = ev.wasClean;
