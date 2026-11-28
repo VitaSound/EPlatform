@@ -1,0 +1,400 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>EPlatform — диагностика WebSocket</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        background: #1c1e22;
+        color: #d7dce3;
+        font: 14px/1.55 ui-monospace, "DejaVu Sans Mono", Menlo, Consolas, monospace;
+      }
+      .wrap {
+        max-width: 760px;
+        margin: 0 auto;
+        padding: 16px 14px 48px;
+      }
+      h1 {
+        font-size: 18px;
+        color: #eef1f5;
+        margin: 0 0 4px;
+      }
+      .meta {
+        color: #8b93a1;
+        font-size: 12px;
+        word-break: break-all;
+        margin-bottom: 14px;
+      }
+      #verdict {
+        padding: 12px 14px;
+        border-radius: 8px;
+        font-size: 16px;
+        font-weight: 600;
+        margin-bottom: 14px;
+        background: #2b2f36;
+        border: 1px solid #3a4049;
+        white-space: pre-wrap;
+      }
+      #verdict.ok {
+        background: #10331d;
+        border-color: #2e8b57;
+        color: #7ee2a8;
+      }
+      #verdict.bad {
+        background: #3a1512;
+        border-color: #b3392b;
+        color: #ff9c8f;
+      }
+      #log {
+        border: 1px solid #33383f;
+        border-radius: 8px;
+        padding: 10px 12px;
+        min-height: 120px;
+        white-space: pre-wrap;
+        word-break: break-word;
+        background: #14161a;
+      }
+      .l-ok {
+        color: #7ee2a8;
+      }
+      .l-err {
+        color: #ff8b7d;
+      }
+      .l-warn {
+        color: #ffd479;
+      }
+      .l-info {
+        color: #9fb4d0;
+      }
+      .row {
+        margin-top: 12px;
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      button {
+        font: 14px/1 ui-monospace, monospace;
+        padding: 10px 14px;
+        border-radius: 6px;
+        border: 1px solid #4a515c;
+        background: #262b32;
+        color: #e7ebf1;
+        cursor: pointer;
+      }
+      button:active {
+        background: #333a44;
+      }
+      .hint {
+        margin-top: 14px;
+        color: #8b93a1;
+        font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>Диагностика WebSocket EPlatform</h1>
+      <div class="meta" id="meta"></div>
+      <div id="verdict">…выполняется тест…</div>
+      <div id="log"></div>
+      <div class="row">
+        <button id="again">↻ Повторить наш wss</button>
+        <button id="foreign">Тест чужого wss (echo.websocket.org)</button>
+      </div>
+      <div class="hint">
+        Интерпретация: «OPEN + JOIN OK» — канал полностью работает. «ERROR/CLOSE
+        почти сразу (≈0–2 с)» — режут рукопожатие Upgrade. «OPEN был, CLOSE через
+        20–60 с» — убивают уже открытое соединение. Код close 1006 = обрыв без
+        чистого завершения (типично для DPI).<br />
+        ?backend=wss://host/socket/websocket — переопределить адрес.
+      </div>
+    </div>
+    <script>
+      (function () {
+        var q = new URLSearchParams(location.search);
+        var BACKEND =
+          q.get("backend") ||
+          (location.protocol === "https:" ? "wss:" : "ws:") +
+            "//" +
+            location.host +
+            "/socket/websocket";
+        var logEl = document.getElementById("log");
+        var verdictEl = document.getElementById("verdict");
+        var t0 = performance.now();
+
+        document.getElementById("meta").textContent =
+          navigator.userAgent +
+          "\n" +
+          location.href +
+          "\nвремя: " +
+          new Date().toISOString();
+
+        function clock() {
+          var d = new Date();
+          function p(n, w) {
+            return String(n).padStart(w || 2, "0");
+          }
+          return (
+            p(d.getHours()) +
+            ":" +
+            p(d.getMinutes()) +
+            ":" +
+            p(d.getSeconds()) +
+            "." +
+            p(d.getMilliseconds(), 3)
+          );
+        }
+
+        function log(cls, msg) {
+          var line = document.createElement("div");
+          line.className = "l-" + cls;
+          line.textContent =
+            "[+" +
+            Math.round(performance.now() - t0) +
+            " ms | " +
+            clock() +
+            "] " +
+            msg;
+          logEl.appendChild(line);
+          line.scrollIntoView && line.scrollIntoView({ block: "nearest" });
+        }
+
+        function verdict(cls, text) {
+          verdictEl.className = cls;
+          verdictEl.textContent = text;
+        }
+
+        function testHttp() {
+          var s = performance.now();
+          return fetch("/health", { cache: "no-store" })
+            .then(function (r) {
+              return r.text().then(function (t) {
+                log(
+                  "ok",
+                  "HTTP /health → " +
+                    r.status +
+                    " за " +
+                    Math.round(performance.now() - s) +
+                    " ms: " +
+                    t.slice(0, 80)
+                );
+              });
+            })
+            .catch(function (e) {
+              log("err", "HTTP /health НЕ прошёл: " + e);
+            });
+        }
+
+        var run = 0;
+        function testOurs() {
+          run++;
+          var myRun = run;
+          logEl.textContent = "";
+          verdict("", "…выполняется тест…");
+          log("info", "Цель: " + BACKEND);
+          testHttp().then(function () {
+            wsTest(BACKEND, true, myRun);
+          });
+        }
+
+        function wsTest(url, phoenixJoin, myRun) {
+          var s = performance.now();
+          var joined = false;
+          var hb = 0;
+          var hbTimer = null;
+          var finished = false;
+          var ws;
+          if (phoenixJoin && url.indexOf("vsn=") === -1) {
+            url += (url.indexOf("?") === -1 ? "?" : "&") + "vsn=2.0.0";
+          }
+          log("info", "WS: new WebSocket(" + url + ")");
+          try {
+            ws = new WebSocket(url);
+          } catch (e) {
+            log("err", "WS: конструктор бросил: " + e);
+            verdict("bad", "WebSocket недоступен: " + e);
+            return;
+          }
+
+          var preJoinKill = setTimeout(function () {
+            if (!joined && !finished) {
+              log(
+                "err",
+                "WS: таймаут 20 с — ни OPEN, ни ERROR (соединение висит)"
+              );
+              verdict(
+                "bad",
+                "WS: нет ответа за 20 с (рукопожатие зависло — вероятно, дропает DPI)"
+              );
+            }
+          }, 20000);
+
+          ws.onopen = function () {
+            log(
+              "ok",
+              "WS: OPEN — рукопожатие Upgrade прошло за " +
+                Math.round(performance.now() - s) +
+                " ms"
+            );
+            if (phoenixJoin) {
+              var topic = "app:diag-" + Math.random().toString(36).slice(2, 10);
+              ws.send(JSON.stringify(["1", "1", topic, "phx_join", {}]));
+              log("info", "→ phx_join " + topic);
+              ws._topic = topic;
+            } else {
+              verdict("ok", "ЧУЖОЙ WS: OPEN — чужой сокет открылся ✅");
+              try {
+                ws.send("ping-" + Date.now());
+                log("info", "→ echo ping отправлен");
+              } catch (e) {
+                log("err", "echo send failed: " + e);
+              }
+            }
+          };
+
+          ws.onmessage = function (ev) {
+            var raw = typeof ev.data === "string" ? ev.data : "<binary>";
+            var handled = false;
+            if (typeof ev.data === "string") {
+              try {
+                var m = JSON.parse(ev.data);
+                if (m[3] === "phx_reply" && m[2] === "phoenix") {
+                  log(
+                    "ok",
+                    "← heartbeat reply #" +
+                      hb +
+                      " (сервер ответил, канал жив; status=" +
+                      (m[4] && m[4].status) +
+                      ")"
+                  );
+                  handled = true;
+                } else if (
+                  phoenixJoin &&
+                  !joined &&
+                  m[3] === "phx_reply" &&
+                  m[1] === "1" &&
+                  m[2] === ws._topic
+                ) {
+                  joined = true;
+                  clearTimeout(preJoinKill);
+                  log(
+                    "ok",
+                    "JOIN OK — ответ Phoenix за " +
+                      Math.round(performance.now() - s) +
+                      " ms: " +
+                      JSON.stringify(m[4]).slice(0, 120)
+                  );
+                  verdict(
+                    "ok",
+                    "НАШ WS РАБОТАЕТ: OPEN + JOIN за " +
+                      Math.round(performance.now() - s) +
+                      " ms ✅\nСоединение держим, смотрите heartbeat ниже."
+                  );
+                  hbTimer = setInterval(function () {
+                    hb++;
+                    try {
+                      ws.send(
+                        JSON.stringify([
+                          null,
+                          String(100 + hb),
+                          "phoenix",
+                          "phxheartbeat",
+                          {},
+                        ])
+                      );
+                      log("info", "→ heartbeat #" + hb);
+                    } catch (e) {
+                      log("err", "heartbeat #" + hb + " send failed: " + e);
+                    }
+                  }, 10000);
+                  handled = true;
+                }
+              } catch (e) {}
+            }
+            if (!handled) {
+              log("ok", "← message (" + raw.length + " b): " + raw.slice(0, 140));
+            }
+          };
+
+          ws.onerror = function () {
+            log(
+              "err",
+              "WS: onerror на +" +
+                Math.round(performance.now() - s) +
+                " ms (браузер не даёт деталей — см. close ниже)"
+            );
+            if (!joined && !finished) {
+              verdict(
+                "bad",
+                "WS: ошибка на " +
+                  Math.round(performance.now() - s) +
+                  " ms — рукопожатие не прошло (режут/блокируют)"
+              );
+            }
+          };
+
+          ws.onclose = function (ev) {
+            finished = true;
+            clearTimeout(preJoinKill);
+            if (hbTimer) clearInterval(hbTimer);
+            var t = Math.round(performance.now() - s);
+            var clean = ev.wasClean ? "clean" : "НЕ clean";
+            log(
+              joined || ev.code === 1000 ? "warn" : "err",
+              "WS: CLOSE code=" +
+                ev.code +
+                " (" +
+                clean +
+                ") reason='" +
+                ev.reason +
+                "' через " +
+                t +
+                " ms"
+            );
+            if (!joined) {
+              verdict(
+                "bad",
+                "WS: закрыт ДО присоединения: code=" +
+                  ev.code +
+                  " через " +
+                  t +
+                  " ms" +
+                  (ev.code === 1006
+                    ? " (обрыв без чистого завершения — типично для DPI-блокировки)"
+                    : "")
+              );
+            } else {
+              verdict(
+                ev.code === 1000 ? "ok" : "bad",
+                (ev.code === 1000
+                  ? "Соединение закрыто чисто (code=1000). "
+                  : "Соединение ПОРЕЗАНО после работы: code=" +
+                    ev.code +
+                    " через " +
+                    t +
+                    " ms. ") +
+                  "JOIN был получен — смотрите таймкоды выше."
+              );
+            }
+          };
+        }
+
+        function testForeign() {
+          log("info", "--- контрольный тест чужого wss ---");
+          wsTest("wss://echo.websocket.org/.ws", false, ++run);
+        }
+
+        document.getElementById("again").addEventListener("click", testOurs);
+        document
+          .getElementById("foreign")
+          .addEventListener("click", testForeign);
+
+        testOurs();
+      })();
+    </script>
+  </body>
+</html>
